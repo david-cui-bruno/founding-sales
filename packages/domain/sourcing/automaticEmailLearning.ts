@@ -1,3 +1,4 @@
+import {hasPreparedIdentity} from './preparedIdentity.ts';
 import type {CandidateInput,AutomaticEmailLearning} from '@fss/contracts';
 import {readMeetingQualification} from '../meetings/qualification.ts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
@@ -79,7 +80,7 @@ async function readDiscovery(ctx:RepositoryContext,input:{from:string;to:string;
   if(!c.discovered){result.manualStaged++;continue;}if(!c.in_interval)continue;
   if(c.admitted)result.admissions++;
   const r=c.run;if(!r||r.state==='unavailable'){result.unavailable++;continue;}
-  if(c.qualification_blocked||c.status==='dismissed'||r.candidate_revision!==c.revision||r.reason!==null||!['eligible','review','admitted'].includes(r.state)||r.prompt_version!==QUALIFICATION_PROMPT_VERSION||r.policy_version!==QUALIFICATION_POLICY_VERSION)continue;
+  if(hasPreparedIdentity(r)||c.qualification_blocked||c.status==='dismissed'||r.candidate_revision!==c.revision||r.reason!==null||!['eligible','review','admitted'].includes(r.state)||r.prompt_version!==QUALIFICATION_PROMPT_VERSION||r.policy_version!==QUALIFICATION_POLICY_VERSION)continue;
   if(qualifyEmailCandidate({identity:candidateIdentity(c.payload,r.facts,r.observations),facts:r.facts,observations:r.observations,now:input.asOf}).decision==='eligible')result.supportedProspects++;
  }
  return result;

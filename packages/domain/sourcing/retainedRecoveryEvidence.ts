@@ -1,3 +1,4 @@
+import {hasPreparedIdentity} from './preparedIdentity.ts';
 import {createHash} from 'node:crypto';
 import {qualificationEvidenceSchema,type CandidateInput,type SourceObservation} from '@fss/contracts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
@@ -29,6 +30,7 @@ export async function lockRecovery(ctx:RepositoryContext,input:{candidateId:stri
  if(candidate.revision!==input.expectedRevision||(!revisionChanged&&run?.candidate_revision!==candidate.revision))return fail('candidate_changed');
  if(candidate.status==='dismissed'||candidate.qualification_blocked)return fail('identity_review_required');
  if(!run)return fail('not_found');
+ if(hasPreparedIdentity(run))return fail('evidence_unavailable');
  const latest=(await ctx.db.query<{id:string}>('SELECT id FROM sourcing_qualification_runs WHERE workspace_id=$1 AND candidate_id=$2 ORDER BY requested_at DESC,id DESC LIMIT 1',[ctx.scope.workspaceId,input.candidateId])).rows[0];
  if(latest?.id!==run.id)return fail('candidate_changed');
  if((await ctx.db.query(`SELECT candidate_id FROM sourcing_admissions WHERE workspace_id=$1 AND candidate_id=$2 UNION ALL SELECT candidate_id FROM outreach_email_sources WHERE workspace_id=$1 AND candidate_id=$2 UNION ALL SELECT candidate_id FROM outreach_plans WHERE workspace_id=$1 AND candidate_id=$2`,[ctx.scope.workspaceId,input.candidateId])).rows.length)return fail('candidate_already_admitted');

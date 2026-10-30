@@ -1,3 +1,4 @@
+import {hasPreparedIdentity} from './preparedIdentity.ts';
 import {candidateCorrectNameInputSchema,qualificationEvidenceSchema,type CandidateInput} from '@fss/contracts';
 import type {z} from 'zod';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
@@ -33,7 +34,7 @@ export async function correctCandidateName(ctx:RepositoryContext,input:z.infer<t
  UNION ALL SELECT candidate_id FROM outreach_email_sources WHERE workspace_id=$1 AND candidate_id=$2
  UNION ALL SELECT candidate_id FROM outreach_plans WHERE workspace_id=$1 AND candidate_id=$2`,[w,v.id])).rows.length)return {ok:false,reason:'candidate_already_admitted'};
  const run=(await ctx.db.query<QualificationRunRow>('SELECT * FROM sourcing_qualification_runs WHERE workspace_id=$1 AND candidate_id=$2 AND id=$3 FOR UPDATE',[w,v.id,v.qualificationRunId])).rows[0];
- if(!run||run.candidate_revision!==row.revision||run.reason||!['review','eligible'].includes(run.state)||!qualificationEvidenceSchema.safeParse({observations:run.observations,facts:run.facts}).success)return {ok:false,reason:'evidence_unavailable'};
+ if(!run||hasPreparedIdentity(run)||run.candidate_revision!==row.revision||run.reason||!['review','eligible'].includes(run.state)||!qualificationEvidenceSchema.safeParse({observations:run.observations,facts:run.facts}).success)return {ok:false,reason:'evidence_unavailable'};
  const source=run.observations.find(s=>s.id===v.observationId),fact=run.facts.find(f=>f.kind==='firm_identity'&&f.observationId===v.observationId&&f.blockId===v.blockId&&fold(f.value).includes(fold(v.firmName)));
  const now=Date.parse(await databaseNow(ctx)),age=source?now-Date.parse(source.retrievedAt):Infinity;
  if(!source||!fact||!source.firstParty||source.truncated||host(source.url)!==host(row.payload.website)||age<0||age>7*86400000)return {ok:false,reason:'identity_evidence_required'};

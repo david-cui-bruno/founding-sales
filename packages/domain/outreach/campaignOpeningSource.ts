@@ -3,6 +3,7 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { canonicalWebsite, firmNameKey, websiteDomain, workspaceIndex } from '../crm/import.ts';
 import { readTemplateVersion } from '../templates/templates.ts';
 import { nativeFirmCitations } from '../sourcing/nativeFirmEligibility.ts';
+import {hasPreparedIdentity} from '../sourcing/preparedIdentity.ts';
 import { discoveryPreparationMatches } from '../sourcing/discoveryPromotion.ts';
 import { retainedCandidateOnly } from '../sourcing/retainedAcquisition.ts';
 import { QUALIFICATION_POLICY_VERSION, QUALIFICATION_PROMPT_VERSION, type QualificationRunRow } from '../sourcing/qualificationStore.ts';
@@ -104,7 +105,7 @@ async function discoverySource(ctx: RepositoryContext, row: OpeningExecution, no
   const ids = new Set([...(index.byName.get(firmNameKey(candidate.firmName)) ?? []), ...(domain ? index.byDomain.get(domain) ?? [] : [])].map(f => f.id));
   if (ids.size !== 1 || !ids.has(row.firm_id)) return null;
   const run = (await ctx.db.query<QualificationRunRow>('SELECT * FROM sourcing_qualification_runs WHERE workspace_id=$1 AND candidate_id=$2 ORDER BY requested_at DESC,id DESC LIMIT 1', [ctx.scope.workspaceId, row.candidate_id])).rows[0];
-  if (!run || run.id !== row.qualification_run_id || run.candidate_revision !== l.revision || run.reason !== null
+  if (!run || hasPreparedIdentity(run) || run.id !== row.qualification_run_id || run.candidate_revision !== l.revision || run.reason !== null
     || !['review', 'eligible', 'admitted'].includes(run.state) || run.policy_version !== QUALIFICATION_POLICY_VERSION || run.prompt_version !== QUALIFICATION_PROMPT_VERSION) return null;
   const native = nativeFirmCitations({ candidate, facts: run.facts, observations: run.observations, now });
   const email = qualifyEmailCandidate({ identity: { status: 'resolved', name: candidate.firmName, website: candidate.website, locality: candidate.locality, region: candidate.region }, facts: run.facts, observations: run.observations, now });
@@ -112,7 +113,10 @@ async function discoverySource(ctx: RepositoryContext, row: OpeningExecution, no
   if ('status' in native || email.decision !== 'eligible' || !route) return null;
   const emailSource = run.observations.find(s => s.id === route.sourceObservationId);
   if (!emailSource) return null;
-  return { ...candidate, revision: l.revision, fingerprint: researchFingerprint({ lineage: l, run }),
+  // This historical fingerprint includes the full legacy row. Additive producer
+  // metadata must not invalidate unchanged pending discovery opening snapshots.
+  const legacyRun={...run};delete legacyRun['producer_version'];delete legacyRun['prepared_identity'];
+  return { ...candidate, revision: l.revision, fingerprint: researchFingerprint({ lineage: l, run:legacyRun }),
     validUntil: new Date(Math.min(Date.parse(native.validUntil), Date.parse(emailSource.retrievedAt) + 7 * 86400000)).toISOString(),
     citationIds: [...new Set(native.citations.map(c => `${c.observationId}:${c.blockId}`))] };
 }

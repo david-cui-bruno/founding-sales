@@ -1,3 +1,4 @@
+import {hasPreparedIdentity} from './preparedIdentity.ts';
 import type {CandidateInput,QualificationFact,SourceObservation} from '@fss/contracts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {decideAdminOnly} from '../crm/authorization.ts';
@@ -21,6 +22,7 @@ export async function evaluateQualification(ctx:RepositoryContext,input:{runId:s
  const candidate=(await ctx.db.query<{revision:number;status:string;payload:CandidateInput}>('SELECT revision,status,payload FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[w,identity.candidate_id])).rows[0];
  const run=(await ctx.db.query<QualificationRunRow>('SELECT * FROM sourcing_qualification_runs WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[w,input.runId])).rows[0];
  if(!candidate||!run)return {ok:false,reason:'not_found'};
+ if(hasPreparedIdentity(run))return {ok:false,reason:'evidence_unavailable'};
  if(!isCurrentPreparedCandidatePayload(candidate.payload))return {ok:false,reason:'candidate_format_not_supported'};
  if(candidate.status==='dismissed'||candidate.revision!==run.candidate_revision)return {ok:false,reason:'candidate_changed'};
  if(!['review','eligible'].includes(run.state)||run.reason!==null)return {ok:false,reason:'evidence_unavailable'};

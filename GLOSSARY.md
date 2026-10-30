@@ -24,6 +24,14 @@ _Avoid_: identity when referring only to an address or number
 A firm/contact-associated endpoint evaluated for use by an outreach channel under its current policy.
 _Avoid_: permission when referring only to a reachable endpoint
 
+**Discovery label**:
+The retained search-result title or suggested candidate name used to find a business. It does not establish the Firm’s literal identity.
+_Avoid_: verified company name when referring only to a search title
+
+**Prepared identity**:
+A whole company-name passage bound to current first-party source evidence for automatic research preparation. The original discovery label remains unchanged; identity evidence grants no contact permission.
+_Avoid_: human confirmation or contact eligibility when referring only to source-backed preparation
+
 **Calling preparation**:
 An unqualified company record whose reviewed context and phone depend on a current retained source and explicit kept choice. It conveys no qualification or contact permission.
 _Avoid_: prepared prospect when referring only to this source-dependent context

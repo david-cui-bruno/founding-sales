@@ -1,3 +1,4 @@
+import {hasPreparedIdentity} from './preparedIdentity.ts';
 import type {CandidateInput} from '@fss/contracts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {lockSendGateForStopFact} from '../policy/sendGate.ts';
@@ -24,9 +25,14 @@ export async function advanceVerifiedFirm(ctx:RepositoryContext,input:{runId:str
  await ctx.db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`sourcing-identity:${w}`]);
  const candidate=(await ctx.db.query<{id:string;revision:number;status:string;qualification_blocked:boolean;payload:CandidateInput}>(`SELECT c.* FROM sourcing_candidates c JOIN sourcing_qualification_runs r ON r.workspace_id=c.workspace_id AND r.candidate_id=c.id WHERE c.workspace_id=$1 AND r.id=$2 FOR UPDATE OF c`,[w,input.runId])).rows[0];
  const run=(await ctx.db.query<QualificationRunRow>('SELECT * FROM sourcing_qualification_runs WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[w,input.runId])).rows[0];
- if(candidate&&!isLegacyCandidatePayload(candidate.payload))return;
- if(candidate&&await retainedCandidateOnly(ctx,candidate.id))return;
  if(!candidate||!run||candidate.qualification_blocked||candidate.status==='dismissed'||run.candidate_revision!==candidate.revision||run.policy_version!==QUALIFICATION_POLICY_VERSION||run.prompt_version!==QUALIFICATION_PROMPT_VERSION||run.reason||!['review','eligible','admitted'].includes(run.state))return;
+ if(hasPreparedIdentity(run)){
+  // Share the existing bounded recovery cadence without legacy evaluation,
+  // auto-keep, admission or changing the discovery candidate.
+  await ctx.db.query('UPDATE sourcing_qualification_runs SET admission_checked_at=clock_timestamp() WHERE workspace_id=$1 AND id=$2',[w,run.id]);
+  return;
+ }
+ if(!isLegacyCandidatePayload(candidate.payload)||await retainedCandidateOnly(ctx,candidate.id))return;
  const proof=verifiedFirmEvidence({candidate:candidate.payload,facts:run.facts,observations:run.observations,now:await databaseNow(ctx)});
  const record=async(reason:string|null)=>ctx.db.query('UPDATE sourcing_qualification_runs SET admission_reason=$3,admission_checked_at=now() WHERE workspace_id=$1 AND id=$2',[w,run.id,reason]);
  if(proof.kind!=='verified'){await record(proof.reason);return;}

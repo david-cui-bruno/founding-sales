@@ -1,3 +1,4 @@
+import {hasPreparedIdentity} from './preparedIdentity.ts';
 import {qualificationEvidenceSchema,nativeFirmEligibilitySchema,type NativeFirmEligibility,type QualificationFact,type SourceObservation} from '@fss/contracts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {databaseNow} from '../policy/clock.ts';
@@ -91,6 +92,7 @@ export async function readNativeFirmEligibility(ctx:RepositoryContext,firmId:str
  if(candidate.qualification_blocked)return unavailable('identity_unresolved');
  const run=(await ctx.db.query<QualificationRunRow>('SELECT * FROM sourcing_qualification_runs WHERE workspace_id=$1 AND candidate_id=$2 ORDER BY requested_at DESC,id DESC LIMIT 1',[ctx.scope.workspaceId,candidate.id])).rows[0];
  if(!run)return {status:'pending',reason:'evidence_pending',channelAuthority:'not_granted'};
+ if(hasPreparedIdentity(run))return unavailable('latest_run_unavailable');
  if(run.candidate_revision!==candidate.revision||run.prompt_version!==QUALIFICATION_PROMPT_VERSION||run.policy_version!==QUALIFICATION_POLICY_VERSION)return unavailable('latest_run_unavailable');
  if(['pending','running'].includes(run.state))return {status:'pending',reason:'latest_run_pending',channelAuthority:'not_granted'};
  if(run.reason!==null||!['review','eligible','admitted'].includes(run.state))return unavailable('latest_run_unavailable');

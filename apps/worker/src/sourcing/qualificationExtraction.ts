@@ -2,7 +2,7 @@ import type {AnthropicMessagesTransport} from '@fss/domain/classification/anthro
 import {routeOfTransport} from '@fss/domain/classification/routedTransport.ts';
 import {providerErrorOf} from '@fss/domain/classification/providerError.ts';
 import {centsOf} from '@fss/domain/research/pricing.ts';
-import {qualificationExtractionCitationRoles} from '@fss/domain/sourcing/qualificationCitationRoles.ts';
+import {preparedIdentityCitationRoles} from '@fss/domain/sourcing/preparedIdentity.ts';
 import {qualificationRequest,qualificationSelectionSchema,type QualificationExtractionProvider} from '@fss/domain/sourcing/qualificationPrompt.ts';
 import {normalizeQualificationExtractionDiagnostic,type QualificationExtractionDiagnostic} from '@fss/domain/sourcing/qualificationDiagnostics.ts';
 
@@ -59,8 +59,8 @@ export function qualificationExtraction(transport:AnthropicMessagesTransport):Qu
    if(block.text.length>2000)return rejected('invalid_evidence',{...detail,code:'block_over_bound'});
    facts.push({...selected,value:block.text});
   }
-  const roles=qualificationExtractionCitationRoles(input.candidate,facts,input.observations);
+  const roles=preparedIdentityCitationRoles(input.candidate,facts,input.observations,input.producerVersion);
   if(!roles.ok)return rejected(roles.reason,{...roles.diagnostic,stopReason});
-  return {ok:true,value:{facts:roles.facts,openingQuestion:parsed.data.openingQuestion},...cost};
+  return {ok:true,value:{facts:roles.facts,openingQuestion:parsed.data.openingQuestion,...(roles.preparedIdentity?{preparedIdentity:roles.preparedIdentity}:{})},...cost};
  }};
 }
