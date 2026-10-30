@@ -1,3 +1,4 @@
+import {hasPreparedIdentity} from './preparedIdentity.ts';
 import {enqueueFirmResearchBestEffort} from '../research/enqueue.ts';
 import {attachSourcingAttribution} from './attribution.ts';
 import {readResearchSettings} from '../research/settings.ts';
@@ -70,6 +71,7 @@ async function admit(ctx:RepositoryContext,input:AdmissionInput,authority?:Retai
  const candidate=(await ctx.db.query<{revision:number;status:string;qualification_blocked:boolean;payload:CandidateInput}>('SELECT revision,status,qualification_blocked,payload FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[w,input.candidateId])).rows[0];
  const run=(await ctx.db.query<QualificationRunRow>('SELECT * FROM sourcing_qualification_runs WHERE workspace_id=$1 AND id=$2 AND candidate_id=$3 FOR UPDATE',[w,input.qualificationRunId,input.candidateId])).rows[0];
  if(!candidate||!run)return refused('not_found');
+ if(hasPreparedIdentity(run))return refused('evidence_unavailable');
  const retained=await retainedCandidateOnly(ctx,input.candidateId),decisionId=typeof run['retained_identity_decision_id']==='string'?run['retained_identity_decision_id']:undefined;
  if(retained&&(input.mode!=='reviewed'||!decisionId||!await lockRetainedAdmin(ctx)))return refused('identity_review_required');
  if(retained&&authority&&!await authority())return refused('session_changed');

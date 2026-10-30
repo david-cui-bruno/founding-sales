@@ -15,10 +15,12 @@ import {parsePageText} from '../research/pageText.ts';
 import {isPublicResearchUrl,withoutFragment} from '../research/sourcePolicy.ts';
 import type {PageFetchProvider} from '../research/providers.ts';
 import {finishQualification,QUALIFICATION_PROMPT_VERSION,QUALIFICATION_POLICY_VERSION,type QualificationRunRow} from './qualificationStore.ts';
-import {QUALIFICATION_OUTPUT_TOKENS,type QualificationExtractionProvider,type QualificationExtractionOutcome} from './qualificationPrompt.ts';
+import {QUALIFICATION_OUTPUT_TOKENS,type QualificationExtractionProvider,type QualificationExtractionOutcome,type QualificationExtractionRequest} from './qualificationPrompt.ts';
 import {normalizeQualificationDiagnostic,type QualificationDiagnostic,type QualificationDiagnosticPhase} from './qualificationDiagnostics.ts';
 import {isCurrentPreparedCandidatePayload} from './discoveryIntake.ts';
 import {retainedCandidateOnly} from './retainedAcquisition.ts';
+import {LEGACY_QUALIFICATION_PRODUCER,PREPARED_IDENTITY_PRODUCER,type PreparedIdentityProof} from './preparedIdentity.ts';
+import {preparedIdentityProducerAuthority} from './preparedIdentityAuthority.ts';
 interface Run extends QualificationRunRow {payload:CandidateInput;current_revision:number;candidate_status:string}
 const readSql=`SELECT r.*,c.payload,c.revision AS current_revision,c.status AS candidate_status FROM sourcing_qualification_runs r
  JOIN sourcing_candidates c ON c.workspace_id=r.workspace_id AND c.id=r.candidate_id WHERE r.workspace_id=$1 AND r.id=$2`;
@@ -28,6 +30,9 @@ async function allowed(ctx:RepositoryContext,runId:string):Promise<Run|null>{
  if(row&&!isCurrentPreparedCandidatePayload(row.payload))return null;
  if(!row||!['pending','running'].includes(row.state)||row.candidate_status==='dismissed'||row.current_revision!==row.candidate_revision||row.deadline_at.getTime()<=Date.parse(await databaseNow(ctx)))return null;
  if(!(await readResearchSettings(ctx)).enabled||(await listApplicableHolds(ctx,{actionKind:'research',channel:'research'})).length)return null;
+ const producer=row['producer_version']===undefined?LEGACY_QUALIFICATION_PRODUCER:row['producer_version'];
+ if(producer!==LEGACY_QUALIFICATION_PRODUCER&&producer!==PREPARED_IDENTITY_PRODUCER)return null;
+ if(producer===PREPARED_IDENTITY_PRODUCER&&!await preparedIdentityProducerAuthority(ctx,row.candidate_id,row.candidate_revision,row.payload))return null;
  return row;
 }
 /** Owns its committed stages. The outbound-fence handler must not wrap this in a transaction. */
@@ -41,6 +46,7 @@ export async function runQualification(ctx:RepositoryContext,input:{runId:string
   return changed.rows.length?row:null;
  });
  if(!run)return;
+ const producer=run['producer_version']===PREPARED_IDENTITY_PRODUCER?PREPARED_IDENTITY_PRODUCER:LEGACY_QUALIFICATION_PRODUCER;
  let observations:SourceObservation[]=[];
  let fetchedPages=0,skipped:unknown={},diagnostic:QualificationDiagnostic|undefined;
  const diagnose=(phase:QualificationDiagnosticPhase,extraction?:unknown)=>{
@@ -48,7 +54,7 @@ export async function runQualification(ctx:RepositoryContext,input:{runId:string
    observations:observations.length,completeFirstParty:observations.filter(s=>s.firstParty&&!s.truncated).length,
    truncatedObservations:observations.filter(s=>s.truncated).length,skipped,extraction},observations.filter(s=>s.firstParty&&!s.truncated));
  };
- const finish=async(reason:string|null,facts:unknown[]=[],openingQuestion:string|null=null,supplementedEvidence:readonly Pick<QualificationFact,'kind'|'observationId'|'blockId'>[]=[])=>withTransaction(db,()=>finishQualification(ctx,{runId:run.id,observations,facts,reason,openingQuestion,supplementedEvidence,diagnostic}));
+ const finish=async(reason:string|null,facts:unknown[]=[],openingQuestion:string|null=null,supplementedEvidence:readonly Pick<QualificationFact,'kind'|'observationId'|'blockId'>[]=[],preparedIdentity?:PreparedIdentityProof)=>withTransaction(db,()=>finishQualification(ctx,{runId:run.id,observations,facts,reason,openingQuestion,supplementedEvidence,diagnostic,...(preparedIdentity===undefined?{}:{preparedIdentity})}));
  if(run.prompt_version!==QUALIFICATION_PROMPT_VERSION||run.policy_version!==QUALIFICATION_POLICY_VERSION){await finish('qualification_version_changed');return;}
  const extraction=deps.extraction;
  if(!extraction||extraction.providerKey!=='aws_bedrock.sourcing_qualification'||!isPricedModel(run.model_name,'bedrock')){await finish('credit_route_unavailable');return;}
@@ -85,9 +91,9 @@ export async function runQualification(ctx:RepositoryContext,input:{runId:string
  await db.query(`UPDATE sourcing_qualification_runs SET observations=$3::jsonb WHERE workspace_id=$1 AND id=$2 AND state='running'
   AND EXISTS(SELECT 1 FROM sourcing_candidates c WHERE c.workspace_id=$1 AND c.id=candidate_id AND c.revision=candidate_revision AND c.status<>'dismissed')`,[ctx.scope.workspaceId,run.id,JSON.stringify(observations)]);
  // Interpretations may be reused only for the same identity/revision and model/policy/prompt.
- const previous=(await db.query<QualificationRunRow>(`SELECT * FROM sourcing_qualification_runs WHERE workspace_id=$1 AND candidate_id=$2 AND id<>$3
-  AND candidate_revision=$4 AND prompt_version=$5 AND policy_version=$6 AND model_name=$7 AND state IN ('review','eligible','admitted') AND reason IS NULL
-  ORDER BY requested_at DESC,id DESC LIMIT 1`,[ctx.scope.workspaceId,run.candidate_id,run.id,run.candidate_revision,run.prompt_version,run.policy_version,run.model_name])).rows[0];
+ const previous=producer===LEGACY_QUALIFICATION_PRODUCER?(await db.query<QualificationRunRow>(`SELECT * FROM sourcing_qualification_runs WHERE workspace_id=$1 AND candidate_id=$2 AND id<>$3
+  AND prepared_identity IS NULL AND producer_version='qualification-context-v7' AND candidate_revision=$4 AND prompt_version=$5 AND policy_version=$6 AND model_name=$7 AND state IN ('review','eligible','admitted') AND reason IS NULL
+  ORDER BY requested_at DESC,id DESC LIMIT 1`,[ctx.scope.workspaceId,run.candidate_id,run.id,run.candidate_revision,run.prompt_version,run.policy_version,run.model_name])).rows[0]:undefined;
  if(previous && previous.facts.every(f=>previous.observations.some(s=>s.id===f.observationId&&s.firstParty&&!s.truncated)) && previous.observations.length===observations.length && observations.every(source=>previous.observations.some(old=>old.url===source.url&&old.relevantTextHash===source.relevantTextHash&&old.firstParty===source.firstParty&&old.truncated===source.truncated))){
   const oldToNew=new Map(previous.observations.map(old=>[old.id,observations.find(source=>source.url===old.url)!.id]));
   observations=observations.map(source=>{const old=previous.observations.find(item=>item.url===source.url)!;return {...source,publishedAt:old.publishedAt,publishedAtBlockId:old.publishedAtBlockId};});
@@ -99,7 +105,7 @@ export async function runQualification(ctx:RepositoryContext,input:{runId:string
  }
  const offered=observations.filter(source=>source.firstParty&&!source.truncated);
  if(!offered.length){diagnose('no_complete_first_party');await finish('source_incomplete_or_unverified');return;}
- const request={candidate:{firmName:run.payload.firmName,locality:run.payload.locality,region:run.payload.region,website:run.payload.website},observations:offered,modelName:run.model_name,maxInputTokens:0,maxOutputTokens:QUALIFICATION_OUTPUT_TOKENS};
+ const request:QualificationExtractionRequest={candidate:{firmName:run.payload.firmName,locality:run.payload.locality,region:run.payload.region,website:run.payload.website},observations:offered,modelName:run.model_name,maxInputTokens:0,maxOutputTokens:QUALIFICATION_OUTPUT_TOKENS,...(producer===PREPARED_IDENTITY_PRODUCER?{producerVersion:producer}:{})};
  let tokens:number;
  try{tokens=await extraction.countInputTokens(request);}catch{await finish('token_count_unavailable');return;}
  if(!Number.isSafeInteger(tokens)||tokens<1||tokens>100000){await finish('input_over_budget');return;}
@@ -131,10 +137,11 @@ export async function runQualification(ctx:RepositoryContext,input:{runId:string
  }
  // Settlement has its own commit so even invalid/stale evidence cannot erase spent money.
  if(result.ok&&result.value.facts.some(f=>!offered.some(source=>source.id===f.observationId))){diagnose('unoffered_observation');await finish('invalid_evidence');return;}
- const facts=result.ok?withSupportedOfficeName(run.payload,result.value.facts,observations,await databaseNow(ctx)):[];
+ const preparedIdentity=result.ok?result.value.preparedIdentity:undefined;
+ const facts=result.ok?(preparedIdentity?result.value.facts:withSupportedOfficeName(run.payload,result.value.facts,observations,await databaseNow(ctx))):[];
  const supplementedEvidence=result.ok?facts.filter(f=>!result.value.facts.some(original=>original.kind===f.kind&&original.observationId===f.observationId&&original.blockId===f.blockId)).map(({kind,observationId,blockId})=>({kind,observationId,blockId})):[];
- const saved=await finish(result.ok?null:result.failureCode,facts,result.ok?result.value.openingQuestion:null,supplementedEvidence);
- if(saved.ok&&result.ok)await recoverDiscoveredIdentity(ctx,run.id);
+ const saved=await finish(result.ok?null:result.failureCode,facts,result.ok?result.value.openingQuestion:null,supplementedEvidence,preparedIdentity);
+ if(saved.ok&&result.ok&&!preparedIdentity)await recoverDiscoveredIdentity(ctx,run.id);
  if(!saved.ok&&saved.reason==='invalid_evidence'){diagnose('evidence_rejected');observations=[];await finish('invalid_evidence');}
 }
 /** Scheduler sweep is independent of whether any qualification handler manages to start. */

@@ -1,3 +1,4 @@
+import {hasPreparedIdentity} from './preparedIdentity.ts';
 import type {CandidateInput,QualificationFact,SourceObservation} from '@fss/contracts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {withTransaction,type SessionQueryable} from '../db/queryable.ts';
@@ -89,7 +90,7 @@ export async function recoverDiscoveredIdentity(ctx:RepositoryContext,runId:stri
    WHERE h.workspace_id=$1 AND c.id=$2 AND h.retrieved_at=c.created_at AND h.source_url=c.payload->>'sourceUrl'
     AND a.query=c.payload->>'discoveryQuery' AND a.state='complete' LIMIT 1`,[w,candidate.id])).rows.length)return;
   const run=(await ctx.db.query<QualificationRunRow>('SELECT * FROM sourcing_qualification_runs WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[w,runId])).rows[0];
-  if(!run||run.candidate_revision!==1||run.reason||run.policy_version!==QUALIFICATION_POLICY_VERSION||run.prompt_version!==QUALIFICATION_PROMPT_VERSION||!['review','eligible'].includes(run.state))return;
+  if(!run||hasPreparedIdentity(run)||run.candidate_revision!==1||run.reason||run.policy_version!==QUALIFICATION_POLICY_VERSION||run.prompt_version!==QUALIFICATION_PROMPT_VERSION||!['review','eligible'].includes(run.state))return;
   const now=await databaseNow(ctx),supported=officeName(candidate.payload,run.facts,run.observations,now);
   if(!supported||candidate.payload.firmName===supported.name)return;
   const verdict=qualifyEmailCandidate({identity:{status:'resolved',name:supported.name,website:candidate.payload.website,locality:candidate.payload.locality,region:candidate.payload.region},facts:run.facts,observations:run.observations,now});

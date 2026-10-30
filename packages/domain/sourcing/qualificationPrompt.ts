@@ -4,9 +4,10 @@ import type {ClassifierRequest} from '../classification/prompt.ts';
 import type {QualificationCandidateContext} from './qualificationCitationRoles.ts';
 import type {ProviderOutcome} from '../research/providers.ts';
 import type {QualificationExtractionDiagnostic} from './qualificationDiagnostics.ts';
+import type {PreparedIdentityProof,QualificationProducerVersion} from './preparedIdentity.ts';
 export const QUALIFICATION_OUTPUT_TOKENS=2048;
-export interface QualificationExtractionRequest {candidate:QualificationCandidateContext;observations:readonly SourceObservation[];modelName:string;maxInputTokens:number;maxOutputTokens:number}
-export interface QualificationExtractionAnswer {facts:QualificationFact[];openingQuestion:string|null}
+export interface QualificationExtractionRequest {candidate:QualificationCandidateContext;observations:readonly SourceObservation[];modelName:string;maxInputTokens:number;maxOutputTokens:number;producerVersion?:QualificationProducerVersion}
+export interface QualificationExtractionAnswer {facts:QualificationFact[];openingQuestion:string|null;preparedIdentity?:PreparedIdentityProof}
 /** Internal failure metadata only, never part of qualification views or model output. */
 export type QualificationExtractionOutcome=ProviderOutcome<QualificationExtractionAnswer>&{readonly diagnostic?:QualificationExtractionDiagnostic};
 export interface QualificationExtractionProvider {

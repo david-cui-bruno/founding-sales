@@ -1,3 +1,4 @@
+import {hasPreparedIdentity} from './preparedIdentity.ts';
 import {createHash} from 'node:crypto';
 import {candidateInputSchema,discoveryOriginSchema,qualifiedResearchCandidateSchema,type QualifiedResearchCandidate} from '@fss/contracts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
@@ -35,7 +36,7 @@ export async function readQualifiedResearchCandidate(ctx:RepositoryContext,disco
  const origin=(await ctx.db.query<{qualification_blocked:boolean;source:unknown;source_metadata:unknown;licenses:unknown;notices:unknown}>(originSql,originArgs)).rows[0];
  if(!origin||origin.qualification_blocked||!discoveryOriginSchema.safeParse({source:origin.source,sourceMetadata:origin.source_metadata,licenses:origin.licenses,notices:origin.notices}).success)return null;
  const run=(await ctx.db.query<QualificationRunRow>('SELECT * FROM sourcing_qualification_runs WHERE workspace_id=$1 AND candidate_id=$2 ORDER BY requested_at DESC,id DESC LIMIT 1',[ctx.scope.workspaceId,row.legacy_candidate_id])).rows[0];
- if(!run||run.candidate_revision!==row.revision||run.prompt_version!==QUALIFICATION_PROMPT_VERSION||run.policy_version!==QUALIFICATION_POLICY_VERSION||run.reason!==null||!['review','eligible','admitted'].includes(run.state))return null;
+ if(!run||hasPreparedIdentity(run)||run.candidate_revision!==row.revision||run.prompt_version!==QUALIFICATION_PROMPT_VERSION||run.policy_version!==QUALIFICATION_POLICY_VERSION||run.reason!==null||!['review','eligible','admitted'].includes(run.state))return null;
  const now=await databaseNow(ctx),proof=nativeFirmCitations({candidate:candidate.data,facts:run.facts,observations:run.observations,now});
  if('status' in proof||!await researchIdentity(ctx,candidate.data.firmName,candidate.data.website))return null;
  const citations=proof.citations.map(c=>{const source=run.observations.find(s=>s.id===c.observationId)!;return {...c,url:source.url,contentHash:source.contentHash,retrievedAt:source.retrievedAt,quote:source.blocks.find(b=>b.id===c.blockId)!.text};});

@@ -1,3 +1,4 @@
+import {hasPreparedIdentity} from '../sourcing/preparedIdentity.ts';
 import { type QualificationFact, type SourceObservation } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { qualificationCitationRoles, type QualificationCandidateContext } from '../sourcing/qualificationCitationRoles.ts';
@@ -61,13 +62,14 @@ export async function readPhoneOfficeProof(context: RepositoryContext, input: {
     // An expected malformed/changed calling event MUST NOT fall through to legacy.
     if (calling.kind === 'invalid') return null;
   }
-  const admissions = (await context.db.query<AdmissionRow>(`SELECT q.id,c.payload,q.observations,q.facts,q.policy_version,q.prompt_version
+  const admissions = (await context.db.query<AdmissionRow>(`SELECT q.id,c.payload,q.observations,q.facts,q.policy_version,q.prompt_version,q.prepared_identity
     FROM sourcing_admissions a JOIN sourcing_candidates c ON c.workspace_id=a.workspace_id AND c.id=a.candidate_id
     JOIN sourcing_qualification_runs q ON q.workspace_id=a.workspace_id AND q.id=a.run_id AND q.candidate_id=a.candidate_id
     WHERE a.workspace_id=$1 AND a.firm_id=$2 AND a.route_id=$3 AND NOT a.association_review_required
       AND NOT c.qualification_blocked AND c.status<>'dismissed' AND c.revision=q.candidate_revision
       AND q.state IN ('eligible','review','admitted') AND q.reason IS NULL ORDER BY q.id FOR SHARE OF a,c,q`, [w, input.firmId, input.routeId])).rows;
   for (const row of admissions) {
+    if(hasPreparedIdentity(row))continue;
     if (input.expected && (input.expected.kind !== 'admission' || input.expected.id !== row.id)) continue;
     const c = row.payload;
     if (row.policy_version !== QUALIFICATION_POLICY_VERSION || row.prompt_version !== QUALIFICATION_PROMPT_VERSION ||
