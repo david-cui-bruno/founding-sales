@@ -5,7 +5,7 @@ import {nativeFirmCitations,identityFold} from './nativeFirmEligibility.ts';
 import {qualifyEmailCandidate} from '../outreach/selection.ts';
 import {QUALIFICATION_POLICY_VERSION,QUALIFICATION_PROMPT_VERSION,type QualificationRunRow} from './qualificationStore.ts';
 import {researchFingerprint} from './qualifiedResearchProof.ts';
-import {automaticResearchNow,automaticResearchOwner,automaticResearchSource} from './automaticResearchAuthority.ts';
+import {automaticResearchNow,automaticResearchOwner,automaticResearchSourceSnapshot} from './automaticResearchAuthority.ts';
 import {retainedCandidateOnly} from './retainedAcquisition.ts';
 import {currentUSPreparedEmailFit} from './currentPreparedEmailFit.ts';
 
@@ -24,7 +24,8 @@ export async function automaticResearchProof(ctx:RepositoryContext,candidateId:s
  const row=(await ctx.db.query<{id:string;revision:number;status:string;qualification_blocked:boolean;payload:unknown}>('SELECT id,revision,status,qualification_blocked,payload FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2',[ctx.scope.workspaceId,candidateId])).rows[0];
  if(!row||row.qualification_blocked||row.status==='dismissed')return null;
  const parsed=candidateInputSchema.safeParse(row.payload);if(!parsed.success)return null;
- const candidate=parsed.data,source=await automaticResearchSource(ctx,candidateId,row.revision,candidate);if(!source)return null;
+ const candidate=parsed.data,snapshot=await automaticResearchSourceSnapshot(ctx,candidateId,row.revision,candidate);if(!snapshot)return null;
+ const {value:source,targetingVersion}=snapshot;
  const run=(await ctx.db.query<QualificationRunRow>('SELECT * FROM sourcing_qualification_runs WHERE workspace_id=$1 AND candidate_id=$2 ORDER BY requested_at DESC,id DESC LIMIT 1',[ctx.scope.workspaceId,candidateId])).rows[0];
  if(!run||run.candidate_revision!==row.revision||run.prompt_version!==QUALIFICATION_PROMPT_VERSION||run.policy_version!==QUALIFICATION_POLICY_VERSION||run.reason!==null||!['review','eligible','admitted'].includes(run.state))return null;
  const now=await automaticResearchNow(ctx),native=nativeFirmCitations({candidate,facts:run.facts,observations:run.observations,now});if('status' in native)return null;
@@ -38,5 +39,5 @@ export async function automaticResearchProof(ctx:RepositoryContext,candidateId:s
  if(Date.parse(now)>=Date.parse(validUntil))return null;
  const citations=native.citations.map(c=>{const observation=run.observations.find(s=>s.id===c.observationId)!;return {...c,url:observation.url,contentHash:observation.contentHash,retrievedAt:observation.retrievedAt,quote:observation.blocks.find(b=>b.id===c.blockId)!.text};});
  const fingerprint=researchFingerprint({candidateId,candidateRevision:row.revision,runId:run.id,owner,candidate,source,policyVersion:run.policy_version,promptVersion:run.prompt_version,facts:run.facts,observations:run.observations,policy:'automatic-research-v1',...(native.policyVersion==='native-firm-eligibility-us-v1'?{nativePolicyVersion:native.policyVersion}:{})});
- return {candidateId,candidateRevision:row.revision,candidate,runId:run.id,owner,source,fingerprint,citations,validUntil,route:email.route,nativePolicyVersion:native.policyVersion};
+ return {candidateId,candidateRevision:row.revision,candidate,runId:run.id,owner,source,targetingVersion,fingerprint,citations,validUntil,route:email.route,nativePolicyVersion:native.policyVersion};
 }

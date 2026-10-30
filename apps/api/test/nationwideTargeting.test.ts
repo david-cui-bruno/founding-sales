@@ -1,0 +1,42 @@
+import {randomUUID} from 'node:crypto';
+import {afterAll,beforeAll,expect,it} from 'vitest';
+import {z} from 'zod';
+import {dispatch} from '../src/server.ts';
+import {createAuthFixture,CURRENT_CLIENT_VERSION,type AuthFixture} from './support/authFixture.ts';
+import {issueSessionFor} from './support/sessionFixture.ts';
+import type {SessionQueryable} from '@fss/domain/db/queryable.ts';
+let f:AuthFixture,runtime:SessionQueryable,token:string;
+const ranks=['help_request','operational_burden','investigation','fit_only'];
+const additions=Array.from({length:48},(_,i)=>({id:`national-fixture-${i}`,query:`Residential property management in Fictional City ${i}, California`,locality:`Fictional City ${i}`,region:'CA'}));
+const call=(path:string,body:unknown)=>dispatch({method:'POST',path,query:new URLSearchParams(),headers:{authorization:`Bearer ${token}`},body},{session:runtime,auth:{...f.deps,db:runtime},supportedClientVersions:f.deps.config.supportedClientVersions,sendingEnabled:false,upgradeUrl:'https://example.test/update'});
+beforeAll(async()=>{f=await createAuthFixture();runtime=await f.database.appRuntimeSession();token=(await issueSessionFor(f,f.alpha,f.alpha.salesperson)).accessToken;});
+afterAll(async()=>f?.stop());
+it('retains active-admin and authenticated-command boundaries for the larger proposal',async()=>{
+ const input={basePolicyVersion:'targeting-v1',queryChanges:additions,rankOrder:ranks,evidenceIds:[],rationale:'Fictional national capacity fixture only.',commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION};
+ expect((await call('/sourcing/targeting/save',input)).body).toMatchObject({reason:'admin_only'});
+ const savedToken=token;token='invalid';expect((await call('/sourcing/targeting/save',input)).status).toBe(401);token=savedToken;
+});
+it('accepts and replays the real app_runtime 60-query save/apply without duplicating policies or losing existing selectors',async()=>{
+ token=(await issueSessionFor(f,f.alpha,f.alpha.admin)).accessToken;
+ const initial=z.object({policy:z.object({version:z.string(),queries:z.array(z.unknown())})}).parse((await call('/sourcing/targeting',{})).body).policy;
+ expect(initial.queries).toHaveLength(12);
+ const input={basePolicyVersion:initial.version,queryChanges:additions,rankOrder:ranks,evidenceIds:[],rationale:'Fictional national capacity fixture only.',commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION};
+ const first=await call('/sourcing/targeting/save',input);expect(first.status).toBe(200);
+ expect((await call('/sourcing/targeting/save',input)).body).toMatchObject({replayed:true});
+ const result=z.object({result:z.object({id:z.uuid(),revision:z.number().int().positive()})}).parse(first.body).result;
+ const approval={id:result.id,expectedRevision:result.revision,commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION};
+ token=(await issueSessionFor(f,f.beta,f.beta.admin)).accessToken;
+ expect((await call('/sourcing/targeting/apply',approval)).body).toMatchObject({reason:'not_found'});
+ token=(await issueSessionFor(f,f.alpha,f.alpha.admin)).accessToken;
+ expect((await call('/sourcing/targeting/apply',approval)).status).toBe(200);
+ expect((await call('/sourcing/targeting/apply',approval)).body).toMatchObject({replayed:true});
+ const current=z.object({policy:z.object({queries:z.array(z.unknown())})}).parse((await call('/sourcing/targeting',{})).body).policy;
+ expect(current.queries).toHaveLength(60);expect(current.queries.slice(0,12)).toEqual(initial.queries);
+ expect((await runtime.query('SELECT version FROM sourcing_targeting_versions WHERE workspace_id=$1',[f.alpha.workspaceId])).rows).toHaveLength(2);
+});
+it('rejects 65-selector envelopes before changing the current policy',async()=>{
+ const initial=(await runtime.query('SELECT targeting_version FROM sourcing_discovery_settings WHERE workspace_id=$1',[f.alpha.workspaceId])).rows;
+ const queryChanges=Array.from({length:65},(_,i)=>({...additions[0],id:`over-${i}`}));
+ expect((await call('/sourcing/targeting/save',{basePolicyVersion:'unused',queryChanges,rankOrder:ranks,evidenceIds:[],rationale:'Oversized fictional fixture.',commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION})).status).toBe(400);
+ expect((await runtime.query('SELECT targeting_version FROM sourcing_discovery_settings WHERE workspace_id=$1',[f.alpha.workspaceId])).rows).toEqual(initial);
+});

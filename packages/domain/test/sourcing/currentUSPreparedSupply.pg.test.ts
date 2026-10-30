@@ -46,15 +46,17 @@ it('holds a legacy-v1 stored publication instead of reinterpreting or refreshing
  await withTransaction(f.runtime,()=>advanceAutomaticResearchFirm(f.worker,{runId:current.runId},'prepare_before_legacy'));
  expect(await read()).toEqual(before);expect(await readAutomaticResearchFirm(f.admin,id)).toBeNull();
 });
-it('keeps the exact approved-query/source match necessary for a current US proof',async()=>{
- const current=await f.prepared();expect(await automaticResearchProof(f.worker,current.candidateId)).not.toBeNull();
+it('keeps the exact acquisition fingerprint across rank-only approval while fencing the current epoch',async()=>{
+ const current=await f.prepared(),before=await automaticResearchProof(f.worker,current.candidateId);expect(before).not.toBeNull();
  const policy=await readTargetingPolicy(f.admin);
  const proposed=await withTransaction(f.runtime,()=>saveTargetingProposal(f.admin,targetingProposalSchema.parse({basePolicyVersion:policy.version,
   queryChanges:[],rankOrder:policy.rankOrder,evidenceIds:[],rationale:'Controlled fictional superseding policy preserves historical attempt identity.'})));
  if(!proposed.ok)throw new Error(proposed.reason);
  const applied=await withTransaction(f.runtime,()=>applyTargetingProposal(f.admin,{id:proposed.value.id,expectedRevision:proposed.value.revision}));
  if(!applied.ok)throw new Error(applied.reason);
- expect(await automaticResearchProof(f.worker,current.candidateId)).toBeNull();
+ const after=await automaticResearchProof(f.worker,current.candidateId);
+ expect(after?.fingerprint).toBe(before?.fingerprint);expect(after?.targetingVersion).toBe(applied.value.policyVersion);
+ expect(after?.targetingVersion).not.toBe(before?.targetingVersion);
 });
 it.each(['may provide','plans to provide','intends to provide','will provide','would provide'])('holds future-only current US evidence and creates no publication despite a valid independent office email: %s',async action=>{
  const current=await f.prepared(action),before=await sending();

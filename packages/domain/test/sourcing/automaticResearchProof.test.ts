@@ -20,7 +20,7 @@ function fixture(){
  const native:SourceObservation={id,url:candidate.website,contentHash:'a'.repeat(64),relevantTextHash:'b'.repeat(64),retrievedAt:now,publishedAt:null,publishedAtBlockId:null,firstParty:true,truncated:false,blocks:[{id:'native',text}]};
  const emailSource:SourceObservation={...native,id:other,blocks:[{id:'email',text:email}]};
  const facts:QualificationFact[]=[...(['firm_identity','service_area','residential_management'] as const).map(kind=>({kind,value:text,observationId:id,blockId:'native'})),{kind:'business_email',value:email,observationId:other,blockId:'email'}];
- return {retained:false,row:{id,revision:1,status:'needs_review',qualification_blocked:false,payload:{...candidate}},run:{id,candidate_revision:1,prompt_version:QUALIFICATION_PROMPT_VERSION,policy_version:QUALIFICATION_POLICY_VERSION,reason:null,state:'review',facts,observations:[native,emailSource]},hits:[{attempt_id:id,source_url:candidate.website,native_result:{url:candidate.website},query_id:query.id,query:query.query,policy_version:'targeting-v1'}],origins:[] as Record<string,unknown>[],role:'admin',time:now};
+ return {retained:false,row:{id,revision:1,status:'needs_review',qualification_blocked:false,payload:{...candidate}},run:{id,candidate_revision:1,prompt_version:QUALIFICATION_PROMPT_VERSION,policy_version:QUALIFICATION_POLICY_VERSION,reason:null,state:'review',facts,observations:[native,emailSource]},hits:[{attempt_id:id,source_url:candidate.website,native_result:{url:candidate.website},query_id:query.id,query:query.query,policy_version:'targeting-v1'}],origins:[] as Record<string,unknown>[],history:[] as Record<string,unknown>[],role:'admin',time:now};
 }
 let f:ReturnType<typeof fixture>,ctx:RepositoryContext;
 beforeEach(()=>{
@@ -33,6 +33,7 @@ beforeEach(()=>{
   else if(sql.includes('FROM sourcing_candidates'))rows=[f.row];
   else if(sql.includes('FROM sourcing_qualification_runs'))rows=[f.run];
   else if(sql.includes('FROM sourcing_discovery_hits'))rows=f.hits;
+  else if(sql.includes('FROM sourcing_targeting_versions'))rows=f.history;
   else if(sql.includes('FROM sourcing_apollo_candidate_origins'))rows=f.origins;
   else throw new Error(`Unexpected query: ${sql}`);
   return {rows:rows as Row[],rowCount:rows.length};
@@ -98,5 +99,42 @@ it('accepts exact completed Apollo origin and refuses changed site, locality or 
 });
 it.each(['revision','blocked','dismissed','latest','reason','policy'] as const)('refuses stale/blocked/current evidence: %s',async changed=>{
  if(changed==='revision')f.row.revision=2;if(changed==='blocked')f.row.qualification_blocked=true;if(changed==='dismissed')f.row.status='dismissed';if(changed==='latest')f.run.state='running';if(changed==='reason')f.run.reason='changed' as never;if(changed==='policy')f.run.policy_version='old';
+ expect(await automaticResearchProof(ctx,id)).toBeNull();
+});
+
+it('nationwide continuity preserves exact old fingerprint after additive and ranking-only policy changes',async()=>{
+ const ranks=['help_request','operational_burden','investigation','fit_only'];
+ mocks.policy.mockResolvedValue({version:'targeting-v1',queries:[query],rankOrder:ranks});
+ const old=await automaticResearchProof(ctx,id);
+ f.history=[{version:'targeting-v1',queries:[query],rank_order:['help_request','operational_burden','investigation','fit_only']}];
+ for(const current of [{version:'targeting-added',queries:[query,{...query,id:'new-query',locality:'Austin'}],rankOrder:['fit_only']},{version:'targeting-ranked',queries:[query],rankOrder:['fit_only','investigation']}]){
+  mocks.policy.mockResolvedValue(current);const proof=await automaticResearchProof(ctx,id);
+  expect(proof?.fingerprint).toBe(old?.fingerprint);expect(proof).toMatchObject({targetingVersion:current.version,source:old?.source});
+ }
+});
+it.each(['missing','foreign','id','query','locality','region'] as const)('nationwide continuity refuses unavailable or changed historical tuple: %s',async changed=>{
+ mocks.policy.mockResolvedValue({version:'targeting-new',queries:[query],rankOrder:[]});
+ const historical={...query};if(changed==='id')historical.id='another';if(changed==='query')historical.query='Other query';if(changed==='locality')historical.locality='Austin';if(changed==='region')historical.region='MA';
+ f.history=changed==='missing'?[]:[{version:changed==='foreign'?'targeting-foreign':'targeting-v1',queries:[historical],rank_order:['help_request','operational_burden','investigation','fit_only']}];
+ expect(await automaticResearchProof(ctx,id)).toBeNull();
+});
+it.each(['id','query','locality','region'] as const)('nationwide continuity refuses a changed current approved tuple: %s',async changed=>{
+ const current={...query};if(changed==='id')current.id='another';if(changed==='query')current.query='Other query';if(changed==='locality')current.locality='ARLINGTON';if(changed==='region')current.region='MA';
+ f.history=[{version:'targeting-v1',queries:[query],rank_order:['help_request','operational_burden','investigation','fit_only']}];mocks.policy.mockResolvedValue({version:'targeting-new',queries:[current],rankOrder:[]});
+ expect(await automaticResearchProof(ctx,id)).toBeNull();
+});
+it('nationwide continuity requires a single exact retained source even after query removal and re-addition',async()=>{
+ f.history=[{version:'targeting-v1',queries:[query],rank_order:['help_request','operational_burden','investigation','fit_only']}];
+ mocks.policy.mockResolvedValue({version:'targeting-removed',queries:[],rankOrder:[]});expect(await automaticResearchProof(ctx,id)).toBeNull();
+ f.hits=[];mocks.policy.mockResolvedValue({version:'targeting-readded',queries:[query],rankOrder:[]});expect(await automaticResearchProof(ctx,id)).toBeNull();
+ f.hits=fixture().hits;f.hits.push({...f.hits[0]!,attempt_id:other});expect(await automaticResearchProof(ctx,id)).toBeNull();
+ f.hits=fixture().hits;f.hits[0]!.native_result.url='https://other.example.test/';expect(await automaticResearchProof(ctx,id)).toBeNull();
+});
+
+it.each(['nonarray','null_query','missing_field','duplicate','ranks','whitespace'] as const)('nationwide continuity refuses malformed/ambiguous or raw-changed acquisition policy: %s',async changed=>{
+ const historical:Record<string,unknown>={version:'targeting-v1',queries:[query],rank_order:['help_request','operational_burden','investigation','fit_only']};
+ if(changed==='nonarray')historical['queries']={};if(changed==='null_query')historical['queries']=[null];if(changed==='missing_field')historical['queries']=[{id:query.id,query:query.query}];
+ if(changed==='duplicate')historical['queries']=[query,{...query,locality:'Austin'}];if(changed==='ranks')historical['rank_order']=[];if(changed==='whitespace')historical['queries']=[{...query,locality:query.locality+' '}];
+ f.history=[historical];mocks.policy.mockResolvedValue({version:'targeting-new',queries:[query],rankOrder:[]});
  expect(await automaticResearchProof(ctx,id)).toBeNull();
 });

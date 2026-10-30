@@ -96,6 +96,8 @@ export const COMMAND_DEPENDENCIES: Readonly<Record<string, DependencyMode>> = Ob
   'apollo configure': 'database',
   'discovery resume': 'database',
   'qualification configure': 'database',
+  'targeting configure': 'database',
+  'research lower-ceilings': 'database',
   'qualification resolve-identity': 'database',
   // Lane M1: what the attendance correction (0039) will change, counts only, READ ONLY.
   'meetings attendance-report': 'database',
@@ -352,6 +354,18 @@ export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
     valueFlags:['--workspace-id','--enabled','--owner-user-id','--evaluation-sha256','--reviewed-eligible','--false-eligible',...REPORTABLE],
     booleanFlags:[],requiredFlags:['--workspace-id','--enabled'],
     summary:'Configure qualified candidate admission after a recorded evaluation; audited ECS launcher required. Never changes sending or search quotas.',
+  },
+  {
+    path:['admin','targeting','configure'],
+    valueFlags:['--workspace-id','--owner-user-id','--proposal-json-base64',...REPORTABLE],
+    booleanFlags:[],requiredFlags:['--workspace-id','--owner-user-id','--proposal-json-base64'],
+    summary:'Apply an explicitly approved targeting proposal through existing CAS owners; audited ECS launcher and current admin required. No quota, budget, activation or sending change.',
+  },
+  {
+    path:['admin','research','lower-ceilings'],
+    valueFlags:['--workspace-id','--owner-user-id','--daily-cents','--monthly-cents',...REPORTABLE],
+    booleanFlags:[],requiredFlags:['--workspace-id','--owner-user-id','--daily-cents','--monthly-cents'],
+    summary:'Lower existing research money ceilings only; audited ECS launcher and current admin required. Preserves model, enabled state, count, pages, search and sending controls.',
   },
   {
     path:['admin','discovery','resume'],
