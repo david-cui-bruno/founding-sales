@@ -8,6 +8,7 @@ import {readCurrentDiscoveryResearchFirm} from './discoveryResearchFirm.ts';
 import type {QualificationRunRow} from './qualificationStore.ts';
 import {QUALIFICATION_POLICY_VERSION,QUALIFICATION_PROMPT_VERSION} from './qualificationVersions.ts';
 import type {NativeFirmPolicyVersion} from '../../contracts/src/usBusinessGeography.ts';
+import {supportsScopedServiceArea as serviceArea} from './scopedServiceArea.ts';
 import {currentNativeFirmPolicy,supportsCurrentUSServiceLocation} from './currentUSBusinessGeography.ts';
 
 export const identityFold=(value:string):string=>value.normalize('NFKC').replace(/\s+/gu,' ').trim().toLowerCase();
@@ -53,13 +54,7 @@ function contradictsServiceArea(value:string,candidate:QualificationCandidateCon
    ||/\b(?:outside|excluded\s+from|not\s+(?:in|within|part\s+of))\b[^.!?\n]{0,80}\b(?:service|coverage|operating)\s+area\b/iu.test(sentence)
    ||/\b(?:withdrawn|discontinued|ended|ceased|stopped)\b[^.!?\n]{0,80}\b(?:service|operations|coverage)\b/iu.test(sentence)));
 }
-function serviceArea(value:string,candidate:QualificationCandidateContext,currentUS=false):boolean {
- return (currentUS?supportsCurrentUSServiceLocation(value,candidate.region,candidate.locality)
-  :literal(value,candidate.locality)&&(literal(value,candidate.region)||literal(value,stateNames[candidate.region]??'__unknown__')))
-  &&! /\b(?:utility|vendor|testimonial|customer review|powered by|web design)\b/iu.test(value)
-  &&(literal(value,candidate.firmName)||/\b(?:we (?:serve|manage|provide)|our service area)\b/iu.test(value))
-  &&/\b(?:serve|service|manag|office)/iu.test(value);
-}
+
 const unavailable=(reason:Extract<NativeFirmEligibility,{status:'unavailable'}>['reason']):NativeFirmEligibility=>({status:'unavailable',reason,channelAuthority:'not_granted'});
 /** Extra read-adapter defenses are intentionally NOT injected into the calling wrapper. */
 export function nativeFirmCitations(input:NativeEvidenceInput):{citations:Extract<NativeFirmEligibility,{status:'verified'}>['citations'];validUntil:string;policyVersion:NativeFirmPolicyVersion}|NativeFirmEligibility {

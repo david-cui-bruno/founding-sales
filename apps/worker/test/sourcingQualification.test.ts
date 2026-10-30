@@ -102,3 +102,10 @@ it('retains literal role rejection subtypes but neither selected source text nor
  const result=await extractText(encoded(Array.from({length:30},()=>({...selected,kind:'residential_management',blockId:'b2'}))),undefined,[observation]);
  expect(result).toMatchObject({ok:false,failureCode:'invalid_evidence',diagnostic:{stage:'citation_roles',code:'supplement_over_bound',selectionCount:30}});
 });
+
+it('retains a unique scoped area despite a weak selected city label on the current extraction path',async()=>{
+ const observation={...source,blocks:[{id:'name',text:input.candidate.firmName},{id:'label',text:'Boston, Massachusetts Welcome Home'},{id:'description',text:'Harbor Example Management manages residential homes in Boston, Massachusetts.'}]};
+ const provider=qualificationExtraction({kind:'bedrock',countTokens:async()=>100,create:async()=>({usage:{input_tokens:100,output_tokens:50},content:[{type:'text',text:JSON.stringify({selections:[{kind:'firm_identity',observationId:source.id,blockId:'name'},{kind:'service_area',observationId:source.id,blockId:'label'},{kind:'residential_management',observationId:source.id,blockId:'description'}],openingQuestion:null})}]})});
+ const result=await provider.extract({...input,observations:[observation]});
+ expect(result).toMatchObject({ok:true,value:{facts:[{kind:'firm_identity',blockId:'name'},{kind:'service_area',blockId:'label'},{kind:'residential_management',blockId:'description'},{kind:'service_area',blockId:'description'}]}});
+});

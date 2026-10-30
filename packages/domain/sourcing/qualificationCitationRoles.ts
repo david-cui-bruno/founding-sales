@@ -1,14 +1,25 @@
 import type {CandidateInput,QualificationFact,SourceObservation} from '@fss/contracts';
+import {US_BUSINESS_STATE_NAMES} from '../../contracts/src/usBusinessGeography.ts';
+import {currentNativeFirmPolicy} from './currentUSBusinessGeography.ts';
+import {supportsScopedServiceArea} from './scopedServiceArea.ts';
 import {supportsResidentialManagement} from './qualificationPolicy.ts';
 import {normalizeQualificationExtractionDiagnostic,type QualificationExtractionDiagnostic} from './qualificationDiagnostics.ts';
 
 export type QualificationCandidateContext=Pick<CandidateInput,'firmName'|'locality'|'region'|'website'>;
 const fold=(value:string)=>value.normalize('NFKC').replace(/\s+/gu,' ').trim().toLowerCase();
 const literal=(text:string,value:string)=>` ${fold(text).replace(/[^\p{L}\p{N}]+/gu,' ')} `.includes(` ${fold(value).replace(/[^\p{L}\p{N}]+/gu,' ')} `);
-const states:Record<string,string>={MA:'Massachusetts',RI:'Rhode Island',TX:'Texas'};
+const legacyStates:Readonly<Record<string,string>>={MA:'Massachusetts',RI:'Rhode Island',TX:'Texas'};
 const host=(url:string|null)=>{try{return new URL(url??'').hostname.toLowerCase().replace(/^www\./u,'');}catch{return null;}};
-/** Candidate context is a search target, never evidence or permission. No source text is rewritten. */
-export function qualificationCitationRoles(candidate:QualificationCandidateContext,selected:readonly QualificationFact[],observations:readonly SourceObservation[]):{ok:true;facts:QualificationFact[]}|{ok:false;reason:'invalid_evidence';diagnostic?:QualificationExtractionDiagnostic} {
+type CitationRolesResult={ok:true;facts:QualificationFact[]}|{ok:false;reason:'invalid_evidence';diagnostic?:QualificationExtractionDiagnostic};
+/** Retained readers keep the original supplementation and ceiling behavior. */
+export function qualificationCitationRoles(candidate:QualificationCandidateContext,selected:readonly QualificationFact[],observations:readonly SourceObservation[]):CitationRolesResult {
+ return citationRoles(candidate,selected,observations,false);
+}
+/** Current extraction may retain a unique complete citation before its facts are stored. */
+export function qualificationExtractionCitationRoles(candidate:QualificationCandidateContext,selected:readonly QualificationFact[],observations:readonly SourceObservation[]):CitationRolesResult {
+ return citationRoles(candidate,selected,observations,true);
+}
+function citationRoles(candidate:QualificationCandidateContext,selected:readonly QualificationFact[],observations:readonly SourceObservation[],currentExtraction:boolean):CitationRolesResult {
  const fail=(code:QualificationExtractionDiagnostic['code'],selectionIndex?:number)=>{
   const fact=selectionIndex===undefined?undefined:selected[selectionIndex];
   const diagnostic=normalizeQualificationExtractionDiagnostic({stage:'citation_roles',code,selectionIndex,selectionCount:selected.length,observationId:fact?.observationId,blockId:fact?.blockId},observations);
@@ -38,11 +49,14 @@ export function qualificationCitationRoles(candidate:QualificationCandidateConte
  };
  const blocks=sources.flatMap(source=>source.blocks.filter(block=>block.text.length<=2000).map(block=>({source,block})));
  if(!facts.some(f=>f.kind==='firm_identity'))appendUnique('firm_identity',blocks.filter(({block})=>fold(block.text)===fold(candidate.firmName)));
+ const states:Readonly<Record<string,string>>=currentExtraction?US_BUSINESS_STATE_NAMES:legacyStates;
  const geography=(text:string)=>literal(text,candidate.locality)&&(literal(text,candidate.region)||literal(text,states[candidate.region]??'__unknown__'));
+ const currentUS=currentExtraction&&currentNativeFirmPolicy(candidate.region,candidate.locality)==='native-firm-eligibility-us-v1';
+ const scoped=(text:string)=>supportsScopedServiceArea(text,candidate,currentUS);
  const escape=(text:string)=>text.replace(/[.*+?^${}()|[\]\\]/gu,'\\$&');
  const explicitLocation=new RegExp(`(?:^|[\\s(,:])${escape(candidate.locality)},?\\s+(?:${escape(candidate.region)}|${escape(states[candidate.region]??'__unknown__')})\\b`,'iu');
- // Only a named descriptive residential-management statement can supplement
- // geography. Never borrow a utility address, unrelated office or bare city menu.
- if(!facts.some(f=>f.kind==='service_area'&&geography(f.value)))appendUnique('service_area',blocks.filter(({block})=>literal(block.text,candidate.firmName)&&explicitLocation.test(block.text)&&supportsResidentialManagement(block.text)));
+ // A city label/address cannot suppress the unique named descriptive citation
+ // needed by the native consumer. Keep every selection; never synthesize context.
+ if(!facts.some(f=>f.kind==='service_area'&&(currentExtraction?scoped(f.value):geography(f.value))))appendUnique('service_area',blocks.filter(({block})=>literal(block.text,candidate.firmName)&&explicitLocation.test(block.text)&&supportsResidentialManagement(block.text)&&(!currentExtraction||scoped(block.text))));
  return facts.length<=30?{ok:true,facts}:fail('supplement_over_bound');
 }
