@@ -18,7 +18,7 @@ const contrary=/\b(?:do not|does not|don't|doesn't|never|no longer)\s+(?:\w+\s+)
 function business(text:string):boolean {
  return text.length>=50&&text.trim().split(/\s+/u).length>=8&&residential.test(text)&&management.test(text)&&(ownManager.test(text)||namedManager.test(text))&&!vendor.test(text)&&!attribution.test(text)&&!contrary.test(text);
 }
-const classify=(text:string,locality:string):Passage['kind'][]=>{
+const passageKinds=(text:string,locality:string):Passage['kind'][]=>{
  const result:Passage['kind'][]=[];
  if(contrary.test(text))result.push('contrary');
  if(business(text))result.push('business');
@@ -53,7 +53,7 @@ export function projectPreparedProspect(row:ManualProspectRow,snapshot:ManualPho
    if(expires!==undefined)usedSourceDeadlines.push(expires);
    for(const block of source.blocks){
     if(block.text.length>2000){unshown=true;if(contrary.test(block.text))contraryBeyondBound=true;continue;}
-    const kinds=classify(block.text,observed.locality??'');if(!kinds.length)continue;
+    const kinds=passageKinds(block.text,observed.locality??'');if(!kinds.length)continue;
     all.push({kinds,passage:{kind:kinds[0]!,observationId:source.id,blockId:block.id,url:source.url,retrievedAt:source.retrievedAt,quote:block.text}});
    }
   }
