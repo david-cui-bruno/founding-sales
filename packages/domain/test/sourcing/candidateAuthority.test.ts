@@ -29,6 +29,10 @@ beforeEach(()=>{
   else if(sql.includes('SELECT s.owner_user_id'))rows=f.settings.auto_admission_enabled&&f.member.status==='active'?[f.settings]:[];
   else if(sql.includes('workspace_memberships'))rows=[args[1]===owner?f.member:f.actor];
   else if(sql.includes('SELECT v.version'))rows=[f.policy];
+  else if(sql.startsWith('SELECT version,queries,rank_order FROM sourcing_targeting_versions')){
+   // The wrong-policy fixture has no retained acquisition policy to authorize reuse.
+   expect(args).toEqual([id,'old']);rows=[];
+  }
   else if(sql.includes('FROM sourcing_discovery_hits'))rows=f.hits.filter(h=>h.state==='complete'&&h.source_url===args[2]);
   else if(sql.includes('FROM sourcing_apollo_candidate_origins'))rows=f.origins.filter(o=>o['state']==='complete'&&Number(o['candidate_revision'])<=Number(args[2]));
   else if(sql.includes('FROM research_settings'))rows=f.research;

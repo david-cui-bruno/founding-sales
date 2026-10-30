@@ -163,6 +163,9 @@ export async function claimResearchClearance(
   context: RepositoryContext,
   input: ResearchClearanceInput,
 ): Promise<ResearchResult<ResearchClearance>> {
+  // Settings must be read after a queued claim acquires the same lock used by
+  // ceiling changes; otherwise it could reserve against a superseded higher cap.
+  await lockResearchBudget(context);
   const settings = await readResearchSettings(context);
   if (!settings.enabled) return refuse('research_disabled');
   const providerKey = input.providerKey ?? EXTRACTION_PROVIDER;
@@ -179,10 +182,7 @@ export async function claimResearchClearance(
   const worstCaseCents = worstCaseRunCents(priced);
   const businessDate = localDate(input.at, businessTimeZone);
 
-  // The budget lock, before anything is read. Every number below is a sum over rows
-  // another claim could be inserting, so reading them without it is the read-then-write
-  // that ceilings exist to avoid.
-  await lockResearchBudget(context);
+  // Keep the shared monthly lock after the research budget lock.
   await lockMonthlySpend(context);
 
   const counted =

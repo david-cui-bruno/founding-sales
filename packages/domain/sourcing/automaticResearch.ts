@@ -59,7 +59,7 @@ async function publish(ctx:RepositoryContext,runId:string):Promise<boolean>{
  await ctx.db.query('SELECT id FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[w,run.candidate_id]);
  await ctx.db.query('SELECT id FROM sourcing_qualification_runs WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[w,runId]);
  const current=await automaticResearchProof(ctx,run.candidate_id);
- if(!current||current.fingerprint!==initial.fingerprint||(await automaticResearchIdentity(ctx,current.candidate,current.owner))?.firmId!==firm.id||await researchHeld(ctx,current.owner,firm.id))return false;
+ if(!current||current.fingerprint!==initial.fingerprint||current.targetingVersion!==initial.targetingVersion||(await automaticResearchIdentity(ctx,current.candidate,current.owner))?.firmId!==firm.id||await researchHeld(ctx,current.owner,firm.id))return false;
  const prior=(await ctx.db.query<Publication>('SELECT * FROM sourcing_automatic_research_firms WHERE workspace_id=$1 AND candidate_id=$2 FOR UPDATE',[w,current.candidateId])).rows[0];
  if(prior&&(!sourceMatches(prior,current)||prior.firm_id!==firm.id))return false;
  let id=prior?.id;
@@ -72,7 +72,7 @@ async function publish(ctx:RepositoryContext,runId:string):Promise<boolean>{
  if(!prior||prior.evidence_fingerprint!==current.fingerprint)await recordCrmAuditEvent(ctx,{action:'sourcing.automatic_research_published',subjectKind:'firm',subjectId:firm.id,detail:{publicationId:id!,candidateId:current.candidateId,runId:current.runId,candidateRevision:current.candidateRevision,revision:(prior?.revision??0)+1,sourceKind:current.source.source.kind,sourceAttemptId:current.source.source.attemptId,policyVersion:'automatic-research-v1'}});
  // Audit/creation/row locks may have waited: independently reevaluate email AND native proof now.
  const final=await automaticResearchProof(ctx,current.candidateId);
- return final?.fingerprint===current.fingerprint&&(await automaticResearchIdentity(ctx,final.candidate,final.owner))?.firmId===firm.id&&!await researchHeld(ctx,final.owner,firm.id)&&Date.parse(await automaticResearchNow(ctx))<Date.parse(final.validUntil);
+ return final?.fingerprint===current.fingerprint&&final.targetingVersion===current.targetingVersion&&(await automaticResearchIdentity(ctx,final.candidate,final.owner))?.firmId===firm.id&&!await researchHeld(ctx,final.owner,firm.id)&&Date.parse(await automaticResearchNow(ctx))<Date.parse(final.validUntil);
 }
 /** Private current read only. No creation, replay, dispatch or name fallback. */
 export async function readAutomaticResearchFirm(ctx:RepositoryContext,publicationId:string):Promise<AutomaticResearchFirm|null>{
@@ -81,7 +81,7 @@ export async function readAutomaticResearchFirm(ctx:RepositoryContext,publicatio
  const proof=await automaticResearchProof(ctx,row.candidate_id);
  if(!proof||!sourceMatches(row,proof)||row.run_id!==proof.runId||row.candidate_revision!==proof.candidateRevision||row.evidence_fingerprint!==proof.fingerprint||(await automaticResearchIdentity(ctx,proof.candidate,proof.owner))?.firmId!==row.firm_id||await researchHeld(ctx,proof.owner,row.firm_id))return null;
  const current=await publication(ctx,publicationId),fresh=await automaticResearchProof(ctx,row.candidate_id);
- if(!current||canonicalResearchValue(current)!==canonicalResearchValue(row)||fresh?.fingerprint!==proof.fingerprint||(await automaticResearchIdentity(ctx,fresh.candidate,fresh.owner))?.firmId!==row.firm_id||!await activeIdentityActor(ctx)||await researchHeld(ctx,fresh.owner,row.firm_id))return null;
+ if(!current||canonicalResearchValue(current)!==canonicalResearchValue(row)||fresh?.fingerprint!==proof.fingerprint||fresh.targetingVersion!==proof.targetingVersion||(await automaticResearchIdentity(ctx,fresh.candidate,fresh.owner))?.firmId!==row.firm_id||!await activeIdentityActor(ctx)||await researchHeld(ctx,fresh.owner,row.firm_id))return null;
  const checkedAt=await automaticResearchNow(ctx);if(Date.parse(checkedAt)>=Date.parse(fresh.validUntil))return null;
  return automaticResearchFirmSchema.parse({target:{kind:'automatic_research',publicationId:row.id,publicationRevision:row.revision,firmId:row.firm_id,candidateId:row.candidate_id,candidateRevision:row.candidate_revision,runId:row.run_id,evidenceFingerprint:row.evidence_fingerprint},source:fresh.source.source,ownerUserId:fresh.owner,firmName:fresh.candidate.firmName,website:fresh.candidate.website,locality:fresh.candidate.locality,region:fresh.candidate.region,policyVersion:'automatic-research-v1',nativePolicyVersion:fresh.nativePolicyVersion,checkedAt,validUntil:fresh.validUntil,citations:fresh.citations,emailFit:'eligible',channelAuthority:'not_granted',maintenanceNeed:'not_established',nextStep:'prepare_discovery_conversation',question:'What would be useful to learn about this firm before considering a discovery conversation?'});
 }
