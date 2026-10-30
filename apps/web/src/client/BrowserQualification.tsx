@@ -6,6 +6,7 @@ import { canReviewQualification } from './QualificationPending.ts';
 import { dispatchQualification } from './QualificationDispatch.ts';
 import { CapturedQualificationOriginals } from './CapturedQualificationOriginals.tsx';
 import {BrowserRetainedRecovery} from './BrowserRetainedRecovery.tsx';
+import {QualificationResearchPassages} from './QualificationResearchPassages.tsx';
 type QualificationView = z.infer<typeof qualificationViewSchema>;
 
 export function QualificationEvidenceLink({ url }: { url: string }): JSX.Element {
@@ -15,16 +16,17 @@ export function QualificationEvidenceLink({ url }: { url: string }): JSX.Element
 }
 
 /** Ordinary candidate evidence, explicit existing request and human-reviewed admission only. */
-export function BrowserQualification({ client, candidateId, expectedRevision }: {
-  client: BrowserClient; candidateId: string; expectedRevision: number;
+export function BrowserQualification({ client, candidateId, expectedRevision, companyName, website }: {
+  client: BrowserClient; candidateId: string; expectedRevision: number; companyName?:string; website?:string;
 }): JSX.Element {
   const [view, setView] = useState<QualificationView | null>(null);
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
   const [blocked, setBlocked] = useState(false);
   const operation = useRef<symbol | null>(null), mounted = useRef(false);
-  const binding = useRef({ client, candidateId, expectedRevision });
-  binding.current = { client, candidateId, expectedRevision };
+  const binding = useRef({ client, candidateId, expectedRevision, companyName, website });
+  binding.current = { client, candidateId, expectedRevision, companyName, website };
+  const loadedScope=useRef<string|null>(null),scopeKey=JSON.stringify([candidateId,expectedRevision,companyName,website]);
   useEffect(() => {
     mounted.current = true;
     let epoch = client.epoch;
@@ -38,14 +40,15 @@ export function BrowserQualification({ client, candidateId, expectedRevision }: 
     operation.current = null; setBusy(false); setView(null); setNotice(''); update();
     const unsubscribe = client.subscribe(update);
     return () => { mounted.current = false; operation.current = null; unsubscribe(); };
-  }, [client, candidateId, expectedRevision]);
+  }, [client, candidateId, expectedRevision, companyName, website]);
   const run = async (kind: 'read' | 'request' | 'admit'): Promise<void> => {
     if (operation.current !== null) return;
     const epoch = client.epoch;
     if (!client.isCurrent(epoch) || client.current?.status !== 'signed_in' || client.current.role !== 'admin') return;
     const token = Symbol('qualification'); operation.current = token; setBusy(true); setNotice('');
     const current = (): boolean => mounted.current && operation.current === token && client.isCurrent(epoch)
-      && binding.current.client === client && binding.current.candidateId === candidateId && binding.current.expectedRevision === expectedRevision;
+      && binding.current.client === client && binding.current.candidateId === candidateId && binding.current.expectedRevision === expectedRevision
+      && binding.current.companyName===companyName && binding.current.website===website;
     const read = async (): Promise<QualificationView | null> => {
       const input = qualificationReadSchema.parse({ candidateId });
       const answer = await client.request('/sourcing/qualification/read', qualificationViewSchema.nullable(), input, () => {
@@ -56,7 +59,7 @@ export function BrowserQualification({ client, candidateId, expectedRevision }: 
       return answer;
     };
     try {
-      if (kind === 'read') { setView(null); const answer = await read(); if (current()) { setView(answer); if (answer === null) setNotice('No retained qualification returned. Not evidence of global absence.'); } return; }
+      if (kind === 'read') { setView(null); const answer = await read(); if (current()) { loadedScope.current=scopeKey;setView(answer); if (answer === null) setNotice('No retained qualification returned. Not evidence of global absence.'); } return; }
       let runId: string | undefined;
       if (kind === 'admit') {
         const reviewed = view;
@@ -98,6 +101,7 @@ export function BrowserQualification({ client, candidateId, expectedRevision }: 
       {view.verdict === null ? <p>No current verdict.</p> : <><p>Verdict {view.verdict.decision} · Rank {view.verdict.rank} · Policy {view.verdict.policyVersion}</p>
         {view.verdict.reasons.map(reason => <p key={reason}>Evidence reason {reason}</p>)}
         {view.verdict.unknowns.map(unknown => <p key={unknown}>Unknown {unknown}</p>)}</>}
+      {loadedScope.current===scopeKey&&companyName!==undefined&&website!==undefined?<QualificationResearchPassages view={view} companyName={companyName} website={website}/>:null}
       {view.observations.map(source => <div key={source.id}>
         <QualificationEvidenceLink url={source.url} /><p>Retrieved {source.retrievedAt} · Published {source.publishedAt ?? 'unknown'} · First party {String(source.firstParty)} · Truncated {String(source.truncated)}</p>
         {view.facts.filter(fact => fact.observationId === source.id).map((fact, index) => <blockquote key={index}>{fact.kind}: {fact.value}</blockquote>)}

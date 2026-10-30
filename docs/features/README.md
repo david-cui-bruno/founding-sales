@@ -22,6 +22,8 @@
 
 Calling includes the [Kept source-number worklist and explicit recorded-company lookup](selling.md#calling-and-follow-through); implementation/delivery status remains in current-state.
 
+Supply also includes the [retained phone/person/office reading aid](selling.md#supply-and-prospects) under797. Its dated original passages guide research without changing qualification, buying-role or contact authority; delivery status remains in current-state.
+
 Browser shell/navigation source: [BrowserApp](../../apps/web/src/client/BrowserApp.tsx), [sections](../../apps/web/src/client/workspaceNavigation.ts). Secondary destinations are linked where actually supported, not invented new routes. API/worker composition: [processes](../greenfield/processes.md). [ADR0027](../adr/0027-web-product.md) retires desktop; design from the selling goal, not screen parity.
 
 ## Drive and interpret

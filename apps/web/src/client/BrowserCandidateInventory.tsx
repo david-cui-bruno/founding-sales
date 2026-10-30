@@ -24,7 +24,7 @@ function Observation({ candidate, client }: { candidate: SourcingCandidate; clie
   return <article className="rounded-md border p-3" aria-label={`Candidate ${candidate.id}`}>
     <h4>{candidate.firmName}</h4>
     <p>Candidate ID {candidate.id} · Revision {candidate.revision} · Status {candidate.status}</p>
-    <p>Locality {candidate.locality} · Region {candidate.region}</p>
+    <p>Observed area {candidate.locality} · Region {candidate.region}. Office location may differ.</p>
     <p>Website <Reference url={candidate.website} /></p>
     <p>Source <Reference url={candidate.sourceUrl} /></p>
     <p>Observed on {candidate.observedOn} · Prepared by {candidate.preparedBy} · Retained at {candidate.createdAt}</p>
@@ -38,7 +38,7 @@ function Observation({ candidate, client }: { candidate: SourcingCandidate; clie
     </section>}
     {candidate.nextSourceCheckAt === null ? null : <p>Recorded next source-check time {candidate.nextSourceCheckAt}, not a check performed here.</p>}
     <BrowserCandidateAuthority client={client} candidateId={candidate.id} expectedRevision={candidate.revision} />
-    <BrowserQualification client={client} candidateId={candidate.id} expectedRevision={candidate.revision} />
+    <BrowserQualification client={client} candidateId={candidate.id} expectedRevision={candidate.revision} companyName={candidate.firmName} website={candidate.website}/>
   </article>;
 }
 
