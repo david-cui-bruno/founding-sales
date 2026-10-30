@@ -1,7 +1,7 @@
 import {expect,it} from 'vitest';
 import {sourceObservationSchema,type SourceObservation,type QualificationFact} from '@fss/contracts';
-import {verifiedOfficePhone} from '../../sourcing/verifiedOfficePhone.ts';
-import {qualificationResearchPassages} from '../../sourcing/qualificationResearchPassages.ts';
+import {verifiedOfficePhone} from '@fss/domain/sourcing/verifiedOfficePhone.ts';
+import {qualificationResearchPassages} from '../../src/client/qualificationResearchPassages.ts';
 const companyName='Alta Residential',website='https://alta.example.test/';
 function source(texts:string[],override:Partial<SourceObservation>={}):SourceObservation{return sourceObservationSchema.parse({id:'00000000-0000-4000-8000-000000000001',url:website+'contact',contentHash:'a'.repeat(64),relevantTextHash:'b'.repeat(64),retrievedAt:'2026-10-27T12:00:00Z',publishedAt:null,publishedAtBlockId:null,firstParty:true,truncated:false,blocks:texts.map((text,index)=>({id:`b${index}`,text})),...override});}
 const fact=(s:SourceObservation,index:number):QualificationFact=>({kind:'business_phone',value:s.blocks[index]!.text,observationId:s.id,blockId:s.blocks[index]!.id});

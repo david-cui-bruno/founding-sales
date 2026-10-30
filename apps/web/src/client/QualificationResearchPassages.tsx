@@ -1,7 +1,7 @@
 import type {JSX} from 'react';
 import type {qualificationViewSchema} from '@fss/contracts';
 import type {z} from 'zod';
-import {qualificationResearchPassages} from '@fss/domain/sourcing/qualificationResearchPassages.ts';
+import {qualificationResearchPassages} from './qualificationResearchPassages.ts';
 
 const labels={phone:'Published phone passage',person:'Possible person or role lead',location:'Office and location context'};
 type QualificationView=z.infer<typeof qualificationViewSchema>;
