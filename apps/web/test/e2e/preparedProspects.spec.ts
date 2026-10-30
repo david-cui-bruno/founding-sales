@@ -47,6 +47,11 @@ test('signed administrator opens the default prepared view and a useful source-b
  await expect(page.getByRole('button',{name:`Open company brief for ${selected.displayName}`,exact:true})).toBeVisible();
  expect(await preparedProspectsBusinessSnapshot(await context())).toEqual(before);expect(app.runtimeRequests()).toBeGreaterThan(0);
  await page.reload();await page.getByRole('button',{name:'Prospects',exact:true}).click();await expect(page.getByRole('heading',{name:'Prepared companies',exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'Qualified publications',exact:true}).click();
+ await expect(page.getByRole('region',{name:'Prepared source-backed supply',exact:true})).toBeVisible();
+ await expect(page.getByRole('region',{name:'Prepared company research',exact:true})).toHaveCount(0);
+ await page.getByRole('button',{name:'Prepared research',exact:true}).click();
+ await expect(page.getByRole('button',{name:`Open company brief for ${selected.displayName}`,exact:true})).toBeVisible();
  expect(await preparedProspectsBusinessSnapshot(await context())).toEqual(before);
 });
 
