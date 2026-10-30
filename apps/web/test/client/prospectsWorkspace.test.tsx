@@ -4,7 +4,7 @@ import {priorityFixturePage} from './support/priorityFixture.ts';
 import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { automaticResearchFirmSchema, manualProspectSchema, qualifiedResearchFirmSchema } from '@fss/contracts';
+import { automaticResearchFirmSchema, manualProspectSchema, qualifiedResearchFirmSchema, type CallingSubject } from '@fss/contracts';
 import { BrowserClient } from '../../src/client/BrowserClient.ts';
 import { BrowserProspectsWorkspace } from '../../src/client/BrowserProspectsWorkspace.tsx';
 import { BrowserResearchQueue } from '../../src/client/BrowserResearchQueue.tsx';
@@ -61,6 +61,11 @@ function setup(kind: 'automatic' | 'qualified' = 'automatic') {
   const client = new BrowserClient({ fetch: send, storage, navigate: vi.fn(), randomUUID });
   return { client, send, requests, storage, randomUUID, session, values, rows: (value: typeof rows) => { rows = value; }, fail: () => { failQueue = true; }, empty: () => { response = queue([legacy]); }, lose: () => { lost = true; }, delay: () => { delayed = deferred(); return delayed; } };
 }
+function renderQualified(client:BrowserClient,strict=false,onOpenCalling?: (subject:CallingSubject)=>void){
+  const view=render(strict?<StrictMode><BrowserProspectsWorkspace client={client} {...(onOpenCalling?{onOpenCalling}:{})}/></StrictMode>:<BrowserProspectsWorkspace client={client} {...(onOpenCalling?{onOpenCalling}:{})}/>);
+  fireEvent.click(screen.getByRole('button',{name:'Qualified publications'}));
+  return view;
+}
 async function ready(): Promise<void> {
   await waitFor(() => expect(screen.getByRole('button', { name: 'Refresh action queue' }).hasAttribute('disabled')).toBe(false));
 }
@@ -68,8 +73,8 @@ beforeEach(() => { vi.spyOn(Date, 'now').mockReturnValue(Date.parse(at)); });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe('prepared Prospects workspace, pure mounted composition', () => {
-  it('reads prepared supply first without raw fetches, mutations, fake refill or callable claims', async () => {
-    const s = setup(); await s.client.refresh(); render(<BrowserProspectsWorkspace client={s.client} />);
+  it('reads the preserved qualified publications without raw fetches, mutations, fake refill or callable claims', async () => {
+    const s = setup(); await s.client.refresh(); renderQualified(s.client);
     await screen.findByText(proof.firmName); await ready();
     expect(screen.getByText('1 source-backed research items in this read · Not a callable count.')).toBeTruthy();
     expect(screen.queryByText(legacy.subject)).toBeNull();
@@ -80,7 +85,7 @@ describe('prepared Prospects workspace, pure mounted composition', () => {
     await act(async () => { s.client.dispose(); });
   });
   it('opens exact source proof, focuses its heading, discloses lineage and returns to list without another request', async () => {
-    const s = setup(); await s.client.refresh(); render(<BrowserProspectsWorkspace client={s.client} />); await ready();
+    const s = setup(); await s.client.refresh(); renderQualified(s.client); await ready();
     fireEvent.click(await screen.findByRole('button', { name: 'Review current research' }));
     const detail = await screen.findByRole('region', { name: 'Current automatic research proof' });
     await waitFor(() => expect(document.activeElement).toBe(within(detail).getByRole('heading', { name: proof.firmName })));
@@ -96,20 +101,20 @@ describe('prepared Prospects workspace, pure mounted composition', () => {
     await act(async () => { s.client.dispose(); });
   });
   it('distinguishes failed refresh from a genuinely empty prepared selection', async () => {
-    const s = setup(); await s.client.refresh(); render(<BrowserProspectsWorkspace client={s.client} />); await ready();
+    const s = setup(); await s.client.refresh(); renderQualified(s.client); await ready();
     s.fail(); fireEvent.click(screen.getByRole('button', { name: 'Refresh action queue' }));
     await screen.findByText(/This is not an empty result/u);
     expect(screen.queryByText(proof.firmName)).toBeNull(); expect(screen.queryByText(/No prepared research returned/u)).toBeNull();
     await act(async () => { s.client.dispose(); });
   });
   it('does not confuse unrelated Today actions or raw supply with prepared research', async () => {
-    const s = setup(); s.empty(); await s.client.refresh(); render(<BrowserProspectsWorkspace client={s.client} />); await ready();
+    const s = setup(); s.empty(); await s.client.refresh(); renderQualified(s.client); await ready();
     expect(screen.getByText(/No prepared research returned/u)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Retained review' })).toBeTruthy(); expect(s.requests).toHaveLength(1);
     await act(async () => { s.client.dispose(); });
   });
   it('keeps qualified selection and keyset pagination deliberate and source-specific', async () => {
-    const s = setup(); await s.client.refresh(); render(<BrowserProspectsWorkspace client={s.client} />); await ready();
+    const s = setup(); await s.client.refresh(); renderQualified(s.client); await ready();
     fireEvent.click(screen.getByText('Qualified selection and existing research requests'));
     fireEvent.click(screen.getByRole('button', { name: 'Load research candidates' }));
     await screen.findByText(qualified.firmName);
@@ -121,7 +126,7 @@ describe('prepared Prospects workspace, pure mounted composition', () => {
     await act(async () => { s.client.dispose(); });
   });
   it('retained review preserves unknown phones, exact feedback, pagination and UNKNOWN across navigation', async () => {
-    const s = setup(); await s.client.refresh(); render(<BrowserProspectsWorkspace client={s.client} />); await ready();
+    const s = setup(); await s.client.refresh(); renderQualified(s.client); await ready();
     fireEvent.click(screen.getByRole('button', { name: 'Retained review' }));
     await screen.findByRole('heading', { name: raw.observedName });
     expect(screen.getAllByText('Phone unknown · not extracted').length).toBeGreaterThan(0);
@@ -132,7 +137,7 @@ describe('prepared Prospects workspace, pure mounted composition', () => {
     s.lose(); fireEvent.click(screen.getByRole('button', { name: 'Keep' }));
     await screen.findByRole('button', { name: 'Reconcile same manual feedback' });
     const held = s.client.manualProspects.read(); expect(held?.payload).toMatchObject({ candidateId: id, expectedRevision: 4, state: 'kept' });
-    fireEvent.click(screen.getByRole('button', { name: 'Prepared research' })); await ready();
+    fireEvent.click(screen.getByRole('button', { name: 'Qualified publications' })); await ready();
     fireEvent.click(screen.getByRole('button', { name: 'Retained review' }));
     await screen.findByRole('button', { name: 'Reconcile same manual feedback' });
     expect(s.requests.filter(r => r.url.endsWith('/feedback'))).toHaveLength(1); expect(s.client.manualProspects.read()).toEqual(held); expect(s.randomUUID).toHaveBeenCalledTimes(1);
@@ -140,7 +145,7 @@ describe('prepared Prospects workspace, pure mounted composition', () => {
   });
   it('narrow retained row selection and Back preserve keyboard focus and exact identity', async () => {
     vi.stubGlobal('matchMedia', () => ({ matches: true }));
-    const s = setup(); await s.client.refresh(); render(<BrowserProspectsWorkspace client={s.client} />); await ready();
+    const s = setup(); await s.client.refresh(); renderQualified(s.client); await ready();
     fireEvent.click(screen.getByRole('button', { name: 'Retained review' })); await screen.findByRole('table');
     fireEvent.click(within(screen.getByRole('table')).getByRole('button'));
     await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('heading', { name: raw.observedName })));
@@ -149,7 +154,7 @@ describe('prepared Prospects workspace, pure mounted composition', () => {
     await act(async () => { s.client.dispose(); });
   });
   it.each(['navigate', 'invalidate'] as const)('late source proof cannot repopulate after %s', async kind => {
-    const s = setup(); await s.client.refresh(); render(<BrowserProspectsWorkspace client={s.client} />); await ready();
+    const s = setup(); await s.client.refresh(); renderQualified(s.client); await ready();
     const late = s.delay(); fireEvent.click(await screen.findByRole('button', { name: 'Review current research' }));
     await waitFor(() => expect(s.requests.some(r => r.url.endsWith('/open/v4'))).toBe(true));
     if (kind === 'navigate') fireEvent.click(screen.getByRole('button', { name: 'Retained review' }));
@@ -169,7 +174,7 @@ describe('prepared Prospects workspace, pure mounted composition', () => {
     s.client.dispose();
   });
   it('StrictMode abandoned operation cannot unlock or publish a replacement operation', async () => {
-    const s = setup(); await s.client.refresh(); render(<StrictMode><BrowserProspectsWorkspace client={s.client} /></StrictMode>);
+    const s = setup(); await s.client.refresh(); renderQualified(s.client,true);
     await screen.findByText(proof.firmName); await ready();
     expect(s.requests).toEqual([{ url: '/browser/api/today/actions/v4?include=callingPreparation', body: undefined }]);
     await act(async () => { s.client.dispose(); });
@@ -184,7 +189,7 @@ describe('prepared Prospects workspace, pure mounted composition', () => {
 describe('Prospects to Calling exact navigation composition', () => {
   it('expired prepared proof cannot open a brief even while the session remains current', async () => {
     const s = setup(), open = vi.fn(); s.session.expiresAt = '2026-10-29T00:00:00.000Z';
-    await s.client.refresh(); render(<BrowserProspectsWorkspace client={s.client} onOpenCalling={open} />); await ready();
+    await s.client.refresh(); renderQualified(s.client,false,open); await ready();
     fireEvent.click(screen.getByRole('button', { name: 'Review current research' }));
     const button = await screen.findByRole('button', { name: 'Open calling brief' });
     const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-10-27T01:00:00.000Z'));
@@ -192,7 +197,7 @@ describe('Prospects to Calling exact navigation composition', () => {
     finally { clock.mockRestore(); await act(async () => { s.client.dispose(); }); }
   });
   it.each(['automatic', 'qualified'] as const)('%s opened proof passes only its explicit canonical Firm ID without requests or writes', async kind => {
-    const s = setup(kind), open = vi.fn(); await s.client.refresh(); render(<BrowserProspectsWorkspace client={s.client} onOpenCalling={open} />); await ready();
+    const s = setup(kind), open = vi.fn(); await s.client.refresh(); renderQualified(s.client,false,open); await ready();
     expect(screen.queryByRole('button', { name: 'Open calling brief' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Review current research' }));
     const button = await screen.findByRole('button', { name: 'Open calling brief' });
@@ -203,7 +208,7 @@ describe('Prospects to Calling exact navigation composition', () => {
     await act(async () => { s.client.dispose(); });
   });
   it.each(['back', 'destination', 'epoch', 'unmount'] as const)('same-turn %s revokes an old prepared-brief action before callback', async transition => {
-    const s = setup(), open = vi.fn(); await s.client.refresh(); const view = render(<BrowserProspectsWorkspace client={s.client} onOpenCalling={open} />); await ready();
+    const s = setup(), open = vi.fn(); await s.client.refresh(); const view = renderQualified(s.client,false,open); await ready();
     fireEvent.click(screen.getByRole('button', { name: 'Review current research' }));
     const stale = await screen.findByRole('button', { name: 'Open calling brief' });
     act(() => {
@@ -225,7 +230,7 @@ describe('Prospects to Calling exact navigation composition', () => {
     expect(open).not.toHaveBeenCalled(); await act(async () => { s.client.dispose(); });
   });
   it('raw unknown-phone selection passes exact candidate and revision, never an invented Firm', async () => {
-    const s = setup(), open = vi.fn(); await s.client.refresh(); render(<BrowserProspectsWorkspace client={s.client} onOpenCalling={open} />); await ready();
+    const s = setup(), open = vi.fn(); await s.client.refresh(); renderQualified(s.client,false,open); await ready();
     fireEvent.click(screen.getByRole('button', { name: 'Retained review' }));
     const button = await screen.findByRole('button', { name: 'Open calling brief' });
     await waitFor(() => expect(button.hasAttribute('disabled')).toBe(false));
@@ -236,7 +241,7 @@ describe('Prospects to Calling exact navigation composition', () => {
   });
   it.each(['selection', 'page', 'filter', 'refresh', 'destination', 'epoch'] as const)('same-turn raw %s refuses an old exact-record action', async transition => {
     const s = setup(), open = vi.fn(); s.rows([raw, { ...raw, candidateId: other, revision: 7 }]);
-    await s.client.refresh(); render(<BrowserProspectsWorkspace client={s.client} onOpenCalling={open} />); await ready();
+    await s.client.refresh(); renderQualified(s.client,false,open); await ready();
     fireEvent.click(screen.getByRole('button', { name: 'Retained review' }));
     const stale = await screen.findByRole('button', { name: 'Open calling brief' });
     await waitFor(() => expect(stale.hasAttribute('disabled')).toBe(false));

@@ -64,6 +64,12 @@ describe('what the API mounts', () => {
     ]);
   });
 
+  it('mounts prepared prospect reads as exact sourcing paths without a creation or dispatch route',()=>{
+    const registry=registryFor(options());
+    for(const path of ['/sourcing/prepared-prospects/list','/sourcing/prepared-prospects/read'])expect(registry.moduleFor(path)?.name).toBe('sourcing');
+    for(const path of ['/sourcing/prepared-prospects/create','/sourcing/prepared-prospects/send','/sourcing/prepared-prospects/read/extra'])expect(registry.moduleFor(path)).toBeUndefined();
+  });
+
   it('mounts the Gmail callback and the Pub/Sub push path exactly as Google was told them', () => {
     const registry = registryFor(options());
     // Both of these are facts about somebody else's configuration: the redirect URI

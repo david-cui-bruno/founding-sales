@@ -47,6 +47,7 @@ function setup() {
     }
     if (url === '/browser/api/crm/firm-page-v3' && firmWait) return await firmWait.promise;
     if (url === '/browser/api/sourcing/candidates/prospects/priority/list') return json(priorityFixturePage({ prospects: [], hasMore: false }));
+    if (url === '/browser/api/sourcing/prepared-prospects/list') return json({prospects:[],hasMore:false,viewRevision:'a'.repeat(64),checkedAt:new Date().toISOString()});
     if (url === '/browser/sign-in') return json({ authorizationUrl: 'https://login.example.test/authorize' });
     if (url === '/browser/sign-out') {
       if (signoutFails) throw Error('uncertain');
@@ -72,12 +73,13 @@ describe('issue787 mounted real-client shell', () => {
   it('composes the committed single-page feature workspaces without legacy stacked mounts or writes', async () => {
     const s = setup(); render(<BrowserApp client={s.client} />); await screen.findByText(card.firmName);
     navigate('Prospects');
-    await screen.findByRole('region', { name: 'Prepared source-backed supply' });
+    await screen.findByRole('region', { name: 'Prepared company research' });
+    await screen.findByText('0 prepared · 0 need research on this page. This is research supply, not a contact-ready count.');
     expect(screen.getByRole('region', { name: 'Prospects workspace' })).toBeTruthy();
     expect(screen.queryByRole('region', { name: 'Manual prospect worklist' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Retained review' }));
     await screen.findByRole('region', { name: 'Manual prospect worklist' });
-    expect(screen.queryByRole('region', { name: 'Prepared source-backed supply' })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Prepared company research' })).toBeNull();
     navigate('Email');
     expect(screen.getByRole('region', { name: 'Email workspace' })).toBeTruthy();
     expect(screen.getByRole('navigation', { name: 'Email views' })).toBeTruthy();
@@ -98,7 +100,11 @@ describe('issue787 mounted real-client shell', () => {
     await waitFor(() => expect(s.send.mock.calls.filter(([url]) => url === '/browser/api/calling/setup')).toHaveLength(1));
     await waitFor(()=>expect(s.send.mock.calls.filter(([url])=>url==='/browser/api/calling-identities')).toHaveLength(1));
     const routes = s.send.mock.calls.map(([url]) => String(url));
-    expect(routes.every(url => ['/browser/session', '/browser/api/today?include=tasks&include=meeting_tasks&include=callingPreparation', '/browser/api/today/actions/v4?include=callingPreparation', '/browser/api/sourcing/candidates/prospects/priority/list', '/browser/api/social/private-drafts/list', '/browser/api/calling/setup','/browser/api/calling-identities'].includes(url))).toBe(true);
+    expect(routes.every(url => ['/browser/session', '/browser/api/today?include=tasks&include=meeting_tasks&include=callingPreparation', '/browser/api/today/actions/v4?include=callingPreparation', '/browser/api/sourcing/prepared-prospects/list', '/browser/api/sourcing/candidates/prospects/priority/list', '/browser/api/social/private-drafts/list', '/browser/api/calling/setup','/browser/api/calling-identities'].includes(url))).toBe(true);
+    const preparedReads=s.send.mock.calls.filter(([url])=>url==='/browser/api/sourcing/prepared-prospects/list');
+    expect(preparedReads).toHaveLength(1);
+    expect(preparedReads[0]?.[1]?.method).toBe('POST');
+    expect(JSON.parse(String(preparedReads[0]?.[1]?.body))).toEqual({offset:0});
     expect(routes.filter(url => url === '/browser/api/social/private-drafts/list')).toHaveLength(1);
     const setupReads = s.send.mock.calls.filter(([url]) => url === '/browser/api/calling/setup');
     expect(setupReads).toHaveLength(1);

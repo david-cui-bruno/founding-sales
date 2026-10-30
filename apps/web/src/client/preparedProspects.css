@@ -1,0 +1,37 @@
+.prepared-companies { min-width: 0; }
+.prepared-companies-surface, .prepared-company { background: var(--prospects-panel); border: 1px solid var(--prospects-border); border-radius: 16px; padding: 24px; }
+.prepared-companies-toolbar { display: flex; align-items: start; justify-content: space-between; gap: 20px; }
+.prepared-companies-toolbar h2 { margin: 0; font-size: 22px; }
+.prepared-companies-toolbar p { max-width: 64ch; font-size: 13px; }
+.prepared-companies-toolbar button { flex-shrink: 0; }
+.prepared-companies-list { list-style: none; margin: 20px 0 0; padding: 0; }
+.prepared-companies-list > li { display: flex; justify-content: space-between; align-items: center; gap: 24px; padding: 20px 0; border-top: 1px solid var(--prospects-border); }
+.prepared-companies-list h3 { margin: 7px 0; font-size: 17px; }
+.prepared-companies-list p { max-width: 70ch; font-size: 14px; }
+.prepared-companies-list button { flex-shrink: 0; }
+.prepared-companies .prepared-company-note, .prepared-companies figcaption { color: var(--prospects-muted); font-size: 12px; }
+.prepared-company-state { display: inline-block; border: 1px solid var(--prospects-border); border-radius: 6px; padding: 3px 7px; font-size: 11px; font-weight: 600; }
+.prepared-companies-pagination { border-top: 1px solid var(--prospects-border); margin-top: 8px; padding-top: 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.prepared-companies-pagination span { color: var(--prospects-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.prepared-company-detail > button { margin-bottom: 18px; }
+.prepared-company-heading h2 { font-size: 25px; margin: 10px 0; line-height: 1.25; }
+.prepared-company p, .prepared-company li { max-width: 72ch; }
+.prepared-company section { border-top: 1px solid var(--prospects-border); margin-top: 26px; padding-top: 20px; }
+.prepared-company section h3 { margin: 0 0 12px; font-size: 16px; }
+.prepared-company section ul { margin: 12px 0 0; padding-left: 20px; line-height: 1.7; }
+.prepared-company figure { margin: 16px 0 20px; max-width: 72ch; }
+.workspace-prospects .prepared-company blockquote { margin: 0 0 10px; padding: 0; border: 0; font-size: 14px; line-height: 1.7; white-space: pre-wrap; }
+.prepared-company figcaption { line-height: 1.6; }
+.prepared-company details { font-size: 12px; }
+.prepared-company dt { font-weight: 600; margin-top: 14px; }
+.prepared-company dd { margin: 5px 0 0; }
+.prepared-company details li { margin: 10px 0; overflow-wrap: anywhere; }
+.prepared-companies-loading { min-height: 100px; padding: 28px 0; color: var(--prospects-muted); }
+.prepared-companies-notice { padding: 16px 0; border-top: 1px solid var(--prospects-border); }
+@media (max-width: 600px) {
+ .prepared-companies-surface, .prepared-company { padding: 18px 16px; }
+ .prepared-companies-toolbar, .prepared-companies-list > li { flex-direction: column; align-items: stretch; gap: 12px; }
+ .prepared-companies-toolbar button, .prepared-companies-list button { align-self: flex-start; }
+ .prepared-companies-pagination button { flex: 1 1 130px; }
+ .prepared-companies-pagination span { flex: 1 1 100%; order: -1; }
+}
