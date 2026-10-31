@@ -50,6 +50,10 @@ it('keeps the real app_runtime list50 database roundtrips bounded independently 
  await runtime.query(`INSERT INTO sourcing_candidates(workspace_id,identity_key,payload)
  SELECT $1,encode(sha256(convert_to($2::text||n::text,'UTF8')),'hex'),jsonb_build_object('firmName','Fictional retained background '||n,'website','https://background-'||$2::text||'-'||n||'.example.test/','sourceUrl','https://background-'||$2::text||'-'||n||'.example.test/','locality','Boston','region','MA','signal','fit_only','evidence','Controlled empty retained inventory','observedOn',to_char(current_date,'YYYY-MM-DD'),'preparedBy','Controlled list cardinality fixture')
  FROM generate_series(1,3139) n`,[seed.alpha.workspaceId,token]);
+ // Production-shaped unrelated audit volume must not be rescanned for every
+ // retained candidate. These fictional events assert no source loss.
+ await runtime.query(`INSERT INTO audit_events(workspace_id,actor_kind,action,subject_kind,subject_id,detail)
+ SELECT $1,'system','fixture.unrelated','fixture',n::text,'{}'::jsonb FROM generate_series(1,6433) n`,[seed.alpha.workspaceId]);
  const largeBefore=await preparedProspectsBusinessSnapshot(ctx()),large=await measure();
  expect(large.result.ok).toBe(true);if(!large.result.ok)throw Error(large.result.reason);expect(large.result.value.prospects).toHaveLength(50);expect(new Set(large.result.value.prospects.map(p=>p.target.candidateId))).toEqual(new Set(targets.map(t=>t.candidateId)));expect(await preparedProspectsBusinessSnapshot(ctx())).toEqual(largeBefore);
  const explain:Record<string,unknown>={};
@@ -58,8 +62,9 @@ it('keeps the real app_runtime list50 database roundtrips bounded independently 
  const artifact=process.env['FSS_PREPARED_LIST_METRICS_FILE'];if(artifact)writeFileSync(artifact,JSON.stringify({one:metrics(one),fifty:metrics(fifty),repeat:metrics(repeat),large:metrics(large),inventoryCandidates:3189,explain},null,2),{mode:0o600});
  expect(fifty.queries).toBeLessThanOrEqual(one.queries+20);
  for(const plan of Object.values(explain)){
-  const scans:{loops:number}[]=[];
-  const visit=(value:unknown)=>{if(!value||typeof value!=='object')return;const node=value as Record<string,unknown>;if(node['Relation Name']==='sourcing_candidates'&&node['Alias']==='lost')scans.push({loops:Number(node['Actual Loops'])});for(const child of Array.isArray(node['Plans'])?node['Plans']:[])visit(child);};
+  const scans:{loops:number}[]=[],auditScans:{loops:number}[]=[];
+  const visit=(value:unknown)=>{if(!value||typeof value!=='object')return;const node=value as Record<string,unknown>;if(node['Relation Name']==='sourcing_candidates'&&node['Alias']==='lost')scans.push({loops:Number(node['Actual Loops'])});if(node['Relation Name']==='audit_events')auditScans.push({loops:Number(node['Actual Loops'])});for(const child of Array.isArray(node['Plans'])?node['Plans']:[])visit(child);};
   visit((plan as {Plan:unknown}[])[0]?.Plan);expect(scans.length).toBeGreaterThan(0);expect(scans.reduce((n,scan)=>n+scan.loops,0)).toBeLessThanOrEqual(1);
+  expect(auditScans.length).toBeGreaterThan(0);expect(auditScans.reduce((n,scan)=>n+scan.loops,0)).toBeLessThanOrEqual(1);
  }
 },90000);

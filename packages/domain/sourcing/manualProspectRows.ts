@@ -12,6 +12,9 @@ const preparedLossSources=`prepared_lost_source_urls AS MATERIALIZED (
  ARRAY(SELECT o.source->>'sourceUrl' FROM sourcing_candidate_discovery_origins o WHERE o.workspace_id=lost.workspace_id AND o.candidate_id=lost.id)) refs(url)
  WHERE lost.workspace_id=$1 AND lost.source_check->>'state'='unavailable'
  AND lost.source_check->>'reason' IN ('source_unavailable','source_not_permitted','no_readable_text') AND url IS NOT NULL
+), prepared_lost_source_hashes AS MATERIALIZED (
+ SELECT DISTINCT loss.subject_id AS hash FROM audit_events loss WHERE loss.workspace_id=$1
+ AND loss.action='${MANUAL_SOURCE_LOSS_ACTION}' AND loss.subject_kind='sourcing_source_hash'
 ), `;
 function permittedManualProspectsSql(exactSubject:boolean,prepared=false):string {return `WITH ${prepared?preparedLossSources:''}raw AS (
  SELECT c.id,c.workspace_id,c.payload,c.revision,c.created_at,c.status,c.source_check,
@@ -32,9 +35,10 @@ function permittedManualProspectsSql(exactSubject:boolean,prepared=false):string
  AND NOT EXISTS(SELECT 1 FROM evidence_items e WHERE e.workspace_id=raw.workspace_id
   AND rtrim(e.source_reference,'/')=ANY(raw.source_urls)
   AND (e.retention_expires_at<=clock_timestamp() OR (NOT e.terms_allow_retention AND e.retention_expires_at IS NULL)))
- AND NOT EXISTS(SELECT 1 FROM audit_events loss WHERE loss.workspace_id=raw.workspace_id
+${prepared?` AND NOT EXISTS(SELECT 1 FROM prepared_lost_source_hashes loss
+  WHERE EXISTS(SELECT 1 FROM unnest(raw.source_urls) url WHERE loss.hash=encode(sha256(convert_to(url,'UTF8')),'hex')))`:` AND NOT EXISTS(SELECT 1 FROM audit_events loss WHERE loss.workspace_id=raw.workspace_id
   AND loss.action='${MANUAL_SOURCE_LOSS_ACTION}' AND loss.subject_kind='sourcing_source_hash'
-  AND EXISTS(SELECT 1 FROM unnest(raw.source_urls) url WHERE loss.subject_id=encode(sha256(convert_to(url,'UTF8')),'hex')))
+  AND EXISTS(SELECT 1 FROM unnest(raw.source_urls) url WHERE loss.subject_id=encode(sha256(convert_to(url,'UTF8')),'hex')))`}
 ${prepared?` AND NOT EXISTS(SELECT 1 FROM prepared_lost_source_urls lost WHERE lost.url=ANY(raw.source_urls))`:` AND NOT EXISTS(SELECT 1 FROM sourcing_candidates lost WHERE lost.workspace_id=raw.workspace_id
   AND lost.source_check->>'state'='unavailable' AND lost.source_check->>'reason' IN ('source_unavailable','source_not_permitted','no_readable_text')
   AND (rtrim(lost.payload->>'sourceUrl','/')=ANY(raw.source_urls) OR rtrim(lost.source_check->'lastSuccess'->>'url','/')=ANY(raw.source_urls)
@@ -49,8 +53,8 @@ const rowsSql=(prepared=false)=>`${permittedManualProspectsSql(false,prepared)},
 ) SELECT * FROM ranked WHERE duplicate_rank=1 AND ($2='all' OR manual_state=$2) ORDER BY created_at DESC,id DESC`;
 
 export const MANUAL_PROSPECT_ROWS_SQL=rowsSql();
-/** Same prepared permissions/dedup, with the workspace-wide cross-record loss set
- * materialized once per statement instead of scanning every candidate per row. */
+/** Same prepared permissions/dedup, with workspace-wide source-loss URL/hash sets
+ * materialized once per statement instead of scanning candidates/audits per row. */
 export const PREPARED_PROSPECT_ROWS_SQL=rowsSql(true);
 
 export async function manualProspectRows(ctx:RepositoryContext,state:string,offset:number,exact?:{candidateId:string;expectedRevision:number}):Promise<ManualProspectRow[]> {

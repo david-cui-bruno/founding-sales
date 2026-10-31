@@ -12,6 +12,9 @@ import {preparedCaptureAuthority,preparedCaptureManifest,type PreparedCapturePol
 import {phoneDiscoverySourceLimit} from '../../sourcing/prospectPhoneDiscoveryAuthority.ts';
 import {lockDiscoveryReviewSources} from '../../sourcing/discoveryReviewVisibility.ts';
 import {MANUAL_PROSPECT_ROWS_SQL,PREPARED_PROSPECT_ROWS_SQL} from '../../sourcing/manualProspectRows.ts';
+import {MANUAL_SOURCE_LOSS_ACTION,rememberExpiredManualSources} from '../../sourcing/manualProspectSourceLoss.ts';
+import {listPreparedProspects} from '../../sourcing/preparedProspects.ts';
+import {seedPreparedProspect,preparedProspectsBusinessSnapshot} from './preparedProspectsPgFixture.ts';
 let db:TestDatabase,seed:TwoWorkspaces,runtime:SessionQueryable;
 const ctx=()=>repositoryContext(workspaceScope(seed.alpha.workspaceId,{kind:'user',userId:seed.alpha.admin.userId,role:'admin'}),runtime);
 beforeAll(async()=>{db=await createTestDatabase();seed=await seedTwoWorkspaces(db.session);runtime=await db.appRuntimeSession();});
@@ -90,4 +93,31 @@ it.each(['source','lastSuccess','origin'] as const)('keeps prepared permission/d
   await runtime.query("UPDATE sourcing_candidates SET source_check=$2::jsonb,status=$3 WHERE id=$1",[sibling.value.id,JSON.stringify({checkId:randomUUID(),jobId:randomUUID(),requestedAt:at,state:'unavailable',reason,checkedAt:at,lastSuccess}),reference==='origin'?'dismissed':'needs_review']);
   expect((await compare()).some(row=>row['id']===target.candidate_id)).toBe(false);
  });
+});
+
+it('keeps audit-loss scope identical and invalidates global prepared continuation after actual same-workspace source loss',async()=>{
+ const targets:Awaited<ReturnType<typeof seedPreparedProspect>>[]=[];
+ for(let i=0;i<51;i++)targets.push(await seedPreparedProspect(ctx(),1000+i));
+ const list=(offset=0,viewRevision?:string)=>withTransaction(runtime,()=>listPreparedProspects(ctx(),{offset,...(viewRevision?{viewRevision}:{})}));
+ const first=await list();if(!first.ok)throw Error(first.reason);expect(first.value.hasMore).toBe(true);
+ const second=await list(50,first.value.viewRevision);if(!second.ok)throw Error(second.reason);
+ const offPage=second.value.prospects.find(p=>targets.some(t=>t.candidateId===p.target.candidateId));expect(offPage).toBeDefined();if(!offPage)throw Error('Expected off-page fixture');
+ const target=targets.find(t=>t.candidateId===offPage.target.candidateId)!;
+ // Same hash with wrong action/kind/workspace, and an unrelated correct loss
+ // hash, cannot veto this source or change its current prepared continuation.
+ for(const [workspace,action,kind,url] of [[seed.alpha.workspaceId,'fixture.unrelated','sourcing_source_hash',target.website],[seed.alpha.workspaceId,MANUAL_SOURCE_LOSS_ACTION,'fixture',target.website],[seed.beta.workspaceId,MANUAL_SOURCE_LOSS_ACTION,'sourcing_source_hash',target.website],[seed.alpha.workspaceId,MANUAL_SOURCE_LOSS_ACTION,'sourcing_source_hash',target.website+'unrelated']] as const)
+  await runtime.query(`INSERT INTO audit_events(workspace_id,actor_kind,action,subject_kind,subject_id,detail) VALUES($1,'system',$2,$3,encode(sha256(convert_to(rtrim($4::text,'/'),'UTF8')),'hex'),'{}')`,[workspace,action,kind,url]);
+ const compare=async()=>{
+  const shared=(await runtime.query(MANUAL_PROSPECT_ROWS_SQL,[seed.alpha.workspaceId,'all'])).rows;
+  const prepared=(await runtime.query(PREPARED_PROSPECT_ROWS_SQL,[seed.alpha.workspaceId,'all'])).rows;
+  expect(prepared).toEqual(shared);return prepared;
+ };
+ expect((await compare()).some(row=>row['id']===target.candidateId)).toBe(true);
+ const before=await preparedProspectsBusinessSnapshot(ctx()),continued=await list(50,first.value.viewRevision);
+ expect(continued).toMatchObject({ok:true});if(!continued.ok)throw Error(continued.reason);
+ expect(continued.value.prospects).toEqual(second.value.prospects);expect(await preparedProspectsBusinessSnapshot(ctx())).toEqual(before);
+ await withTransaction(runtime,()=>rememberExpiredManualSources(ctx(),[target.website+'///']));
+ expect((await compare()).some(row=>row['id']===target.candidateId)).toBe(false);
+ expect(await list(50,first.value.viewRevision)).toEqual({ok:false,reason:'view_changed'});
+ const refreshed=await list();if(!refreshed.ok)throw Error(refreshed.reason);expect(refreshed.value.viewRevision).not.toBe(first.value.viewRevision);
 });

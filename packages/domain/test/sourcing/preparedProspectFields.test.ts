@@ -126,3 +126,21 @@ it.each(['Executive Vice President Northern California','Regional Director North
 it('retains an explicit name followed by its source role without needing a narrative sentence',()=>{
  expect(classifyPreparedPassage('Mira Cedar, Founder','').kinds).toContain('person');
 });
+
+it('retains the whole tenant-portal process as workflow rather than treating serve-as contact handling as geography',()=>{
+ const text='When you partner with Astoria Charm, you can rest assured that your tenants are in capable hands. We serve as a reliable point of contact for tenants, addressing concerns, handling inquiries, and providing residents with an online portal for rent payments, maintenance requests, and access to their ledgers. With our proactive approach and personalized service we ensure that every detail is managed efficiently and effectively.';
+ expect(classifyPreparedPassage(text,'')).toEqual({kinds:['workflow'],usefulBusiness:false,usefulOperations:true,residentialContext:false,contrary:false});
+});
+
+it.each([
+ 'We serve as a point of contact for tenants. Please visit the resident portal for questions.',
+ 'Serving as your tenant point of contact, our office is available for any questions.',
+ 'Our office serves as a point of contact for tenants. Visit the resident portal for questions.',
+])('does not invent geography or a concrete process from a serve-as contact statement: %s',text=>{
+ expect(classifyPreparedPassage(text,'Boston')).toMatchObject({kinds:[],usefulOperations:false});
+});
+
+it('still retains an explicit serve-area statement alongside a serve-as role',()=>{
+ const text='We serve as a point of contact for tenants. We serve Boston and the surrounding communities.';
+ expect(classifyPreparedPassage(text,'').kinds).toEqual(['location']);
+});
