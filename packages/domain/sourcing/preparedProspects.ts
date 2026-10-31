@@ -10,6 +10,8 @@ import {manualPhoneSnapshots,recheckManualPhoneSnapshots,type ManualPhoneSnapsho
 import {preparedPriorityOrder} from './prospectPriorityStore.ts';
 import {projectPreparedProspect,type PreparedRunIdentity} from './preparedProspectProjection.ts';
 import {withPreparedCaptureSnapshots} from './preparedCaptureStore.ts';
+import {lockPreparedCaptureDependencies} from './preparedCaptureDependencies.ts';
+import {preparedCaptureAuthority} from './preparedCapture.ts';
 
 type Result<T>={ok:true;value:T}|{ok:false;reason:string};
 type Run=PreparedRunIdentity&Record<string,unknown>&{candidate_id:string};
@@ -24,7 +26,7 @@ async function latestRuns(ctx:RepositoryContext,rows:readonly ManualProspectRow[
 }
 async function expirations(ctx:RepositoryContext,rows:readonly ManualProspectRow[],snapshots:readonly ManualPhoneSnapshot[]):Promise<Expiry[]>{
  const candidateUrls=rows.flatMap(r=>Array.isArray(r['source_urls'])?r['source_urls'].filter((url):url is string=>typeof url==='string'):[]);
- const urls=[...new Set([...candidateUrls,...snapshots.flatMap(s=>s.permitted_urls)])].map(url=>url.replace(/\/+$/u,''));
+ const urls=[...new Set([...candidateUrls,...snapshots.flatMap(s=>[...s.permitted_urls,...preparedCaptureAuthority(s).dependencyUrls])])].map(url=>url.replace(/\/+$/u,''));
  if(!urls.length)return [];
  return (await ctx.db.query<Expiry>(`SELECT rtrim(source_reference,'/') AS url,min(retention_expires_at) AS expires_at FROM evidence_items
  WHERE workspace_id=$1 AND rtrim(source_reference,'/')=ANY($2::text[]) AND retention_expires_at IS NOT NULL GROUP BY rtrim(source_reference,'/') ORDER BY 1`,[ctx.scope.workspaceId,urls])).rows;
@@ -37,6 +39,7 @@ async function currentBriefs(ctx:RepositoryContext,readRows:()=>Promise<ManualPr
  const rows=await readRows();
  if(rows.length>50)return refuse('candidate_unavailable');
  if(rows.length)await ctx.db.query('SELECT id FROM sourcing_candidates WHERE workspace_id=$1 AND id=ANY($2::uuid[]) ORDER BY id FOR SHARE',[ctx.scope.workspaceId,rows.map(r=>r.id)]);
+ await lockPreparedCaptureDependencies(ctx,rows);
  const runs=await latestRuns(ctx,rows),snapshots=await withPreparedCaptureSnapshots(ctx,await manualPhoneSnapshots(ctx,rows)),expiry=await expirations(ctx,rows,snapshots);
  const started=(await ctx.db.query<{at:Date}>('SELECT clock_timestamp() AS at')).rows[0]!.at.getTime();
  if(ctx.scope.actor.kind==='user')await ctx.db.query('SELECT user_id FROM workspace_memberships WHERE workspace_id=$1 AND user_id=$2 FOR SHARE',[ctx.scope.workspaceId,ctx.scope.actor.userId]);

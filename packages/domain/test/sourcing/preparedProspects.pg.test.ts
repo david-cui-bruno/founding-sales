@@ -36,8 +36,8 @@ it('prepares a source-backed company brief from an identity-refused SEO label wi
  expect(await preparedProspectsBusinessSnapshot(ctx())).toEqual(before);
 });
 
-it('shows missing, truncated and third-party pages as research gaps without inventing source-supported detail',async()=>{
- for(const [index,options] of [[1,{pages:false}],[2,{truncated:true}],[3,{firstParty:false}]] as const){
+it('shows missing and third-party pages as research gaps without inventing source-supported detail',async()=>{
+ for(const [index,options] of [[1,{pages:false}],[3,{firstParty:false}]] as const){
   const f=await seedPreparedProspect(ctx(),index,options),answer=await read(f);expect(answer.ok).toBe(true);if(!answer.ok)throw Error(answer.reason);
   expect(answer.value).toMatchObject({state:'needs_research',coverage:'no_usable_retained_pages',passages:[],contactAuthority:'not_granted'});
  }

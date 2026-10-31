@@ -12,6 +12,8 @@ import {readPreparedProspect,listPreparedProspects} from '../../sourcing/prepare
 import {manualPhoneSnapshots,projectManualPhone} from '../../sourcing/manualProspectPhone.ts';
 import {readManualProspectSubject} from '../../sourcing/manualProspectRows.ts';
 import {readResearchSettings} from '../../research/settings.ts';
+import {lockDiscoveryReviewSources} from '../../sourcing/discoveryReviewVisibility.ts';
+import {PREPARED_CAPTURE_V1} from '../../sourcing/preparedCapture.ts';
 import {databaseNow} from '../../policy/clock.ts';
 import {preparedProspectsBusinessSnapshot} from './preparedProspectsPgFixture.ts';
 import {researchPageFetch,type RawResponse} from '../../../../apps/worker/src/research/companyPageFetch.ts';
@@ -24,7 +26,7 @@ const target=(value:Target):Target=>({candidateId:value.candidateId,candidateRev
 const read=(value:Target)=>tx(()=>readPreparedProspect(ctx(),target(value)));
 const ok=(text:string,type='text/html'):RawResponse=>({statusCode:200,headers:{'content-type':type},body:new TextEncoder().encode(text),abortedOverCap:false});
 beforeAll(async()=>{db=await createTestDatabase();seed=await seedTwoWorkspaces(db.session);runtime=await db.appRuntimeSession();});
-beforeEach(async()=>{await runtime.query('DELETE FROM sourcing_candidates');await runtime.query('DELETE FROM evidence_items');await runtime.query('DELETE FROM provider_reservations');await runtime.query('DELETE FROM provider_ledger');await runtime.query('DELETE FROM research_settings');await runtime.query('DELETE FROM daily_counters');});
+beforeEach(async()=>{await tx(async()=>{await lockDiscoveryReviewSources(ctx());await runtime.query('DELETE FROM sourcing_candidates');});await runtime.query('DELETE FROM evidence_items');await runtime.query('DELETE FROM provider_reservations');await runtime.query('DELETE FROM provider_ledger');await runtime.query('DELETE FROM research_settings');await runtime.query('DELETE FROM daily_counters');});
 afterAll(async()=>db?.drop());
 
 async function pending(legacy=false){
@@ -34,12 +36,12 @@ async function pending(legacy=false){
  const candidateId=saved.value.id;
  await runtime.query('INSERT INTO research_settings(workspace_id,enabled,max_pages_per_firm) VALUES($1,true,1)',[seed.alpha.workspaceId]);
  let runId:string;
- if(legacy){
+ {
   const now=await databaseNow(ctx()),settings=await readResearchSettings(ctx());
   const fingerprint=createHash('sha256').update(JSON.stringify([1,QUALIFICATION_PROMPT_VERSION,QUALIFICATION_POLICY_VERSION,settings.modelName,now.slice(0,10)])).digest('hex');
-  runId=(await runtime.query<{id:string}>(`INSERT INTO sourcing_qualification_runs(workspace_id,candidate_id,candidate_revision,fingerprint,prompt_version,policy_version,model_name)
-   VALUES($1,$2,1,$3,$4,$5,$6) RETURNING id`,[seed.alpha.workspaceId,candidateId,fingerprint,QUALIFICATION_PROMPT_VERSION,QUALIFICATION_POLICY_VERSION,settings.modelName])).rows[0]!.id;
- }else{const queued=await tx(()=>requestQualification(ctx(true),{candidateId,expectedRevision:1},{enqueue:false}));if(!queued.ok)throw Error(queued.reason);runId=queued.value.runId;}
+  runId=(await runtime.query<{id:string}>(`INSERT INTO sourcing_qualification_runs(workspace_id,candidate_id,candidate_revision,fingerprint,prompt_version,policy_version,model_name,capture_policy_version)
+   VALUES($1,$2,1,$3,$4,$5,$6,$7) RETURNING id`,[seed.alpha.workspaceId,candidateId,fingerprint,QUALIFICATION_PROMPT_VERSION,QUALIFICATION_POLICY_VERSION,settings.modelName,legacy?'legacy':PREPARED_CAPTURE_V1])).rows[0]!.id;
+ }
  return {candidateId,candidateRevision:1,runId,website,sourceUrl,url};
 }
 
@@ -50,8 +52,8 @@ async function capture(f:Awaited<ReturnType<typeof pending>>,options:{denyAfterF
   if(input.url.endsWith('/robots.txt'))return ok('User-agent: *\nDisallow:\n','text/plain');
   if(input.url===f.sourceUrl)return {statusCode:301,headers:{location:f.url},body:null,abortedOverCap:false};
   if(input.url===f.url){
-   if(options.denyAfterFirstPage)await runtime.query(`INSERT INTO audit_events(workspace_id,actor_kind,action,subject_kind,subject_id,detail)
-    VALUES($1,'system','sourcing.manual_source_retention_expired','sourcing_source_hash',encode(sha256(convert_to(rtrim($2::text,'/'),'UTF8')),'hex'),'{}')`,[seed.alpha.workspaceId,f.sourceUrl]);
+   if(options.denyAfterFirstPage)await tx(async()=>{await lockDiscoveryReviewSources(ctx());return runtime.query(`INSERT INTO audit_events(workspace_id,actor_kind,action,subject_kind,subject_id,detail)
+    VALUES($1,'system','sourcing.manual_source_retention_expired','sourcing_source_hash',encode(sha256(convert_to(rtrim($2::text,'/'),'UTF8')),'hex'),'{}')`,[seed.alpha.workspaceId,f.sourceUrl]);});
    return ok('<main><p>Our property management team manages residential homes for owners and coordinates tenant maintenance requests.</p><p>General office: (617) 555-0123.</p></main>');
   }
   return {statusCode:404,headers:{},body:null,abortedOverCap:false};
@@ -60,12 +62,12 @@ async function capture(f:Awaited<ReturnType<typeof pending>>,options:{denyAfterF
  return {sent,modelInputs};
 }
 
-it('carries an actual adapter slash redirect through new ordinary capture, immutable storage and prepared list/detail only',async()=>{
+it('carries an actual adapter slash redirect through an existing queued v1 capture, immutable storage and prepared list/detail only',async()=>{
  const f=await pending(),calls=await capture(f);
  expect(calls.sent).toEqual([f.website+'robots.txt',f.sourceUrl,f.url]);expect(calls.modelInputs).toHaveLength(2);
  for(const input of calls.modelInputs)expect(input).not.toMatch(/redirectTrace|redirectUrls|prepared_capture|capture_policy_version/u);
  const stored=(await runtime.query('SELECT capture_policy_version,prepared_capture,state,reason FROM sourcing_qualification_runs WHERE id=$1',[f.runId])).rows[0]!;
- expect(stored).toMatchObject({capture_policy_version:'prepared-source-association-v1',state:'unavailable',reason:'invalid_evidence',prepared_capture:{sourceUrl:f.sourceUrl,pages:[{url:f.url,redirectUrls:[f.sourceUrl,f.url]}]}});
+ expect(stored).toMatchObject({capture_policy_version:PREPARED_CAPTURE_V1,state:'unavailable',reason:'invalid_evidence',prepared_capture:{sourceUrl:f.sourceUrl,pages:[{url:f.url,redirectUrls:[f.sourceUrl,f.url]}]}});
  const before=await preparedProspectsBusinessSnapshot(ctx()),answer=await read(f);if(!answer.ok)throw Error(answer.reason);
  expect(answer.value).toMatchObject({state:'prepared',contactAuthority:'not_granted',coverage:'complete_retained_pages'});
  expect(answer.value.passages).toContainEqual(expect.objectContaining({kind:'business',url:f.url,quote:'Our property management team manages residential homes for owners and coordinates tenant maintenance requests.'}));
@@ -87,8 +89,8 @@ it('keeps an existing same-day queued legacy attempt legacy without another requ
 it.each(['anchor','final'] as const)('refuses captured detail after known %s source loss without using the stored manifest as a license',async variant=>{
  const f=await pending();await capture(f);
  const url=variant==='anchor'?f.sourceUrl:f.url;
- await runtime.query(`INSERT INTO audit_events(workspace_id,actor_kind,action,subject_kind,subject_id,detail)
-  VALUES($1,'system','sourcing.manual_source_retention_expired','sourcing_source_hash',encode(sha256(convert_to(rtrim($2::text,'/'),'UTF8')),'hex'),'{}')`,[seed.alpha.workspaceId,url]);
+ await tx(async()=>{await lockDiscoveryReviewSources(ctx());return runtime.query(`INSERT INTO audit_events(workspace_id,actor_kind,action,subject_kind,subject_id,detail)
+  VALUES($1,'system','sourcing.manual_source_retention_expired','sourcing_source_hash',encode(sha256(convert_to(rtrim($2::text,'/'),'UTF8')),'hex'),'{}')`,[seed.alpha.workspaceId,url]);});
  expect(await read(f)).toMatchObject({ok:false});
 });
 

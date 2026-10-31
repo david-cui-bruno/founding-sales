@@ -5,7 +5,7 @@ import {projectPreparedProspect} from '../../sourcing/preparedProspectProjection
 import {originalAuthorities} from '../../sourcing/manualProspectOriginalAuthority.ts';
 import type {ManualProspectRow} from '../../sourcing/manualProspectProjection.ts';
 import type {ManualPhoneSnapshot} from '../../sourcing/manualProspectPhone.ts';
-import {buildPreparedCapture} from '../../sourcing/preparedCapture.ts';
+import {buildPreparedCapture,PREPARED_CAPTURE_V1} from '../../sourcing/preparedCapture.ts';
 
 const candidateId='10000000-0000-4000-8000-000000000001',observationId='10000000-0000-4000-8000-000000000002',runId='10000000-0000-4000-8000-000000000003';
 function fixture(){
@@ -47,14 +47,13 @@ it.each([
  ['changed original blocks',(f:ReturnType<typeof fixture>)=>{f.source.blocks[0]!.text+=' Mutated original.';}],
  ['lost source permission',(f:ReturnType<typeof fixture>)=>{f.snapshot.permitted_urls=[];}],
  ['third-party source',(f:ReturnType<typeof fixture>)=>{f.source.firstParty=false;}],
- ['incomplete page',(f:ReturnType<typeof fixture>)=>{f.source.truncated=true;}],
 ] as const)('refuses the new grant for %s',(_name,change)=>{
  const f=fixture();change(f);expect(f.read()).toMatchObject({state:'needs_research',passages:[],contactAuthority:'not_granted'});
 });
 
 it('builds associations only from a newly paired adapter trace, outside the model observation',()=>{
  const f=fixture(),binding={candidateId,candidateRevision:1,sourceUrl:f.sourceUrl};
- expect(buildPreparedCapture(binding,[{source:f.source,trace:undefined}])).toBeNull();
- expect(buildPreparedCapture(binding,[{source:f.source,trace:{version:'page-redirect-trace-v1',urls:[f.sourceUrl,f.url]}}])).toEqual(f.manifest);
+ expect(buildPreparedCapture(binding,[{source:f.source,trace:undefined}],PREPARED_CAPTURE_V1)).toBeNull();
+ expect(buildPreparedCapture(binding,[{source:f.source,trace:{version:'page-redirect-trace-v1',urls:[f.sourceUrl,f.url]}}],PREPARED_CAPTURE_V1)).toEqual(f.manifest);
  expect(Object.keys(f.source)).not.toContain('redirectTrace');expect(Object.keys(f.source)).not.toContain('prepared_capture');
 });

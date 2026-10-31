@@ -11,7 +11,7 @@ const targetMatches=(left:PreparedProspectTarget,right:PreparedProspectTarget)=>
 const sourceHref=(value:string)=>{try{const url=new URL(value);return ['https:','http:'].includes(url.protocol)&&!url.username&&!url.password?url.href:undefined;}catch{return undefined;}};
 const sourceLabel=(value:string)=>{try{return new URL(value).hostname;}catch{return 'Retained source';}};
 const dateLabel=(value:string)=>new Date(value).toLocaleString(undefined,{dateStyle:'medium',timeStyle:'short'});
-const sections=[['business','Business and residential fit'],['location','Office and service markets'],['workflow','Operations and workflow'],['person','People mentioned in sources'],['contact','Published contact context'],['contrary','Conflicting or contrary context']] as const;
+const sections=[['business','Business context'],['location','Office and service markets'],['workflow','Operations and workflow'],['person','People mentioned in sources'],['contact','Published contact context'],['contrary','Conflicting or contrary context']] as const;
 const refusalMessage=(reason:string)=>reason==='view_changed'?'The company list changed. Refresh companies to start from the first page.':reason==='source_expired'?'Research evidence expired. Refresh companies to read current sources.':'This company or its source changed. Refresh companies to read current research.';
 
 function SourceNotices({notices}:{notices:PreparedProspectSummary['sourceNotices']}):JSX.Element|null{
@@ -30,7 +30,7 @@ function CompanyBrief({brief,heading}:{brief:PreparedProspectBrief;heading:RefOb
    if(!passages.length)return null;
    return <section key={kind} className="prepared-company-passages" aria-label={label}><h3>{label}</h3>
     {passages.map((passage,index)=><figure key={`${passage.observationId}:${passage.blockId}:${index}`}>
-     <blockquote>{passage.quote}</blockquote><figcaption>Captured {dateLabel(passage.retrievedAt)} · <a href={sourceHref(passage.url)} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer">{sourceLabel(passage.url)}</a></figcaption>
+     <blockquote>{passage.quote}</blockquote><figcaption>Captured {dateLabel(passage.retrievedAt)} · <a href={sourceHref(passage.url)} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer">{sourceLabel(passage.url)}</a>{passage.sourceCoverage==='partial_page'?<> · <span>Partial page</span></>:null}</figcaption>
     </figure>)}
    </section>;
   })}
@@ -38,7 +38,7 @@ function CompanyBrief({brief,heading}:{brief:PreparedProspectBrief;heading:RefOb
   <section className="prepared-company-next" aria-label="Next research action"><h3>Next research action</h3><p>{brief.nextAction}</p>
    <p className="prepared-company-note">Research context only. No permission to call or email; buying authority, current route ownership and maintenance need are not established.</p></section>
   {brief.unknowns.length?<section aria-label="What remains unknown"><h3>What remains unknown</h3><ul>{brief.unknowns.map(item=><li key={item}>{item}</li>)}</ul></section>:null}
-  <p className="prepared-company-note">{brief.coverage==='complete_retained_pages'?'Supported by the complete retained pages shown here; other pages and current business conditions may be unknown.':'No usable retained pages support a company brief in this read.'}</p>
+  <p className="prepared-company-note">{brief.coverage==='partial_retained_pages'?'Intact retained passages are shown, but source coverage is incomplete. Omitted content may contain qualifications or contrary context; missing fields and current business conditions remain unknown.':brief.coverage==='complete_retained_pages'?'Supported by the complete retained pages shown here; other pages and current business conditions may be unknown.':'No usable retained pages support a company brief in this read.'}</p>
   <SourceNotices notices={brief.sourceNotices}/>
   <details><summary>Discovery hints</summary><dl><dt>Search label</dt><dd>{brief.discoveryLabel}</dd><dt>Search location</dt><dd>{[brief.targetingLocality,brief.targetingRegion].filter(Boolean).join(', ')||'Unknown'}</dd></dl>
    <p>The search label and location are discovery hints. They do not confirm the business name, office location or service market.</p></details>

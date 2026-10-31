@@ -137,3 +137,26 @@ it('preserves inherited source notices in both the page and selected brief witho
  expect(within(detail).getByRole('link',{name:sourceNotices[0]!.label}).getAttribute('href')).toBe(sourceNotices[0]!.url);
  expect(within(detail).getByText(sourceNotices[1]!.label).closest('a')).toBeNull();f.client.dispose();
 });
+
+it('shows partial retained blocks with their coverage and leaves missing fields unknown',async()=>{
+ const f=await mounted();await screen.findByRole('heading',{name:row().displayName});
+ f.read({...brief,policyVersion:'prepared-prospect-v2',coverage:'partial_retained_pages',
+  unknowns:['Some source content was omitted; buyer and residential fit remain unknown.'],
+  passages:brief.passages.map(p=>({...p,sourceCoverage:'partial_page'}))});
+ fireEvent.click(screen.getByRole('button',{name:'Open company brief for '+row().displayName}));
+ const detail=await screen.findByRole('article',{name:'Prepared company brief'});
+ expect(within(detail).getAllByText('Partial page').length).toBe(brief.passages.length);
+ expect(within(detail).getByText(/source coverage is incomplete/iu)).toBeTruthy();
+ expect(within(detail).getByText(/buyer and residential fit remain unknown/iu)).toBeTruthy();
+ expect(within(detail).queryByText(/Supported by the complete retained pages/iu)).toBeNull();
+ expect(f.requests.map(r=>r.url)).toEqual(['/browser/api/sourcing/prepared-prospects/list','/browser/api/sourcing/prepared-prospects/read']);
+ f.client.dispose();
+});
+
+it('refuses partial V2 passages whose response claims complete coverage or omits provenance',()=>{
+ const partial={...brief,policyVersion:'prepared-prospect-v2',coverage:'partial_retained_pages',passages:brief.passages.map(p=>({...p,sourceCoverage:'partial_page'}))};
+ expect(preparedProspectBriefSchema.safeParse(partial).success).toBe(true);
+ expect(preparedProspectBriefSchema.safeParse({...partial,coverage:'complete_retained_pages'}).success).toBe(false);
+ expect(preparedProspectBriefSchema.safeParse({...partial,passages:partial.passages.map(p=>Object.fromEntries(Object.entries(p).filter(([key])=>key!=='sourceCoverage')))}).success).toBe(false);
+ expect(preparedProspectBriefSchema.safeParse({...partial,policyVersion:'prepared-prospect-v1'}).success).toBe(false);
+});
