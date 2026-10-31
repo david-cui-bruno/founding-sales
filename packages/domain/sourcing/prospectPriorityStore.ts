@@ -38,15 +38,16 @@ export async function priorityOrder(ctx:RepositoryContext,state:string,offset:nu
  return {rows:answer.rows,viewRevision:answer.view_revision};
 }
 /** Preparation selects only metadata here. Existing priority slots are preserved
- * inside each context lane; complete-page presence is ordering, never source rights. */
+ * inside each context lane; complete-page presence is ordering, never source rights.
+ * Only admission_checked_at is excluded from the full current run fingerprint. */
 export async function preparedPriorityOrder(ctx:RepositoryContext,offset:number):Promise<{rows:PriorityOrderRow[];viewRevision:string}>{
  const answer=(await ctx.db.query<{rows:PriorityOrderRow[];view_revision:string}>(`${pool}, preparation AS (
- SELECT ordered.*,r.id AS latest_run_id,r.xmin_version,
+ SELECT ordered.*,r.id AS latest_run_id,r.preparation_key,
  CASE WHEN r.candidate_revision=ordered.revision AND COALESCE(r.reason,'') NOT IN ('source_unavailable','source_not_permitted','no_readable_text')
  AND EXISTS(SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(r.observations)='array' THEN r.observations ELSE '[]'::jsonb END) page WHERE page->'firstParty'='true'::jsonb AND page->'truncated'='false'::jsonb) THEN 0 ELSE 1 END AS context_lane
- FROM ordered LEFT JOIN LATERAL(SELECT id,candidate_revision,reason,observations,xmin::text AS xmin_version FROM sourcing_qualification_runs r WHERE r.workspace_id=$1 AND r.candidate_id=ordered.id ORDER BY requested_at DESC,id DESC LIMIT 1) r ON true
+ FROM ordered LEFT JOIN LATERAL(SELECT id,candidate_revision,reason,observations,encode(sha256(convert_to((to_jsonb(r)-'admission_checked_at')::text,'UTF8')),'hex') AS preparation_key FROM sourcing_qualification_runs r WHERE r.workspace_id=$1 AND r.candidate_id=ordered.id ORDER BY requested_at DESC,id DESC LIMIT 1) r ON true
  ), preparation_context AS (
- SELECT encode(sha256(convert_to(context.view_revision||COALESCE((SELECT string_agg(jsonb_build_array(id,latest_run_id,xmin_version,context_lane)::text,'' ORDER BY id) FROM preparation),''),'UTF8')),'hex') AS view_revision FROM context
+ SELECT encode(sha256(convert_to(context.view_revision||COALESCE((SELECT string_agg(jsonb_build_array(id,latest_run_id,preparation_key,context_lane)::text,'' ORDER BY id) FROM preparation),''),'UTF8')),'hex') AS view_revision FROM context
  ) SELECT preparation_context.view_revision,COALESCE((SELECT jsonb_agg(jsonb_build_object('id',id,'revision',revision,'assessment_revision',assessment_revision,'fit',fit,'value',value,'timing',timing,'source_url',source_url,'roles',COALESCE(roles,'[]'),'decided_at',decided_at,'expires_at',expires_at,'last_considered_at',last_considered_at,'considered_count',considered_count) ORDER BY context_lane,slot,id)
  FROM(SELECT * FROM preparation ORDER BY context_lane,slot,id LIMIT 51 OFFSET $3) page),'[]'::jsonb) AS rows FROM preparation_context`,[ctx.scope.workspaceId,'all',offset])).rows[0]!;
  return {rows:answer.rows,viewRevision:answer.view_revision};
