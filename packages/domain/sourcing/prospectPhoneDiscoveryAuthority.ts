@@ -34,10 +34,8 @@ export async function phoneDiscoveryContext(ctx:RepositoryContext,candidateId:st
  if(!sourceUrls.length||sourceUrls.length>18)return null;
  return {website,sourceUrls:[...new Set(sourceUrls)].sort()};
 }
-/** Per-URL source fences and any shorter pre-existing expiry apply to every page. */
-export async function phoneDiscoverySourceLimit(ctx:RepositoryContext,urls:readonly string[]):Promise<{denied:boolean;expiresAt:Date|null}>{
- const normalized=[...new Set(urls.map(url=>url.replace(/\/+$/u,'')))];
- const result=await ctx.db.query<{denied:boolean;expires_at:Date|null}>(`SELECT
+/** Shared predicate bytes; prepared batch reads bind each run's own URL group. */
+export const PHONE_DISCOVERY_SOURCE_LIMIT_SQL=`SELECT
  EXISTS(SELECT 1 FROM evidence_items e WHERE e.workspace_id=$1 AND rtrim(e.source_reference,'/')=ANY($2::text[])
   AND (e.retention_expires_at<=clock_timestamp() OR (NOT e.terms_allow_retention AND e.retention_expires_at IS NULL)))
  OR EXISTS(SELECT 1 FROM audit_events a WHERE a.workspace_id=$1 AND a.action=$3 AND a.subject_kind='sourcing_source_hash'
@@ -46,7 +44,11 @@ export async function phoneDiscoverySourceLimit(ctx:RepositoryContext,urls:reado
   AND c.source_check->>'reason' IN ('source_unavailable','source_not_permitted','no_readable_text')
   AND (rtrim(c.payload->>'sourceUrl','/')=ANY($2::text[]) OR rtrim(c.source_check->'lastSuccess'->>'url','/')=ANY($2::text[])
    OR EXISTS(SELECT 1 FROM sourcing_candidate_discovery_origins o WHERE o.workspace_id=c.workspace_id AND o.candidate_id=c.id AND rtrim(o.source->>'sourceUrl','/')=ANY($2::text[])))) AS denied,
- (SELECT min(e.retention_expires_at) FROM evidence_items e WHERE e.workspace_id=$1 AND rtrim(e.source_reference,'/')=ANY($2::text[])) AS expires_at`,[ctx.scope.workspaceId,normalized,MANUAL_SOURCE_LOSS_ACTION]);
+ (SELECT min(e.retention_expires_at) FROM evidence_items e WHERE e.workspace_id=$1 AND rtrim(e.source_reference,'/')=ANY($2::text[])) AS expires_at`;
+/** Per-URL source fences and any shorter pre-existing expiry apply to every page. */
+export async function phoneDiscoverySourceLimit(ctx:RepositoryContext,urls:readonly string[]):Promise<{denied:boolean;expiresAt:Date|null}>{
+ const normalized=[...new Set(urls.map(url=>url.replace(/\/+$/u,'')))];
+ const result=await ctx.db.query<{denied:boolean;expires_at:Date|null}>(PHONE_DISCOVERY_SOURCE_LIMIT_SQL,[ctx.scope.workspaceId,normalized,MANUAL_SOURCE_LOSS_ACTION]);
  return {denied:result.rows[0]?.denied??true,expiresAt:result.rows[0]?.expires_at??null};
 }
 export async function phoneDiscoveryResearchRefusal(ctx:RepositoryContext,owner:string,countedAt?:Date):Promise<ProspectPhoneDiscoveryReason|null>{

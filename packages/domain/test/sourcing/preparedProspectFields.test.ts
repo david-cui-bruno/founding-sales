@@ -64,3 +64,65 @@ it('keeps known contrary evidence visible even beyond the displayed quote bound'
  expect(text.length).toBeGreaterThan(2000);
  expect(classifyPreparedPassage(text,'')).toMatchObject({contrary:true,usefulBusiness:false,usefulOperations:false,kinds:expect.arrayContaining(['contrary'])});
 });
+
+it('does not present a customer endorsement as the management company describing its own business',()=>{
+ const text='Our network of churches has properties requiring professional management across the state. We wish Cedar were able to clone itself into every community. These are great professionals regarding maintenance and keeping tenants. We breathe easy with Cedar managing our property.';
+ expect(classifyPreparedPassage(text,'')).toMatchObject({usefulBusiness:false,usefulOperations:false,residentialContext:false,kinds:[]});
+});
+
+it.each(['Owner Resources','Executive Vice President, Northern California, Sacramento and East Bay','Meet Our Team'])('does not put a navigation or role heading into people evidence: %s',text=>{
+ expect(classifyPreparedPassage(text,'Sacramento').kinds).not.toContain('person');
+});
+
+it.each([
+ 'Our founder Mira Cedar leads the local residential property team.',
+ 'Beran Redwood serves as Executive Vice President for Cedar Residential California, overseeing operations across Northern California.',
+ 'Ted Cedar, Owner/Broker, leads the local property management office.',
+])('retains a named person tied to a role without treating it as buying authority: %s',text=>{
+ expect(classifyPreparedPassage(text,'').kinds).toContain('person');
+});
+
+it.each([
+ 'Preventive maintenance programs',
+ 'To learn more about how Cedar Residential can serve your Sacramento community or to request a proposal, click here.',
+ 'If you are a current resident, please see your resident portal for any requests or questions regarding your community.',
+ 'Sacramento property management company | Our Services',
+ 'Discover the leading Sacramento property management company',
+ 'Learn how this independently operated franchise office serves Boston.',
+])('does not turn headings or navigation into location/workflow evidence: %s',text=>{
+ const kinds=classifyPreparedPassage(text,'Sacramento').kinds;
+ expect(kinds).not.toContain('location');expect(kinds).not.toContain('workflow');
+});
+
+it('preserves actual address, service geography and operational evidence independently',()=>{
+ expect(classifyPreparedPassage('2530 Fictional Street Sacramento, CA 95816','Sacramento').kinds).toContain('location');
+ expect(classifyPreparedPassage('Serving Sacramento, Placer, El Dorado and Yolo Counties since 1976.','Sacramento').kinds).toContain('location');
+ expect(classifyPreparedPassage('All maintenance is taken care of promptly to support resident satisfaction and tenant retention.','').kinds).toContain('workflow');
+});
+
+it('recognizes a declarative franchise-office service area without losing its portfolio limitation',()=>{
+ const text='This independently operated franchise office serves Boston. National network totals are not this office portfolio.';
+ expect(classifyPreparedPassage(text,'Boston')).toEqual({kinds:['location'],usefulBusiness:false,usefulOperations:false,residentialContext:false,contrary:false});
+});
+
+it('does not hide known contrary evidence inside an otherwise attributed passage',()=>{
+ expect(classifyPreparedPassage('Customer review: We do not manage residential homes. Our firm serves commercial owners only.','').kinds).toContain('contrary');
+});
+
+it('retains the company describing its maintenance process even when it recommends a portal',()=>{
+ const text='We highly recommend that tenants use our maintenance portal. Our team schedules property repairs and tracks tenant requests every day.';
+ expect(classifyPreparedPassage(text,'')).toMatchObject({usefulOperations:true,contrary:false,kinds:expect.arrayContaining(['workflow'])});
+});
+
+it('does not promote an unlabelled customer recommendation of a named manager',()=>{
+ const text="We highly recommend Cedar Property Management. Our tenants submit maintenance requests through the manager's portal and all property repairs are tracked.";
+ expect(classifyPreparedPassage(text,'')).toMatchObject({usefulBusiness:false,usefulOperations:false,kinds:[]});
+});
+
+it.each(['Executive Vice President Northern California','Regional Director Northern California'])('does not infer a named person from a role followed by geographic heading text: %s',text=>{
+ expect(classifyPreparedPassage(text,'').kinds).not.toContain('person');
+});
+
+it('retains an explicit name followed by its source role without needing a narrative sentence',()=>{
+ expect(classifyPreparedPassage('Mira Cedar, Founder','').kinds).toContain('person');
+});

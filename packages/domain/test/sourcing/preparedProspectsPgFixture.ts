@@ -5,8 +5,8 @@ import {withTransaction} from '../../db/queryable.ts';
 import {saveCandidate} from '../../sourcing/candidates.ts';
 
 /** Fictional retained pages only. Seeding never calls acquisition or qualification. */
-export async function seedPreparedProspect(ctx:RepositoryContext,index=1,options:{pages?:boolean;sourceAgeMs?:number;truncated?:boolean;firstParty?:boolean;region?:CandidateInput['region'];extraBlocks?:SourceObservation['blocks'];businessText?:string;omitBrand?:boolean}={}){
- const website=`https://cedar-${index}-${randomUUID()}.example.test/`,name=`Cedar ${index} Property Management`,label=`Home | Cedar ${index} PM`;
+export async function seedPreparedProspect(ctx:RepositoryContext,index=1,options:{pages?:boolean;sourceAgeMs?:number;truncated?:boolean;firstParty?:boolean;region?:CandidateInput['region'];extraBlocks?:SourceObservation['blocks'];businessText?:string;omitBrand?:boolean;website?:string}={}){
+ const website=options.website??`https://cedar-${index}-${randomUUID()}.example.test/`,name=`Cedar ${index} Property Management`,label=`Home | Cedar ${index} PM`;
  const input:CandidateInput={firmName:label,website,locality:'Boston',region:options.region??'MA',signal:'fit_only',
   evidence:'Retained discovery label; phone and business need unknown.',sourceUrl:website,
   observedOn:new Date().toISOString().slice(0,10),preparedBy:'Fictional prepared-company acceptance'};

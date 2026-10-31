@@ -8,7 +8,7 @@ import {browserRequest} from '../support/browser.ts';
 import {startManualProspectApp,type ManualProspectApp} from '../support/manualProspectApp.ts';
 import {routeManualProvider} from '../support/manualProspectSeed.ts';
 
-let app:ManualProspectApp,fixture:Awaited<ReturnType<typeof seedPreparedProspect>>;
+let app:ManualProspectApp,fixture:Awaited<ReturnType<typeof seedPreparedProspect>>,sameWebsite:Awaited<ReturnType<typeof seedPreparedProspect>>;
 const context=async()=>repositoryContext(workspaceScope(app.fixture.alpha.workspaceId,{kind:'user',userId:app.fixture.alpha.admin.userId,role:'admin'}),await app.fixture.database.appRuntimeSession());
 async function login(page:Page,who:'alpha'|'beta'|'sales'='alpha'){
  const workspace=who==='beta'?app.fixture.beta:app.fixture.alpha;app.chooseIdentity(who==='sales'?workspace.salesperson:workspace.admin);
@@ -18,7 +18,7 @@ async function login(page:Page,who:'alpha'|'beta'|'sales'='alpha'){
  await expect(page.getByRole('button',{name:'Sign out',exact:true})).toBeVisible();
 }
 // 848 selects the existing allocator adapter only; this new acceptance is #797.
-test.beforeAll(async()=>{app=await startManualProspectApp('848');const ctx=await context();fixture=await seedPreparedProspect(ctx);await seedPreparedProspect(ctx,2,{pages:false});});
+test.beforeAll(async()=>{app=await startManualProspectApp('848');const ctx=await context();fixture=await seedPreparedProspect(ctx,1,{truncated:true});sameWebsite=await seedPreparedProspect(ctx,3,{website:fixture.website});await seedPreparedProspect(ctx,2,{pages:false});});
 test.afterAll(async()=>app?.stop());
 
 test('signed administrator opens the default prepared view and a useful source-backed brief, then reloads without business writes',async({researchPage:page})=>{
@@ -29,11 +29,22 @@ test('signed administrator opens the default prepared view and a useful source-b
  await expect(page.getByRole('button',{name:'Prepared research',exact:true})).toHaveAttribute('aria-pressed','true');
  await expect(page.getByRole('heading',{name:'Prepared companies',exact:true})).toBeVisible();
  const response=await browserRequest(page,'/sourcing/prepared-prospects/list',{body:{offset:0}});expect(response).toMatchObject({status:200});
- const initial=preparedProspectListSchema.parse(response.body);expect(initial.prospects).toHaveLength(2);
+ const initial=preparedProspectListSchema.parse(response.body);expect(initial.prospects).toHaveLength(3);
+ const grouped=page.getByRole('group',{name:'Records with the same website',exact:true});await expect(grouped).toBeVisible();
+ await expect(grouped.getByRole('heading',{name:fixture.label,exact:true})).toBeVisible();await expect(grouped.getByRole('heading',{name:sameWebsite.label,exact:true})).toBeVisible();
+ await expect(grouped.getByRole('link',{name:fixture.website,exact:true})).toHaveCount(2);
+ await expect(page.getByText('2 prepared · 1 need research on this page.',{exact:false})).toBeVisible();
+ await grouped.getByRole('button',{name:`Open company brief for ${sameWebsite.label}`,exact:true}).click();
+ const alternative=page.getByRole('article',{name:'Prepared company brief'});await expect(alternative.getByRole('heading',{name:sameWebsite.label,exact:true})).toBeVisible();
+ await alternative.getByText('Source and record details',{exact:true}).click();await expect(alternative.getByText(`Candidate ${sameWebsite.candidateId} · Revision 1 · Run ${sameWebsite.runId}`,{exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'Back to companies',exact:true}).click();
  const selected=initial.prospects.find(row=>row.target.candidateId===fixture.candidateId)!;expect(selected.state).toBe('prepared');
  await page.getByRole('button',{name:`Open company brief for ${selected.displayName}`,exact:true}).click();
  const brief=page.getByRole('article',{name:'Prepared company brief'});await expect(brief).toBeVisible();
  await expect(brief.getByText(`${fixture.name} manages residential homes in Boston, Massachusetts.`,{exact:true})).toBeVisible();
+ await expect(brief.getByText('This independently operated franchise office serves Boston. National network totals are not this office portfolio.',{exact:true})).toBeVisible();
+ await expect(brief.getByText('Intact retained passages are shown, but source coverage is incomplete.',{exact:false})).toBeVisible();
+ await expect(brief.getByText('Discovery label; company identity is unverified.',{exact:true})).toBeVisible();
  await expect(brief.getByText('Research context only.',{exact:false})).toBeVisible();
  const read=await browserRequest(page,'/sourcing/prepared-prospects/read',{body:selected.target});expect(read.status).toBe(200);
  expect(preparedProspectBriefSchema.parse(read.body)).toMatchObject({target:selected.target,contactAuthority:'not_granted'});

@@ -1,0 +1,50 @@
+import {afterAll,beforeAll,expect,it} from 'vitest';
+import {createTestDatabase,type TestDatabase} from '../../db/testing/testDatabase.ts';
+import {withTransaction,type SessionQueryable} from '../../db/queryable.ts';
+import {repositoryContext,workspaceScope} from '../../db/workspaceScope.ts';
+import {seedTwoWorkspaces,type TwoWorkspaces} from '../db/support/fixtures.ts';
+import {listPreparedProspects} from '../../sourcing/preparedProspects.ts';
+import {priorityOrder} from '../../sourcing/prospectPriorityStore.ts';
+import {seedPreparedProspect,preparedProspectsBusinessSnapshot} from './preparedProspectsPgFixture.ts';
+
+let db:TestDatabase,seed:TwoWorkspaces,runtime:SessionQueryable;
+const ctx=()=>repositoryContext(workspaceScope(seed.alpha.workspaceId,{kind:'user',userId:seed.alpha.admin.userId,role:'admin'}),runtime);
+const list=(offset=0,viewRevision?:string)=>withTransaction(runtime,()=>listPreparedProspects(ctx(),{offset,...(viewRevision?{viewRevision}:{})}));
+beforeAll(async()=>{db=await createTestDatabase();seed=await seedTwoWorkspaces(db.session);runtime=await db.appRuntimeSession();});
+afterAll(async()=>db?.drop());
+
+it('puts useful partial context ahead of empty inventory without promoting source-refused pages or changing ordinary priority, and fences continuation',async()=>{
+ expect((await runtime.query('SELECT current_user')).rows).toEqual([{current_user:'app_runtime'}]);
+ const empty:Awaited<ReturnType<typeof seedPreparedProspect>>[]=[];
+ for(let i=0;i<50;i++)empty.push(await seedPreparedProspect(ctx(),i,{pages:false}));
+ const partial=await seedPreparedProspect(ctx(),50,{truncated:true});
+ const complete=await seedPreparedProspect(ctx(),51);
+ const refused=await seedPreparedProspect(ctx(),52);
+ await runtime.query("UPDATE sourcing_qualification_runs SET reason='source_incomplete_or_unverified' WHERE id=$1",[partial.runId]);
+ await runtime.query("UPDATE sourcing_qualification_runs SET reason='source_not_permitted' WHERE id=$1",[refused.runId]);
+ // Explicit relative dates make the regression independent of clocks and UUID ties.
+ await runtime.query("UPDATE sourcing_candidates SET created_at=timestamp '2026-01-01' WHERE id=ANY($1::uuid[])",[empty.map(p=>p.candidateId)]);
+ await runtime.query("UPDATE sourcing_candidates SET created_at=timestamp '2026-01-02' WHERE id=ANY($1::uuid[])",[[partial.candidateId,complete.candidateId,refused.candidateId]]);
+ const ordinaryBefore=await priorityOrder(ctx(),'all',0);
+ expect(ordinaryBefore.rows.slice(0,50).every(p=>empty.some(e=>e.candidateId===p.id))).toBe(true);
+ const business=await preparedProspectsBusinessSnapshot(ctx()),first=await list();
+ if(!first.ok)throw Error(first.reason);
+ expect(first.value.prospects).toHaveLength(50);expect(first.value.hasMore).toBe(true);
+ const useful=first.value.prospects.filter(p=>p.state==='prepared');
+ expect(new Set(useful.map(p=>p.target.candidateId))).toEqual(new Set([partial.candidateId,complete.candidateId]));
+ expect(new Set(first.value.prospects.slice(0,2).map(p=>p.target.candidateId))).toEqual(new Set([partial.candidateId,complete.candidateId]));
+ expect(await priorityOrder(ctx(),'all',0)).toEqual(ordinaryBefore);
+ const second=await list(50,first.value.viewRevision);if(!second.ok)throw Error(second.reason);
+ expect(second.value.prospects).toHaveLength(3);expect(second.value.hasMore).toBe(false);
+ expect(second.value.prospects.find(p=>p.target.candidateId===refused.candidateId)?.state).toBe('needs_research');
+ expect(new Set([...first.value.prospects,...second.value.prospects].map(p=>p.target.candidateId)).size).toBe(53);
+ expect(await preparedProspectsBusinessSnapshot(ctx())).toEqual(business);
+ await runtime.query('UPDATE sourcing_qualification_runs SET admission_checked_at=clock_timestamp()');
+ const continued=await list(50,first.value.viewRevision);if(!continued.ok)throw Error(continued.reason);
+ expect(continued.value.viewRevision).toBe(first.value.viewRevision);expect(continued.value.prospects).toEqual(second.value.prospects);
+ await runtime.query("UPDATE sourcing_qualification_runs SET reason='source_not_permitted' WHERE id=$1",[partial.runId]);
+ expect(await list(50,first.value.viewRevision)).toEqual({ok:false,reason:'view_changed'});
+ const refreshed=await list();if(!refreshed.ok)throw Error(refreshed.reason);
+ expect(refreshed.value.prospects[0]?.target.candidateId).toBe(complete.candidateId);
+ expect(refreshed.value.prospects.some(p=>p.target.candidateId===partial.candidateId)).toBe(false);
+});

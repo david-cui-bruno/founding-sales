@@ -111,13 +111,13 @@ it('refuses an exact-detail response for another revision instead of showing its
 });
 
 it('expires both an opened brief and its list without polling or re-fetching',async()=>{
- vi.useFakeTimers();vi.setSystemTime(new Date(at));const f=setup();f.rows([{...row(),validUntil:'2026-10-30T12:00:01.000Z'}]);f.read({...brief,validUntil:'2026-10-30T12:00:01.000Z'});
+ vi.useFakeTimers();vi.setSystemTime(new Date(at));const f=setup();f.rows([row(),{...row(2),discoveryLabel:row().discoveryLabel,validUntil:'2026-10-30T12:00:01.000Z'}]);f.read(brief);
  await f.client.refresh();render(<PreparedProspects client={f.client}/>);
  await act(async()=>{await vi.advanceTimersByTimeAsync(0);});
  fireEvent.click(screen.getByRole('button',{name:'Open company brief for '+row().displayName}));await act(async()=>{await vi.advanceTimersByTimeAsync(0);});
  expect(screen.getByText(brief.passages[0]!.quote)).toBeTruthy();const calls=f.requests.length;
  await act(async()=>{await vi.advanceTimersByTimeAsync(1001);});
- expect(screen.queryByText(brief.displayName)).toBeNull();expect(screen.queryByText(brief.passages[0]!.quote)).toBeNull();expect(screen.getByText('Research evidence expired. Refresh companies to read current sources.')).toBeTruthy();expect(f.requests).toHaveLength(calls);f.client.dispose();
+ expect(screen.queryByText(brief.displayName)).toBeNull();expect(screen.queryByText(row(2).displayName)).toBeNull();expect(screen.queryByText(brief.passages[0]!.quote)).toBeNull();expect(screen.getByText('Research evidence expired. Refresh companies to read current sources.')).toBeTruthy();expect(f.requests).toHaveLength(calls);f.client.dispose();
 });
 
 it('uses company preparation as the default while keeping qualified publication requests accessible',async()=>{
@@ -159,4 +159,55 @@ it('refuses partial V2 passages whose response claims complete coverage or omits
  expect(preparedProspectBriefSchema.safeParse({...partial,coverage:'complete_retained_pages'}).success).toBe(false);
  expect(preparedProspectBriefSchema.safeParse({...partial,passages:partial.passages.map(p=>Object.fromEntries(Object.entries(p).filter(([key])=>key!=='sourceCoverage')))}).success).toBe(false);
  expect(preparedProspectBriefSchema.safeParse({...partial,policyVersion:'prepared-prospect-v1'}).success).toBe(false);
+});
+
+it('labels the discovery heading and full website/source URLs without inventing a company name or changing quotations',async()=>{
+ const f=await mounted();await screen.findByRole('heading',{name:row().displayName});
+ expect(screen.getByText('Discovery label; company identity is unverified.')).toBeTruthy();
+ expect(screen.getByRole('link',{name:row().website!}).getAttribute('href')).toBe(row().website);
+ const original='Our property team anticipates residents&rsquo; maintenance requests and handles them promptly.';
+ f.read({...brief,passages:[{...brief.passages[0]!,quote:original}]});
+ fireEvent.click(screen.getByRole('button',{name:'Open company brief for '+row().displayName}));
+ const detail=await screen.findByRole('article',{name:'Prepared company brief'});
+ expect(within(detail).getByText('Discovery label; company identity is unverified.')).toBeTruthy();
+ expect(within(detail).getByRole('link',{name:brief.passages[0]!.url}).getAttribute('href')).toBe(brief.passages[0]!.url);
+ expect(within(detail).getByText(original)).toBeTruthy();
+ expect(within(detail).queryByText('Our property team anticipates residents’ maintenance requests and handles them promptly.')).toBeNull();
+ f.client.dispose();
+});
+
+it('groups adjacent exact website/location metadata even when discovery labels differ, preserving each label, order and exact open target',async()=>{
+ const f=await mounted();await screen.findByRole('heading',{name:row().displayName});
+ const first={...row(1),displayName:'Harbor Residential | Management',discoveryLabel:'Harbor Residential | Management'},second={...row(2),displayName:'Home | Harbor',discoveryLabel:'Home | Harbor'};
+ const office={...row(3),discoveryLabel:first.discoveryLabel,targetingLocality:'Cambridge'};
+ const directory={...row(4),discoveryLabel:first.discoveryLabel,website:first.website+'directory/another-profile'};
+ const separated={...row(5),discoveryLabel:first.discoveryLabel};
+ f.rows([first,second,office,directory,separated]);fireEvent.click(screen.getByRole('button',{name:'Refresh companies'}));
+ await screen.findByRole('heading',{name:separated.displayName});
+ expect(screen.getAllByRole('group',{name:'Records with the same website'})).toHaveLength(1);
+ const group=screen.getByRole('group',{name:'Records with the same website'});
+ expect(within(group).getByText(/same exact website and location hints/iu)).toBeTruthy();
+ expect(within(group).getByText(/identities are not merged/iu)).toBeTruthy();
+ expect(within(group).getByRole('heading',{name:first.discoveryLabel})).toBeTruthy();expect(within(group).getByRole('heading',{name:second.discoveryLabel})).toBeTruthy();
+ expect(within(group).getAllByRole('button',{name:/Open company brief for/iu})).toHaveLength(2);
+ expect(screen.getAllByRole('button',{name:/Open company brief for/iu})).toHaveLength(5);
+ expect(screen.getAllByRole('heading',{level:3}).map(h=>h.textContent)).toEqual([first.displayName,second.displayName,office.displayName,directory.displayName,separated.displayName]);
+ expect(screen.getByText('5 prepared · 0 need research on this page. This is research supply, not a contact-ready count.')).toBeTruthy();
+ f.read({...brief,...second});fireEvent.click(screen.getByRole('button',{name:'Open company brief for '+second.displayName}));
+ await screen.findByRole('article',{name:'Prepared company brief'});expect(f.requests.at(-1)?.body).toEqual(second.target);
+ expect(f.requests.map(r=>r.url)).toEqual(['/browser/api/sourcing/prepared-prospects/list','/browser/api/sourcing/prepared-prospects/list','/browser/api/sourcing/prepared-prospects/read']);
+ f.client.dispose();
+});
+
+it('does not group records without a website or across distinct directory paths, source spelling or location hints',async()=>{
+ const f=await mounted();await screen.findByRole('heading',{name:row().displayName});
+ const same=(index:number)=>({...row(index),discoveryLabel:'Shared discovery label'});
+ const records=[{...same(1),website:null},{...same(2),website:null},
+  {...same(3),website:'https://directory.example.test/office/a'},
+  {...same(4),website:'https://directory.example.test/office/b'},
+  {...same(5),website:'https://harbor.example.test'},same(6),
+  {...same(7),targetingRegion:'RI'}];
+ f.rows(records);fireEvent.click(screen.getByRole('button',{name:'Refresh companies'}));await screen.findByRole('heading',{name:records[6]!.displayName});
+ expect(screen.queryByRole('group',{name:'Records with the same website'})).toBeNull();expect(screen.getAllByRole('button',{name:/Open company brief for/iu})).toHaveLength(7);
+ f.client.dispose();
 });
