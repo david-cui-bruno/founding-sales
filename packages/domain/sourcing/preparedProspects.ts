@@ -4,7 +4,7 @@ import type {z} from 'zod';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {activeIdentityActor} from '../crm/identityAccess.ts';
 import {lockLivePreparationCleanup} from '../calling/preparationLifecycle.ts';
-import {MANUAL_PROSPECT_ROWS_SQL,readManualProspectSubject} from './manualProspectRows.ts';
+import {PREPARED_PROSPECT_ROWS_SQL,readManualProspectSubject} from './manualProspectRows.ts';
 import type {ManualProspectRow} from './manualProspectProjection.ts';
 import {manualPhoneSnapshots,recheckManualPhoneSnapshots,type ManualPhoneSnapshot} from './manualProspectPhone.ts';
 import {preparedPriorityOrder} from './prospectPriorityStore.ts';
@@ -71,7 +71,7 @@ export async function listPreparedProspects(ctx:RepositoryContext,input:z.infer<
  const selected=order.rows.slice(0,50);
  const readRows=async()=>{
   if(!selected.length)return [];
-  const rows=(await ctx.db.query<ManualProspectRow>(`SELECT * FROM (${MANUAL_PROSPECT_ROWS_SQL}) visible WHERE id=ANY($3::uuid[])`,[ctx.scope.workspaceId,'all',selected.map(r=>r.id)])).rows;
+  const rows=(await ctx.db.query<ManualProspectRow>(`SELECT * FROM (${PREPARED_PROSPECT_ROWS_SQL}) visible WHERE id=ANY($3::uuid[])`,[ctx.scope.workspaceId,'all',selected.map(r=>r.id)])).rows;
   return selected.flatMap(s=>{const row=rows.find(r=>r.id===s.id&&r.revision===s.revision);return row?[row]:[];});
  };
  const result=await currentBriefs(ctx,readRows,authority);if(!result.ok)return result;

@@ -3,6 +3,9 @@ import type {PreparedProspectBrief} from '@fss/contracts';
 export type PreparedPassageKind=PreparedProspectBrief['passages'][number]['kind'];
 export interface PreparedPassageClassification {kinds:PreparedPassageKind[];usefulBusiness:boolean;usefulOperations:boolean;residentialContext:boolean;contrary:boolean}
 const attribution=/\b(?:testimonial|customer review|powered by|website by|web design|we help property managers|software for property managers|platform for property managers)\b/iu;
+const customerPerspective=/\b(?:we|I)\s+(?:breathe easy|could(?:n't| not) be happier)\b|\b(?:we|I)\s+wish\b[^.!?\n]{0,100}\b(?:were|could|would)\b/iu;
+const customerRecommendation=/\b(?:[Ww]e|I)\s+(?:highly\s+)?recommend\s+(?:(?:this|the)\s+(?:company|team|firm|property managers?)|[\p{Lu}][\p{Ll}]+(?:\s+[\p{Lu}][\p{Ll}]+){1,4})\b/u;
+const attributed=(text:string)=>attribution.test(text)||customerPerspective.test(text)||customerRecommendation.test(text);
 const residential=/\b(?:residential|single.family|multi.family|multifamily|homes|houses|apartments|condominiums|residences)\b/iu;
 const management=/\b(?:manag(?:e|es|ed|ing|ement)|leasing|rental management)\b/iu;
 const vendor=/\b(?:software|platform|tools?|technology)\b[^.!?\n]{0,100}\b(?:helps?|enables?|empowers?|for)\b[^.!?\n]{0,60}\b(?:property managers?|management companies|landlords?)\b|\b(?:we|our company)\b[^.!?\n]{0,60}\b(?:sell|build|develop|provide|offer)\b[^.!?\n]{0,60}\b(?:software|platform|tools?)\b/iu;
@@ -19,7 +22,7 @@ const nonServiceBusiness=/\b(?:investment portfolios?|investment funds?|financia
 const substantive=(text:string)=>text.length>=50&&text.trim().split(/\s+/u).length>=8;
 const question=(text:string)=>/\?\s*$/u.test(text)||/^\s*(?:why|how|what|when|where|who|which|do|does|did|can|could|should|would|is|are)\b[^.!?\n]*$/iu.test(text);
 function business(text:string):boolean {
- return substantive(text)&&management.test(text)&&propertyManagementService.test(text)&&managementServiceAction.test(text)&&(ownManager.test(text)||namedManager.test(text))&&(!nonServiceBusiness.test(text)||explicitManagementService.test(text))&&!question(text)&&!vendor.test(text)&&!productOffering.test(text)&&!educationalOffering.test(text)&&!attribution.test(text)&&!contrary.test(text)&&!businessDenial.test(text);
+ return substantive(text)&&management.test(text)&&propertyManagementService.test(text)&&managementServiceAction.test(text)&&(ownManager.test(text)||namedManager.test(text))&&(!nonServiceBusiness.test(text)||explicitManagementService.test(text))&&!question(text)&&!vendor.test(text)&&!productOffering.test(text)&&!educationalOffering.test(text)&&!attributed(text)&&!contrary.test(text)&&!businessDenial.test(text);
 }
 const workflowTopic=/\b(?:maintenance|repair|vendors?|tenants?|requests?|dispatch|rent collection|screening|leasing|after.hours|market(?:s|ed|ing)?|qualif(?:y|ies|ied|ying)|payments?|portal)\b/iu;
 const propertyOperationsDomain=/\b(?:propert(?:y|ies)|tenants?|residents?|landlords?|rent(?:al)?|leasing|homes|houses|apartments|buildings?|condominiums)\b/iu;
@@ -31,21 +34,27 @@ const operationalNegation=new RegExp('\\b(?:we|our (?:team|staff|office|managers
 const operationalVendor=/\b(?:software|platform|tools?|technology)\b[^.!?\n]{0,80}\b(?:we|our (?:team|company))\s+(?:sell|market|offer|build|develop)\b[^.!?\n]{0,80}\b(?:property managers?|management companies|landlords?)\b/iu;
 const ownServiceProcess=/\bour\s+(?:\w+\s+){0,4}(?:tenant[- ]screening|rental[- ]marketing|property[- ]maintenance|leasing|rent[- ]collection)\s+(?:process|procedures?|services?|team)\b[^.!?\n]{0,100}\b(?:has|have|includes?|uses?|lets|enables?|helps?|verifies|checks?|selects?|qualifies|is based on)\b/iu;
 function operations(text:string):boolean {
- return substantive(text)&&workflowTopic.test(text)&&propertyOperationsDomain.test(text)&&(ownOperations.test(text)||passiveOperations.test(text)||ownServiceProcess.test(text))&&!question(text)&&!vendor.test(text)&&!productOffering.test(text)&&!educationalOffering.test(text)&&!operationalVendor.test(text)&&!operationalNegation.test(text)&&!attribution.test(text)&&!contrary.test(text)&&!businessDenial.test(text);
+ return substantive(text)&&workflowTopic.test(text)&&propertyOperationsDomain.test(text)&&(ownOperations.test(text)||passiveOperations.test(text)||ownServiceProcess.test(text))&&!question(text)&&!vendor.test(text)&&!productOffering.test(text)&&!educationalOffering.test(text)&&!operationalVendor.test(text)&&!operationalNegation.test(text)&&!attributed(text)&&!contrary.test(text)&&!businessDenial.test(text);
 }
-const passageKinds=(text:string,locality:string,usefulBusiness:boolean,hasContrary:boolean):PreparedPassageKind[]=>{
+const physicalAddress=/\b\d{1,6}\s+(?:[\p{L}\d.'-]+\s+){1,6}(?:street|st|avenue|ave|road|rd|boulevard|blvd|drive|dr|lane|ln|way|court|ct|parkway|pkwy)\b/iu;
+const locationStatement=/\b(?:serving|we serve|we are located|offices? (?:is|are) located|headquartered|service areas? include|locations? in)\b|(?:^|[.!?\n]\s*)(?:this|our)(?:\s+[\p{L}-]+){0,3}\s+offices?\s+serv(?:e|es)\b/iu;
+const personalName="[\\p{Lu}][\\p{Ll}]+(?:[’'-][\\p{Lu}\\p{Ll}]+)?(?:\\s+[\\p{Lu}][\\p{Ll}]+(?:[’'-][\\p{Lu}\\p{Ll}]+)?){1,3}";
+const personRole='(?:CEO|[Pp]resident|[Ff]ounder|[Oo]wner(?:/[Bb]roker)?|[Pp]rincipal|[Dd]irector|(?:[Ee]xecutive\\s+)?[Vv]ice [Pp]resident|[Bb]roker)';
+const namedRole=new RegExp('\\b(?:'+personRole+'\\s+'+personalName+'\\s+(?:leads?|oversees?|manages?|serves?|founded|joined|runs?|works?|is|has)|'+personalName+'(?:,\\s*|\\s+(?:serves? as|is|was|has been)\\s+)'+personRole+')\\b','u');
+const passageKinds=(text:string,usefulBusiness:boolean,usefulOperations:boolean,hasContrary:boolean):PreparedPassageKind[]=>{
  const result:PreparedPassageKind[]=[];
  if(hasContrary)result.push('contrary');
+ if(attributed(text))return result;
  if(usefulBusiness)result.push('business');
- if(/\b(?:office|located|location|service area|serving|we serve|headquarters)\b|\b\d{5}(?:-\d{4})?\b/iu.test(text)||locality.trim().length>1&&text.toLowerCase().includes(locality.toLowerCase()))result.push('location');
- if(workflowTopic.test(text)&&text.length>=30)result.push('workflow');
- if(/\b(?:CEO|president|founder|owner|principal|director|leadership|our team|meet our)\b/iu.test(text)&&/\b[A-Z][\p{Ll}]+(?:\s+[A-Z][\p{Ll}]+){1,3}\b/u.test(text))result.push('person');
+ if(physicalAddress.test(text)||text.length>=30&&locationStatement.test(text)&&!question(text))result.push('location');
+ if(usefulOperations||operationalNegation.test(text))result.push('workflow');
+ if(namedRole.test(text))result.push('person');
  if(/\b[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b|(?:\+?1[ .-]?)?\(?[2-9]\d{2}\)?[ .-]?\d{3}[ .-]?\d{4}/iu.test(text))result.push('contact');
  return result;
 };
 
 /** Classification of this one intact retained block; never source, identity or contact authority. */
-export function classifyPreparedPassage(text:string,locality:string):PreparedPassageClassification {
+export function classifyPreparedPassage(text:string,_locality:string):PreparedPassageClassification {
  const usefulBusiness=business(text),usefulOperations=operations(text),hasContrary=contrary.test(text)||businessDenial.test(text);
- return {kinds:passageKinds(text,locality,usefulBusiness,hasContrary),usefulBusiness,usefulOperations,residentialContext:usefulBusiness&&residential.test(text),contrary:hasContrary};
+ return {kinds:passageKinds(text,usefulBusiness,usefulOperations,hasContrary),usefulBusiness,usefulOperations,residentialContext:usefulBusiness&&residential.test(text),contrary:hasContrary};
 }

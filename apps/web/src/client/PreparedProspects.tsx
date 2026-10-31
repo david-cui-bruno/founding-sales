@@ -2,6 +2,7 @@ import {useCallback,useEffect,useRef,useState,type JSX,type RefObject} from 'rea
 import {preparedProspectListResponseSchema,preparedProspectReadResponseSchema,type PreparedProspectBrief,type PreparedProspectSummary,type PreparedProspectTarget} from '@fss/contracts';
 import type {z} from 'zod';
 import {BrowserBoundaryError,type BrowserClient} from './BrowserClient.ts';
+import {groupAdjacentPreparedRecords} from './preparedResearchGroups.ts';
 import './preparedProspects.css';
 
 type Page=Extract<z.infer<typeof preparedProspectListResponseSchema>,{prospects:unknown}> & {offset:number};
@@ -9,7 +10,6 @@ type Operation={epoch:number;token:symbol};
 const current=(value:{validUntil:string|null})=>value.validUntil===null||Date.parse(value.validUntil)>Date.now();
 const targetMatches=(left:PreparedProspectTarget,right:PreparedProspectTarget)=>left.candidateId===right.candidateId&&left.candidateRevision===right.candidateRevision&&left.runId===right.runId;
 const sourceHref=(value:string)=>{try{const url=new URL(value);return ['https:','http:'].includes(url.protocol)&&!url.username&&!url.password?url.href:undefined;}catch{return undefined;}};
-const sourceLabel=(value:string)=>{try{return new URL(value).hostname;}catch{return 'Retained source';}};
 const dateLabel=(value:string)=>new Date(value).toLocaleString(undefined,{dateStyle:'medium',timeStyle:'short'});
 const sections=[['business','Business context'],['location','Office and service markets'],['workflow','Operations and workflow'],['person','People mentioned in sources'],['contact','Published contact context'],['contrary','Conflicting or contrary context']] as const;
 const refusalMessage=(reason:string)=>reason==='view_changed'?'The company list changed. Refresh companies to start from the first page.':reason==='source_expired'?'Research evidence expired. Refresh companies to read current sources.':'This company or its source changed. Refresh companies to read current research.';
@@ -19,18 +19,26 @@ function SourceNotices({notices}:{notices:PreparedProspectSummary['sourceNotices
  return <details><summary>Source notices</summary><ul>{notices.map((notice,index)=><li key={index}>{notice.url&&sourceHref(notice.url)?<a href={sourceHref(notice.url)} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer">{notice.label}</a>:notice.label}</li>)}</ul></details>;
 }
 
+function ResearchRecord({row,busy,onOpen}:{row:PreparedProspectSummary;busy:boolean;onOpen:(row:PreparedProspectSummary)=>Promise<void>}):JSX.Element {
+ return <><div><span className="prepared-company-state">{row.state==='prepared'?'Prepared brief':'Needs research'}</span><h3>{row.displayName}</h3>
+  <p className="prepared-company-note">Discovery label; company identity is unverified.</p>
+  {row.website&&sourceHref(row.website)?<p className="prepared-company-source">Website: <a href={sourceHref(row.website)} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer">{row.website}</a></p>:null}
+  <p>{row.summary}</p>{row.unknowns.length?<p className="prepared-company-note">Still unknown: {row.unknowns.slice(0,2).join(' · ')}</p>:null}<SourceNotices notices={row.sourceNotices}/>
+ </div><button type="button" disabled={busy} aria-label={`Open company brief for ${row.displayName}`} onClick={()=>{void onOpen(row);}}>Open company brief</button></>;
+}
+
 function CompanyBrief({brief,heading}:{brief:PreparedProspectBrief;heading:RefObject<HTMLHeadingElement|null>}):JSX.Element {
  return <article className="prepared-company" aria-label="Prepared company brief">
   <header className="prepared-company-heading"><span className="prepared-company-state">{brief.state==='prepared'?'Prepared brief':'Needs research'}</span>
-   <h2 ref={heading} tabIndex={-1}>{brief.displayName}</h2><p>{brief.summary}</p>
-   {brief.website&&sourceHref(brief.website)?<a href={sourceHref(brief.website)} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer">{sourceLabel(brief.website)}</a>:null}
+   <h2 ref={heading} tabIndex={-1}>{brief.displayName}</h2><p className="prepared-company-note">Discovery label; company identity is unverified.</p><p>{brief.summary}</p>
+   {brief.website&&sourceHref(brief.website)?<p className="prepared-company-source">Website: <a href={sourceHref(brief.website)} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer">{brief.website}</a></p>:null}
   </header>
   {sections.map(([kind,label])=>{
    const passages=brief.passages.filter(p=>p.kind===kind);
    if(!passages.length)return null;
    return <section key={kind} className="prepared-company-passages" aria-label={label}><h3>{label}</h3>
     {passages.map((passage,index)=><figure key={`${passage.observationId}:${passage.blockId}:${index}`}>
-     <blockquote>{passage.quote}</blockquote><figcaption>Captured {dateLabel(passage.retrievedAt)} · <a href={sourceHref(passage.url)} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer">{sourceLabel(passage.url)}</a>{passage.sourceCoverage==='partial_page'?<> · <span>Partial page</span></>:null}</figcaption>
+     <blockquote>{passage.quote}</blockquote><figcaption>Captured {dateLabel(passage.retrievedAt)} · <a href={sourceHref(passage.url)} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer">{passage.url}</a>{passage.sourceCoverage==='partial_page'?<> · <span>Partial page</span></>:null}</figcaption>
     </figure>)}
    </section>;
   })}
@@ -111,8 +119,10 @@ export function PreparedProspects({client}:{client:BrowserClient}):JSX.Element {
     <button type="button" disabled={busy!==null} onClick={()=>{void readPage(0);}}>Refresh companies</button></div>
    {busy==='list'?<div className="prepared-companies-loading" role="status">Reading current companies…</div>:null}
    {page?<><p className="prepared-company-note">{prepared} prepared · {needsResearch} need research on this page. This is research supply, not a contact-ready count.</p>
-    {page.prospects.length?<ul className="prepared-companies-list">{page.prospects.map(row=><li key={row.target.candidateId}><div><span className="prepared-company-state">{row.state==='prepared'?'Prepared brief':'Needs research'}</span><h3>{row.displayName}</h3><p>{row.summary}</p>
-     {row.unknowns.length?<p className="prepared-company-note">Still unknown: {row.unknowns.slice(0,2).join(' · ')}</p>:null}<SourceNotices notices={row.sourceNotices}/></div><button type="button" disabled={busy!==null} aria-label={`Open company brief for ${row.displayName}`} onClick={()=>{void open(row);}}>Open company brief</button></li>)}</ul>
+    {page.prospects.length?<ul className="prepared-companies-list">{groupAdjacentPreparedRecords(page.prospects).map(records=>records.length===1?<li key={records[0]!.target.candidateId}><ResearchRecord row={records[0]!} busy={busy!==null} onOpen={open}/></li>:<li key={records[0]!.target.candidateId} className="prepared-company-group"><div role="group" aria-label="Records with the same website">
+     <p className="prepared-company-note"><strong>Records with the same website</strong> · {records.length} records</p><p className="prepared-company-note">These records have the same exact website and location hints. Original labels remain separate; identities are not merged or confirmed.</p>
+     <ul className="prepared-matching-records">{records.map(row=><li key={row.target.candidateId}><ResearchRecord row={row} busy={busy!==null} onOpen={open}/></li>)}</ul>
+    </div></li>)}</ul>
      :<p>No permitted company research was returned. Retained review and source inventory remain available for further research.</p>}
     <nav className="prepared-companies-pagination" aria-label="Company list pages"><button type="button" disabled={busy!==null||page.offset===0} onClick={()=>{void readPage(Math.max(0,page.offset-50),page.viewRevision);}}>Previous companies</button>
      <span>Page {Math.floor(page.offset/50)+1} · Up to 50 companies</span><button type="button" disabled={busy!==null||!page.hasMore||page.offset>=1_000_000} onClick={()=>{void readPage(page.offset+50,page.viewRevision);}}>Next companies</button></nav>

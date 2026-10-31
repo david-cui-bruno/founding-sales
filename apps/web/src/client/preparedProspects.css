@@ -5,7 +5,11 @@
 .prepared-companies-toolbar p { max-width: 64ch; font-size: 13px; }
 .prepared-companies-toolbar button { flex-shrink: 0; }
 .prepared-companies-list { list-style: none; margin: 20px 0 0; padding: 0; }
-.prepared-companies-list > li { display: flex; justify-content: space-between; align-items: center; gap: 24px; padding: 20px 0; border-top: 1px solid var(--prospects-border); }
+.prepared-companies-list > li, .prepared-matching-records > li { display: flex; justify-content: space-between; align-items: center; gap: 24px; padding: 20px 0; border-top: 1px solid var(--prospects-border); }
+.prepared-companies-list > .prepared-company-group { display: block; }
+.prepared-matching-records { list-style: none; margin: 16px 0 0; padding: 0; }
+.prepared-matching-records > li:last-child { padding-bottom: 0; }
+.prepared-company-source, .prepared-company figcaption { overflow-wrap: anywhere; }
 .prepared-companies-list h3 { margin: 7px 0; font-size: 17px; }
 .prepared-companies-list p { max-width: 70ch; font-size: 14px; }
 .prepared-companies-list button { flex-shrink: 0; }
@@ -30,7 +34,7 @@
 .prepared-companies-notice { padding: 16px 0; border-top: 1px solid var(--prospects-border); }
 @media (max-width: 600px) {
  .prepared-companies-surface, .prepared-company { padding: 18px 16px; }
- .prepared-companies-toolbar, .prepared-companies-list > li { flex-direction: column; align-items: stretch; gap: 12px; }
+ .prepared-companies-toolbar, .prepared-companies-list > li, .prepared-matching-records > li { flex-direction: column; align-items: stretch; gap: 12px; }
  .prepared-companies-toolbar button, .prepared-companies-list button { align-self: flex-start; }
  .prepared-companies-pagination button { flex: 1 1 130px; }
  .prepared-companies-pagination span { flex: 1 1 100%; order: -1; }

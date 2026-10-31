@@ -6,7 +6,14 @@ import {manualProspectSubjectPermitted,type ManualProspectRow,type ManualProspec
  * Known terms/source loss hides a row even if another retained observation survives.
  * No qualification horizon is invented for these raw retained records.
  */
-function permittedManualProspectsSql(exactSubject:boolean):string {return `WITH raw AS (
+const preparedLossSources=`prepared_lost_source_urls AS MATERIALIZED (
+ SELECT DISTINCT rtrim(url,'/') AS url FROM sourcing_candidates lost
+ CROSS JOIN LATERAL unnest(ARRAY[lost.payload->>'sourceUrl',lost.source_check->'lastSuccess'->>'url'] ||
+ ARRAY(SELECT o.source->>'sourceUrl' FROM sourcing_candidate_discovery_origins o WHERE o.workspace_id=lost.workspace_id AND o.candidate_id=lost.id)) refs(url)
+ WHERE lost.workspace_id=$1 AND lost.source_check->>'state'='unavailable'
+ AND lost.source_check->>'reason' IN ('source_unavailable','source_not_permitted','no_readable_text') AND url IS NOT NULL
+), `;
+function permittedManualProspectsSql(exactSubject:boolean,prepared=false):string {return `WITH ${prepared?preparedLossSources:''}raw AS (
  SELECT c.id,c.workspace_id,c.payload,c.revision,c.created_at,c.status,c.source_check,
  COALESCE(s.state,'new') AS manual_state,
  CASE WHEN c.payload->>'kind'='discovery-v1' THEN c.payload->'row' ELSE c.payload END AS observed,
@@ -28,18 +35,23 @@ function permittedManualProspectsSql(exactSubject:boolean):string {return `WITH 
  AND NOT EXISTS(SELECT 1 FROM audit_events loss WHERE loss.workspace_id=raw.workspace_id
   AND loss.action='${MANUAL_SOURCE_LOSS_ACTION}' AND loss.subject_kind='sourcing_source_hash'
   AND EXISTS(SELECT 1 FROM unnest(raw.source_urls) url WHERE loss.subject_id=encode(sha256(convert_to(url,'UTF8')),'hex')))
- AND NOT EXISTS(SELECT 1 FROM sourcing_candidates lost WHERE lost.workspace_id=raw.workspace_id
+${prepared?` AND NOT EXISTS(SELECT 1 FROM prepared_lost_source_urls lost WHERE lost.url=ANY(raw.source_urls))`:` AND NOT EXISTS(SELECT 1 FROM sourcing_candidates lost WHERE lost.workspace_id=raw.workspace_id
   AND lost.source_check->>'state'='unavailable' AND lost.source_check->>'reason' IN ('source_unavailable','source_not_permitted','no_readable_text')
   AND (rtrim(lost.payload->>'sourceUrl','/')=ANY(raw.source_urls) OR rtrim(lost.source_check->'lastSuccess'->>'url','/')=ANY(raw.source_urls)
-   OR EXISTS(SELECT 1 FROM sourcing_candidate_discovery_origins o WHERE o.workspace_id=lost.workspace_id AND o.candidate_id=lost.id AND rtrim(o.source->>'sourceUrl','/')=ANY(raw.source_urls))))
+   OR EXISTS(SELECT 1 FROM sourcing_candidate_discovery_origins o WHERE o.workspace_id=lost.workspace_id AND o.candidate_id=lost.id AND rtrim(o.source->>'sourceUrl','/')=ANY(raw.source_urls))))`}
 )`;}
-export const MANUAL_PROSPECT_ROWS_SQL=`${permittedManualProspectsSql(false)}, keyed AS (
+const rowsSql=(prepared=false)=>`${permittedManualProspectsSql(false,prepared)}, keyed AS (
  SELECT permitted.*,CASE WHEN NULLIF(trim(observed->>'website'),'') IS NULL THEN id::text
  ELSE jsonb_build_array(lower(trim(observed->>'firmName')),observed->>'website',lower(trim(observed->>'locality')),observed->>'region')::text END AS duplicate_key FROM permitted
 ), ranked AS (
  SELECT keyed.*,row_number() OVER(PARTITION BY duplicate_key ORDER BY created_at DESC,id DESC) AS duplicate_rank,
  (count(*) OVER(PARTITION BY duplicate_key)-1)::integer AS duplicate_count FROM keyed
 ) SELECT * FROM ranked WHERE duplicate_rank=1 AND ($2='all' OR manual_state=$2) ORDER BY created_at DESC,id DESC`;
+
+export const MANUAL_PROSPECT_ROWS_SQL=rowsSql();
+/** Same prepared permissions/dedup, with the workspace-wide cross-record loss set
+ * materialized once per statement instead of scanning every candidate per row. */
+export const PREPARED_PROSPECT_ROWS_SQL=rowsSql(true);
 
 export async function manualProspectRows(ctx:RepositoryContext,state:string,offset:number,exact?:{candidateId:string;expectedRevision:number}):Promise<ManualProspectRow[]> {
  if(exact)return (await ctx.db.query<ManualProspectRow>(`SELECT * FROM (${MANUAL_PROSPECT_ROWS_SQL}) current_rows WHERE id=$3 AND revision=$4`,[ctx.scope.workspaceId,state,exact.candidateId,exact.expectedRevision])).rows;
