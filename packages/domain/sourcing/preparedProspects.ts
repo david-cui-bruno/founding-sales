@@ -9,6 +9,7 @@ import type {ManualProspectRow} from './manualProspectProjection.ts';
 import {manualPhoneSnapshots,recheckManualPhoneSnapshots,type ManualPhoneSnapshot} from './manualProspectPhone.ts';
 import {preparedPriorityOrder} from './prospectPriorityStore.ts';
 import {projectPreparedProspect,type PreparedRunIdentity} from './preparedProspectProjection.ts';
+import {withPreparedCaptureSnapshots} from './preparedCaptureStore.ts';
 
 type Result<T>={ok:true;value:T}|{ok:false;reason:string};
 type Run=PreparedRunIdentity&Record<string,unknown>&{candidate_id:string};
@@ -36,13 +37,13 @@ async function currentBriefs(ctx:RepositoryContext,readRows:()=>Promise<ManualPr
  const rows=await readRows();
  if(rows.length>50)return refuse('candidate_unavailable');
  if(rows.length)await ctx.db.query('SELECT id FROM sourcing_candidates WHERE workspace_id=$1 AND id=ANY($2::uuid[]) ORDER BY id FOR SHARE',[ctx.scope.workspaceId,rows.map(r=>r.id)]);
- const runs=await latestRuns(ctx,rows),snapshots=await manualPhoneSnapshots(ctx,rows),expiry=await expirations(ctx,rows,snapshots);
+ const runs=await latestRuns(ctx,rows),snapshots=await withPreparedCaptureSnapshots(ctx,await manualPhoneSnapshots(ctx,rows)),expiry=await expirations(ctx,rows,snapshots);
  const started=(await ctx.db.query<{at:Date}>('SELECT clock_timestamp() AS at')).rows[0]!.at.getTime();
  if(ctx.scope.actor.kind==='user')await ctx.db.query('SELECT user_id FROM workspace_memberships WHERE workspace_id=$1 AND user_id=$2 FOR SHARE',[ctx.scope.workspaceId,ctx.scope.actor.userId]);
  if(!await authority()||!await admin(ctx))return refuse('authority_changed');
- const checked=await recheckManualPhoneSnapshots(ctx,rows,snapshots);
+ const checked=await withPreparedCaptureSnapshots(ctx,await recheckManualPhoneSnapshots(ctx,rows,snapshots));
  if(!await authority()||!await admin(ctx))return refuse('authority_changed');
- const currentRows=await readRows(),currentRuns=await latestRuns(ctx,rows),current=await recheckManualPhoneSnapshots(ctx,rows,snapshots),currentExpiry=await expirations(ctx,rows,snapshots);
+ const currentRows=await readRows(),currentRuns=await latestRuns(ctx,rows),current=await withPreparedCaptureSnapshots(ctx,await recheckManualPhoneSnapshots(ctx,rows,snapshots)),currentExpiry=await expirations(ctx,rows,snapshots);
  const now=(await ctx.db.query<{at:Date}>('SELECT clock_timestamp() AS at')).rows[0]!.at.getTime();
  if(expiry.some(e=>e.expires_at.getTime()>started&&e.expires_at.getTime()<=now))return refuse('source_expired');
  if(!isDeepStrictEqual(rows,currentRows)||!isDeepStrictEqual(runs,currentRuns))return refuse('candidate_changed');

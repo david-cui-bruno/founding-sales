@@ -597,6 +597,7 @@ export function researchPageFetch(deps: PageFetchDeps = {}): PageFetchProvider {
         let url = initial;
         let permission: UrlPermission = permittedResearchUrl({ ...input, discovered }, url);
         let followed = 0;
+        const redirectUrls:string[]=[];
         for (;;) {
           if (clock()>=deadline) {skips.bump('firm_timeout');break;}
           if (paused) {
@@ -637,6 +638,8 @@ export function researchPageFetch(deps: PageFetchDeps = {}): PageFetchProvider {
           }
           let response: RawResponse;
           try {
+            // Record only a page request that passed URL, DNS, robots and current authority.
+            if(input.recordRedirectTrace===true)redirectUrls.push(url);
             response = await request({
               url,
               address,
@@ -689,6 +692,7 @@ export function researchPageFetch(deps: PageFetchDeps = {}): PageFetchProvider {
           const contentType = headerOf(response, 'content-type');
           pages.push({
             url,
+            ...(input.recordRedirectTrace===true?{redirectTrace:{version:'page-redirect-trace-v1' as const,urls:redirectUrls}}:{}),
             // The exact bytes read, and nothing else: the hash and the blocks
             // `parsePageText` produces describe the same thing.
             contentHash: createHash('sha256').update(response.body).digest('hex'),

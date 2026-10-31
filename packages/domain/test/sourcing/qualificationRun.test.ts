@@ -15,7 +15,7 @@ const tx=<T>(fn:()=>Promise<T>)=>withTransaction(db.session,fn);
 beforeAll(async()=>{db=await createTestDatabase();workspaceId=(await seedTwoWorkspaces(db.session)).alpha.workspaceId;});
 afterAll(async()=>db.drop());
 beforeEach(async()=>{await db.session.query('DELETE FROM active_holds');await db.session.query('DELETE FROM sourcing_candidates');await db.session.query('DELETE FROM provider_reservations');await db.session.query('DELETE FROM provider_ledger');await db.session.query('DELETE FROM research_settings');await db.session.query('DELETE FROM daily_counters');});
-async function pending(){const candidate=await tx(()=>saveCandidate(ctx(),{firmName:'Example PM',website:'https://example.test/',locality:'Dallas',region:'TX',signal:'fit_only',evidence:'Property manager',sourceUrl:'https://example.test/',observedOn:'2026-10-01',preparedBy:'Fixture'}));if(!candidate.ok)throw new Error(candidate.reason);const run=await tx(()=>requestQualification(ctx(),{candidateId:candidate.value.id,expectedRevision:1}));if(!run.ok)throw new Error(run.reason);return {candidateId:candidate.value.id,runId:run.value.runId};}
+async function pending(firmName='Example PM'){const candidate=await tx(()=>saveCandidate(ctx(),{firmName,website:'https://example.test/',locality:'Dallas',region:'TX',signal:'fit_only',evidence:'Property manager',sourceUrl:'https://example.test/',observedOn:'2026-10-01',preparedBy:'Fixture'}));if(!candidate.ok)throw new Error(candidate.reason);const run=await tx(()=>requestQualification(ctx(),{candidateId:candidate.value.id,expectedRevision:1}));if(!run.ok)throw new Error(run.reason);return {candidateId:candidate.value.id,runId:run.value.runId};}
 const pages:PageFetchProvider={providerKey:'company_page',fetchPages:async request=>{
  expect(request.urls).toEqual(['https://example.test/']);expect(request.maxPagesPerFirm).toBe(4);expect(await request.shouldContinue?.()).toBe(true);
  return {ok:true,costCents:0,value:{pages:[{url:'https://example.test/',contentHash:'a'.repeat(64),contentType:'text/html',body:new TextEncoder().encode('<p>Example PM manages residential homes in Dallas.</p><p>We need help with maintenance coordination.</p>'),retrievedAt:new Date().toISOString(),firstParty:true}],skipped:{}}};}};
@@ -41,7 +41,7 @@ it('keeps dispatched timeout spend estimated and expires crashed runs independen
  const ids=await pending();await runQualification(ctx(),ids,{pageFetch:pages,extraction:{...extractor(ids.runId),extract:async()=>{throw new Error('timeout');}}});
  expect((await db.session.query('SELECT state FROM provider_reservations')).rows).toEqual([{state:'estimated'}]);
  expect(await readQualification(ctx(),ids)).toMatchObject({status:'unavailable',reason:'provider_error'});
- const other=await pending();await db.session.query("UPDATE sourcing_qualification_runs SET state='running',requested_at=now()-interval '1 hour',deadline_at=now()-interval '1 minute' WHERE id=$1",[other.runId]);
+ const other=await pending('Crashed Example PM');await db.session.query("UPDATE sourcing_qualification_runs SET state='running',requested_at=now()-interval '1 hour',deadline_at=now()-interval '1 minute' WHERE id=$1",[other.runId]);
  await expireQualifications(ctx());expect(await readQualification(ctx(),other)).toMatchObject({status:'unavailable',reason:'qualification_expired'});
 });
 it('does not dispatch on a noncredit port or after candidate dismissal',async()=>{
