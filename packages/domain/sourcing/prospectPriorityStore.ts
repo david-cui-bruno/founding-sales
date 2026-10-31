@@ -39,13 +39,14 @@ export async function priorityOrder(ctx:RepositoryContext,state:string,offset:nu
  return {rows:answer.rows,viewRevision:answer.view_revision};
 }
 /** Preparation selects only metadata here. Existing priority slots are preserved
- * inside each context lane; complete-page presence is ordering, never source rights.
+ * inside each context lane; retained first-party page presence, including partial
+ * pages, is ordering metadata, never source rights or a prepared-state decision.
  * Only admission_checked_at is excluded from the full current run fingerprint. */
 export async function preparedPriorityOrder(ctx:RepositoryContext,offset:number):Promise<{rows:PriorityOrderRow[];viewRevision:string}>{
  const answer=(await ctx.db.query<{rows:PriorityOrderRow[];view_revision:string}>(`${preparedPool}, preparation AS (
  SELECT ordered.*,r.id AS latest_run_id,r.preparation_key,
  CASE WHEN r.candidate_revision=ordered.revision AND COALESCE(r.reason,'') NOT IN ('source_unavailable','source_not_permitted','no_readable_text')
- AND EXISTS(SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(r.observations)='array' THEN r.observations ELSE '[]'::jsonb END) page WHERE page->'firstParty'='true'::jsonb AND page->'truncated'='false'::jsonb) THEN 0 ELSE 1 END AS context_lane
+ AND EXISTS(SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(r.observations)='array' THEN r.observations ELSE '[]'::jsonb END) page WHERE page->'firstParty'='true'::jsonb) THEN 0 ELSE 1 END AS context_lane
  FROM ordered LEFT JOIN LATERAL(SELECT id,candidate_revision,reason,observations,encode(sha256(convert_to((to_jsonb(r)-'admission_checked_at')::text,'UTF8')),'hex') AS preparation_key FROM sourcing_qualification_runs r WHERE r.workspace_id=$1 AND r.candidate_id=ordered.id ORDER BY requested_at DESC,id DESC LIMIT 1) r ON true
  ), preparation_context AS (
  SELECT encode(sha256(convert_to(context.view_revision||COALESCE((SELECT string_agg(jsonb_build_array(id,latest_run_id,preparation_key,context_lane)::text,'' ORDER BY id) FROM preparation),''),'UTF8')),'hex') AS view_revision FROM context
