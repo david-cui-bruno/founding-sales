@@ -37,7 +37,7 @@ function operations(text:string):boolean {
  return substantive(text)&&workflowTopic.test(text)&&propertyOperationsDomain.test(text)&&(ownOperations.test(text)||passiveOperations.test(text)||ownServiceProcess.test(text))&&!question(text)&&!vendor.test(text)&&!productOffering.test(text)&&!educationalOffering.test(text)&&!operationalVendor.test(text)&&!operationalNegation.test(text)&&!attributed(text)&&!contrary.test(text)&&!businessDenial.test(text);
 }
 const physicalAddress=/\b\d{1,6}\s+(?:[\p{L}\d.'-]+\s+){1,6}(?:street|st|avenue|ave|road|rd|boulevard|blvd|drive|dr|lane|ln|way|court|ct|parkway|pkwy)\b/iu;
-const locationStatement=/\b(?:serving|we serve|we are located|offices? (?:is|are) located|headquartered|service areas? include|locations? in)\b|(?:^|[.!?\n]\s*)(?:this|our)(?:\s+[\p{L}-]+){0,3}\s+offices?\s+serv(?:e|es)\b/iu;
+const locationStatement=/\b(?:serving(?!\s+as\b)|we serve(?!\s+as\b)|we are located|offices? (?:is|are) located|headquartered|service areas? include|locations? in)\b|(?:^|[.!?\n]\s*)(?:this|our)(?:\s+[\p{L}-]+){0,3}\s+offices?\s+serv(?:e|es)\b(?!\s+as\b)/iu;
 const personalName="[\\p{Lu}][\\p{Ll}]+(?:[’'-][\\p{Lu}\\p{Ll}]+)?(?:\\s+[\\p{Lu}][\\p{Ll}]+(?:[’'-][\\p{Lu}\\p{Ll}]+)?){1,3}";
 const personRole='(?:CEO|[Pp]resident|[Ff]ounder|[Oo]wner(?:/[Bb]roker)?|[Pp]rincipal|[Dd]irector|(?:[Ee]xecutive\\s+)?[Vv]ice [Pp]resident|[Bb]roker)';
 const namedRole=new RegExp('\\b(?:'+personRole+'\\s+'+personalName+'\\s+(?:leads?|oversees?|manages?|serves?|founded|joined|runs?|works?|is|has)|'+personalName+'(?:,\\s*|\\s+(?:serves? as|is|was|has been)\\s+)'+personRole+')\\b','u');
