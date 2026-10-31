@@ -1,6 +1,7 @@
 import {DIAGNOSTIC_UPGRADE_WORKFLOW,runDiagnosticUpgradeWorkflow} from './diagnosticWorkflow.ts';
 import {BUSINESS_GMAIL_UPGRADE_WORKFLOW,runBusinessGmailUpgradeWorkflow} from './businessGmailWorkflow.ts';
 import {PHONE_DISCOVERY_UPGRADE_WORKFLOW,runPhoneDiscoveryUpgradeWorkflow} from './phoneDiscoveryWorkflow.ts';
+import {PREPARED_CAPTURE_UPGRADE_WORKFLOW,runPreparedCaptureUpgradeWorkflow} from './preparedCaptureWorkflow.ts';
 import {createPerson} from '@fss/domain/crm/people.ts';
 import {previewSelectedAttachment,commitSelectedAttachment,readSelectedAttachment} from '@fss/domain/crm/selectedAttachments.ts';
 import {withTransaction} from '@fss/domain/db/queryable.ts';
@@ -291,6 +292,7 @@ export async function runWorkflows(
     {name:DIAGNOSTIC_UPGRADE_WORKFLOW,run:async()=>await runDiagnosticUpgradeWorkflow(admin)},
     { name: BUSINESS_GMAIL_UPGRADE_WORKFLOW, run: async () => await runBusinessGmailUpgradeWorkflow(admin,handles) },
     { name: PHONE_DISCOVERY_UPGRADE_WORKFLOW, run: async () => await runPhoneDiscoveryUpgradeWorkflow(admin) },
+    { name: PREPARED_CAPTURE_UPGRADE_WORKFLOW, run: async () => await runPreparedCaptureUpgradeWorkflow(admin) },
     {
       name: 'crm.selectedFile (explicit import)',
       run: async () => {
