@@ -59,6 +59,9 @@ it.each([
  'Property management is the operation and oversight of residential homes by professional property managers.',
 ])('does not treat vendor or educational context as the observed company managing homes: %s',async businessText=>{
  const f=await seedPreparedProspect(ctx(),1,{businessText,omitBrand:true});
+ // This negative has no independent positive operations passage from the shared fixture.
+ const observations=f.observations.map(source=>{const blocks=source.blocks.filter(block=>block.id!=='workflow');const hash=createHash('sha256').update(JSON.stringify(blocks)).digest('hex');return {...source,blocks,contentHash:hash,relevantTextHash:hash};});
+ await runtime.query('UPDATE sourcing_qualification_runs SET observations=$2::jsonb WHERE id=$1',[f.runId,JSON.stringify(observations)]);
  expect(await read(f)).toMatchObject({ok:true,value:{state:'needs_research',contactAuthority:'not_granted'}});
 });
 

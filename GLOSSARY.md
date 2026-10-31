@@ -33,7 +33,7 @@ A whole company-name passage bound to current first-party source evidence for au
 _Avoid_: human confirmation or contact eligibility when referring only to source-backed preparation
 
 **Prepared prospect**:
-A company research brief supported by retained business evidence, with its sources, dates and unresolved details visible. It does not require a known buyer, buying intent or usable contact route, and grants no contact permission.
+A company research brief supported by attributed business or substantive operational evidence, with sources, dates and coverage gaps visible. Company authorship, residential fit, buyer, intent and contact readiness may remain unknown; the brief grants no contact permission.
 _Avoid_: eligible lead when referring only to useful company research
 
 **Calling preparation**:
