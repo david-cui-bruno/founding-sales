@@ -13,7 +13,7 @@ import {reserveAttempt,markCalling,settleAttempt} from '../research/reservations
 import {centsOf,isPricedModel} from '../research/pricing.ts';
 import {parsePageText} from '../research/pageText.ts';
 import {isPublicResearchUrl,withoutFragment} from '../research/sourcePolicy.ts';
-import type {PageFetchProvider} from '../research/providers.ts';
+import type {PageFetchProvider,FetchedPage} from '../research/providers.ts';
 import {finishQualification,QUALIFICATION_PROMPT_VERSION,QUALIFICATION_POLICY_VERSION,type QualificationRunRow} from './qualificationStore.ts';
 import {QUALIFICATION_OUTPUT_TOKENS,type QualificationExtractionProvider,type QualificationExtractionOutcome,type QualificationExtractionRequest} from './qualificationPrompt.ts';
 import {normalizeQualificationDiagnostic,type QualificationDiagnostic,type QualificationDiagnosticPhase} from './qualificationDiagnostics.ts';
@@ -21,6 +21,8 @@ import {isCurrentPreparedCandidatePayload} from './discoveryIntake.ts';
 import {retainedCandidateOnly} from './retainedAcquisition.ts';
 import {LEGACY_QUALIFICATION_PRODUCER,PREPARED_IDENTITY_PRODUCER,type PreparedIdentityProof} from './preparedIdentity.ts';
 import {preparedIdentityProducerAuthority} from './preparedIdentityAuthority.ts';
+import {PREPARED_CAPTURE_POLICY,buildPreparedCapture,type PreparedCapture} from './preparedCapture.ts';
+import {preparedCaptureSourcesAvailable} from './preparedCaptureAccess.ts';
 interface Run extends QualificationRunRow {payload:CandidateInput;current_revision:number;candidate_status:string}
 const readSql=`SELECT r.*,c.payload,c.revision AS current_revision,c.status AS candidate_status FROM sourcing_qualification_runs r
  JOIN sourcing_candidates c ON c.workspace_id=r.workspace_id AND c.id=r.candidate_id WHERE r.workspace_id=$1 AND r.id=$2`;
@@ -33,6 +35,7 @@ async function allowed(ctx:RepositoryContext,runId:string):Promise<Run|null>{
  const producer=row['producer_version']===undefined?LEGACY_QUALIFICATION_PRODUCER:row['producer_version'];
  if(producer!==LEGACY_QUALIFICATION_PRODUCER&&producer!==PREPARED_IDENTITY_PRODUCER)return null;
  if(producer===PREPARED_IDENTITY_PRODUCER&&!await preparedIdentityProducerAuthority(ctx,row.candidate_id,row.candidate_revision,row.payload))return null;
+ if(row['capture_policy_version']===PREPARED_CAPTURE_POLICY&&!await preparedCaptureSourcesAvailable(ctx,[row.payload.sourceUrl]))return null;
  return row;
 }
 /** Owns its committed stages. The outbound-fence handler must not wrap this in a transaction. */
@@ -48,13 +51,15 @@ export async function runQualification(ctx:RepositoryContext,input:{runId:string
  if(!run)return;
  const producer=run['producer_version']===PREPARED_IDENTITY_PRODUCER?PREPARED_IDENTITY_PRODUCER:LEGACY_QUALIFICATION_PRODUCER;
  let observations:SourceObservation[]=[];
+ const captureEnabled=run['capture_policy_version']===PREPARED_CAPTURE_POLICY;
+ let preparedCapture:PreparedCapture|null=null;
  let fetchedPages=0,skipped:unknown={},diagnostic:QualificationDiagnostic|undefined;
  const diagnose=(phase:QualificationDiagnosticPhase,extraction?:unknown)=>{
   diagnostic=normalizeQualificationDiagnostic({version:'qualification-diagnostic-v1',phase,fetchedPages,
    observations:observations.length,completeFirstParty:observations.filter(s=>s.firstParty&&!s.truncated).length,
    truncatedObservations:observations.filter(s=>s.truncated).length,skipped,extraction},observations.filter(s=>s.firstParty&&!s.truncated));
  };
- const finish=async(reason:string|null,facts:unknown[]=[],openingQuestion:string|null=null,supplementedEvidence:readonly Pick<QualificationFact,'kind'|'observationId'|'blockId'>[]=[],preparedIdentity?:PreparedIdentityProof)=>withTransaction(db,()=>finishQualification(ctx,{runId:run.id,observations,facts,reason,openingQuestion,supplementedEvidence,diagnostic,...(preparedIdentity===undefined?{}:{preparedIdentity})}));
+ const finish=async(reason:string|null,facts:unknown[]=[],openingQuestion:string|null=null,supplementedEvidence:readonly Pick<QualificationFact,'kind'|'observationId'|'blockId'>[]=[],preparedIdentity?:PreparedIdentityProof)=>withTransaction(db,()=>finishQualification(ctx,{runId:run.id,observations,facts,reason,openingQuestion,supplementedEvidence,diagnostic,...(preparedIdentity===undefined?{}:{preparedIdentity}),...(preparedCapture?{preparedCapture}:{})}));
  if(run.prompt_version!==QUALIFICATION_PROMPT_VERSION||run.policy_version!==QUALIFICATION_POLICY_VERSION){await finish('qualification_version_changed');return;}
  const extraction=deps.extraction;
  if(!extraction||extraction.providerKey!=='aws_bedrock.sourcing_qualification'||!isPricedModel(run.model_name,'bedrock')){await finish('credit_route_unavailable');return;}
@@ -65,9 +70,11 @@ export async function runQualification(ctx:RepositoryContext,input:{runId:string
  if(host(source)!==host(website)){await finish('official_site_unknown');return;}
  const settings=await readResearchSettings(ctx);
  try{
-  const fetched=await deps.pageFetch.fetchPages({urls:[...new Set([source,withoutFragment(website)])],firmWebsite:website,links:[source],prioritizeContactPages:true,maxPagesPerFirm:settings.maxPagesPerFirm,maxBytes:settings.maxPageBytes,shouldContinue:async()=>await allowed(ctx,run.id)!==null});
+  const fetched=await deps.pageFetch.fetchPages({urls:[...new Set([source,withoutFragment(website)])],firmWebsite:website,links:[source],prioritizeContactPages:true,maxPagesPerFirm:settings.maxPagesPerFirm,maxBytes:settings.maxPageBytes,shouldContinue:async()=>await allowed(ctx,run.id)!==null,...(captureEnabled?{recordRedirectTrace:true,mayFetchUrl:async(url:string)=>await allowed(ctx,run.id)!==null&&await preparedCaptureSourcesAvailable(ctx,[source,url])}:{})});
   if(!fetched.ok){diagnose('fetch_failed');await finish('source_unavailable');return;}
+  if(captureEnabled&&fetched.value.skipped['source_authority_refused']){await finish('source_unavailable');return;}
   fetchedPages=fetched.value.pages.length;skipped=fetched.value.skipped;
+  const captured:{source:SourceObservation;trace:FetchedPage['redirectTrace']}[]=[];
   observations=fetched.value.pages.slice(0,settings.maxPagesPerFirm).flatMap(page=>{
    const parsed=parsePageText(page.body,page.contentType,{omitNavigation:true,includeArticles:true});
    const blocks=parsed.blocks.filter(b=>b.text.length<=2000).slice(0,100);
@@ -79,13 +86,15 @@ export async function runQualification(ctx:RepositoryContext,input:{runId:string
     return Number.isFinite(time)&&new Date(time).toISOString()===value&&time<=Date.parse(page.retrievedAt)?[{value,blockId:block.id}]:[];
    });
    const date=publication.length===1?publication[0]:undefined;
-   return [{id:randomUUID(),url:page.url,contentHash:page.contentHash,relevantTextHash:createHash('sha256').update(JSON.stringify(blocks)).digest('hex'),
-    retrievedAt:page.retrievedAt,publishedAt:date?.value??null,publishedAtBlockId:date?.blockId??null,firstParty:page.firstParty,blocks,truncated:parsed.truncated||blocks.length<parsed.blocks.length}];
+   const observation:SourceObservation={id:randomUUID(),url:page.url,contentHash:page.contentHash,relevantTextHash:createHash('sha256').update(JSON.stringify(blocks)).digest('hex'),
+    retrievedAt:page.retrievedAt,publishedAt:date?.value??null,publishedAtBlockId:date?.blockId??null,firstParty:page.firstParty,blocks,truncated:parsed.truncated||blocks.length<parsed.blocks.length};
+   captured.push({source:observation,trace:page.redirectTrace});return [observation];
   });
+  if(captureEnabled)preparedCapture=buildPreparedCapture({candidateId:run.candidate_id,candidateRevision:run.candidate_revision,sourceUrl:run.payload.sourceUrl},captured);
  }catch(error){if(error&&typeof error==='object'&&'code' in error&&error.code==='40001')throw error;diagnose('fetch_exception');await finish('source_unavailable');return;}
  if(!observations.length||Buffer.byteLength(JSON.stringify(observations))>100000){
   diagnose(observations.length?'observations_over_bound':'no_observations');
-  observations=[];await finish('source_unavailable');return;
+  observations=[];preparedCapture=null;await finish('source_unavailable');return;
  }
  if(!await allowed(ctx,run.id)){await finish('research_interrupted');return;}
  await db.query(`UPDATE sourcing_qualification_runs SET observations=$3::jsonb WHERE workspace_id=$1 AND id=$2 AND state='running'
@@ -142,7 +151,7 @@ export async function runQualification(ctx:RepositoryContext,input:{runId:string
  const supplementedEvidence=result.ok?facts.filter(f=>!result.value.facts.some(original=>original.kind===f.kind&&original.observationId===f.observationId&&original.blockId===f.blockId)).map(({kind,observationId,blockId})=>({kind,observationId,blockId})):[];
  const saved=await finish(result.ok?null:result.failureCode,facts,result.ok?result.value.openingQuestion:null,supplementedEvidence,preparedIdentity);
  if(saved.ok&&result.ok&&!preparedIdentity)await recoverDiscoveredIdentity(ctx,run.id);
- if(!saved.ok&&saved.reason==='invalid_evidence'){diagnose('evidence_rejected');observations=[];await finish('invalid_evidence');}
+ if(!saved.ok&&saved.reason==='invalid_evidence'){diagnose('evidence_rejected');observations=[];preparedCapture=null;await finish('invalid_evidence');}
 }
 /** Scheduler sweep is independent of whether any qualification handler manages to start. */
 export async function expireQualifications(ctx:RepositoryContext):Promise<void>{

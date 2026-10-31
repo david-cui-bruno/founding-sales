@@ -21,6 +21,8 @@ import {isCurrentPreparedCandidatePayload} from './discoveryIntake.ts';
 import {retainedCandidateOnly,retainedWallNow} from './retainedAcquisition.ts';
 import {LEGACY_QUALIFICATION_PRODUCER,PREPARED_IDENTITY_PRODUCER,effectivePreparedCandidate,type PreparedIdentityProof} from './preparedIdentity.ts';
 import {preparedIdentityProducerAuthority} from './preparedIdentityAuthority.ts';
+import {PREPARED_CAPTURE_POLICY,validatePreparedCapture} from './preparedCapture.ts';
+import {preparedCaptureSourcesAvailable} from './preparedCaptureAccess.ts';
 
 import {QUALIFICATION_PROMPT_VERSION,QUALIFICATION_POLICY_VERSION} from './qualificationVersions.ts';
 export {QUALIFICATION_PROMPT_VERSION,QUALIFICATION_POLICY_VERSION} from './qualificationVersions.ts';
@@ -61,8 +63,8 @@ export async function requestQualification(context:RepositoryContext,input:{cand
   const producerVersion=await preparedIdentityProducerAuthority(context,candidate.id,candidate.revision,candidate.payload)?PREPARED_IDENTITY_PRODUCER:LEGACY_QUALIFICATION_PRODUCER;
   const runId=randomUUID();
   await context.db.query(`INSERT INTO sourcing_qualification_runs
-    (workspace_id,id,candidate_id,candidate_revision,fingerprint,prompt_version,policy_version,model_name,producer_version)
-    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`,[workspaceId,runId,candidate.id,candidate.revision,fingerprint,QUALIFICATION_PROMPT_VERSION,QUALIFICATION_POLICY_VERSION,settings.modelName,producerVersion]);
+    (workspace_id,id,candidate_id,candidate_revision,fingerprint,prompt_version,policy_version,model_name,producer_version,capture_policy_version)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,[workspaceId,runId,candidate.id,candidate.revision,fingerprint,QUALIFICATION_PROMPT_VERSION,QUALIFICATION_POLICY_VERSION,settings.modelName,producerVersion,PREPARED_CAPTURE_POLICY]);
   if(options.enqueue!==false)await enqueueJob(context.db,{workspaceId,kind:'sourcing.qualify',idempotencyKey:jobIdempotencyKey.sourcingQualify(runId),
     payload:{runId,candidateId:candidate.id,candidateRevision:candidate.revision,promptVersion:QUALIFICATION_PROMPT_VERSION,policyVersion:QUALIFICATION_POLICY_VERSION},maxAttempts:1});
   await recordCrmAuditEvent(context,{action:'sourcing.qualification_requested',subjectKind:'sourcing_candidate',subjectId:candidate.id,detail:{runId,candidateRevision:candidate.revision}});
@@ -91,7 +93,7 @@ export async function readQualification(context:RepositoryContext,input:{candida
 }
 
 /** Persist only locally validated source references; this never grants eligibility. */
-export async function finishQualification(context:RepositoryContext,input:{runId:string;observations:unknown[];facts:unknown[];reason:string|null;openingQuestion?:string|null;supplementedEvidence?:readonly Pick<QualificationFact,'kind'|'observationId'|'blockId'>[];diagnostic?:unknown;preparedIdentity?:PreparedIdentityProof}):Promise<SourcingResult<{runId:string}>> {
+export async function finishQualification(context:RepositoryContext,input:{runId:string;observations:unknown[];facts:unknown[];reason:string|null;openingQuestion?:string|null;supplementedEvidence?:readonly Pick<QualificationFact,'kind'|'observationId'|'blockId'>[];diagnostic?:unknown;preparedIdentity?:PreparedIdentityProof;preparedCapture?:unknown}):Promise<SourcingResult<{runId:string}>> {
   if(!decideAdminOnly(context).permitted)return refused('admin_only');
   const evidence=qualificationEvidenceSchema.safeParse({observations:input.observations,facts:input.facts});
   if(!evidence.success || Buffer.byteLength(JSON.stringify(input.observations),'utf8')>100_000 || Buffer.byteLength(JSON.stringify(input.facts),'utf8')>50_000 ||
@@ -118,9 +120,12 @@ export async function finishQualification(context:RepositoryContext,input:{runId
   if(producer!==LEGACY_QUALIFICATION_PRODUCER&&producer!==PREPARED_IDENTITY_PRODUCER)return refused('invalid_evidence');
   if(producer===PREPARED_IDENTITY_PRODUCER&&!await preparedIdentityProducerAuthority(context,candidate.id,candidate.revision,candidate.payload))return refused('source_authority_changed');
   if(input.preparedIdentity!==undefined&&(input.reason!==null||producer!==PREPARED_IDENTITY_PRODUCER||!effectivePreparedCandidate(candidate.payload,evidence.data.facts,evidence.data.observations,producer,input.preparedIdentity,now)))return refused('invalid_evidence');
+  const capture=input.preparedCapture===undefined?null:validatePreparedCapture(input.preparedCapture,{candidateId:candidate.id,candidateRevision:candidate.revision,sourceUrl:candidate.payload.sourceUrl,observations:evidence.data.observations});
+  if(input.preparedCapture!==undefined&&(run['capture_policy_version']!==PREPARED_CAPTURE_POLICY||run['retained_identity_decision_id']||!capture))return refused('invalid_evidence');
+  if(capture&&!await preparedCaptureSourcesAvailable(context,capture.pages.flatMap(page=>page.redirectUrls)))return refused('source_authority_changed');
   await context.db.query(`UPDATE sourcing_qualification_runs SET state=$3,reason=$4,observations=$5::jsonb,facts=$6::jsonb,
-    opening_question=$7,finished_at=$8::timestamptz,prepared_identity=$9::jsonb WHERE workspace_id=$1 AND id=$2`,
-    [workspaceId,run.id,input.reason?'unavailable':'review',input.reason,JSON.stringify(evidence.data.observations),JSON.stringify(evidence.data.facts),input.openingQuestion??null,now,input.preparedIdentity===undefined?null:JSON.stringify(input.preparedIdentity)]);
+    opening_question=$7,finished_at=$8::timestamptz,prepared_identity=$9::jsonb,prepared_capture=$10::jsonb WHERE workspace_id=$1 AND id=$2`,
+    [workspaceId,run.id,input.reason?'unavailable':'review',input.reason,JSON.stringify(evidence.data.observations),JSON.stringify(evidence.data.facts),input.openingQuestion??null,now,input.preparedIdentity===undefined?null:JSON.stringify(input.preparedIdentity),capture===null?null:JSON.stringify(capture)]);
   const diagnostic=input.reason===null?undefined:normalizeQualificationDiagnostic(input.diagnostic,evidence.data.observations.filter(s=>s.firstParty&&!s.truncated));
   await recordCrmAuditEvent(context,{action:'sourcing.qualification_recorded',subjectKind:'sourcing_candidate',subjectId:candidate.id,detail:{runId:run.id,state:input.reason?'unavailable':'review',policyVersion:run.policy_version,...(producer===PREPARED_IDENTITY_PRODUCER?{producerVersion:producer,...(input.preparedIdentity?{preparedIdentity:input.preparedIdentity}:{})}:{}),...(input.supplementedEvidence?.length?{evidenceRecovery:{rule:'supported-office-card-v1',citations:input.supplementedEvidence}}:{}),...(diagnostic?{diagnostic}:{})}});
   return {ok:true,value:{runId:run.id}};

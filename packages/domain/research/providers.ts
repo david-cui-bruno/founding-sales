@@ -60,6 +60,8 @@ export type ProviderOutcome<T> =
 // ---------------------------------------------------------------------------
 
 export interface PageFetchRequest {
+  /** Include the actual page-request URL chain; observational only, never source permission. */
+  readonly recordRedirectTrace?: boolean;
   /** Qualification needs a contact route; prioritize published contact links within the same page cap. */
   readonly prioritizeContactPages?: boolean;
   /**
@@ -94,6 +96,8 @@ export interface PageFetchRequest {
 
 export interface FetchedPage {
   readonly url: string;
+  /** Opt-in page requests only: initial URL through the final URL, excluding robots reads. */
+  readonly redirectTrace?: {readonly version:'page-redirect-trace-v1';readonly urls:readonly string[]};
   /** A sha256 of the exact bytes read. The evidence item's `content_hash`. */
   readonly contentHash: string;
   /** The `content-type` header value, as received. */

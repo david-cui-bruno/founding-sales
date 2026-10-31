@@ -3,6 +3,7 @@ import {sourceObservationSchema,type PreparedProspectBrief,type PreparedProspect
 import {projectManualProspect,type ManualProspectRow} from './manualProspectProjection.ts';
 import type {ManualPhoneSnapshot} from './manualProspectPhone.ts';
 import {originalAuthorities,originalLineage} from './manualProspectOriginalAuthority.ts';
+import {preparedCaptureObservationIds} from './preparedCapture.ts';
 
 export interface PreparedRunIdentity {id:string;candidate_revision:number}
 export type PreparedSourceExpirations=ReadonlyMap<string,number>;
@@ -43,12 +44,12 @@ export function projectPreparedProspect(row:ManualProspectRow,snapshot:ManualPho
   const ids=raw.flatMap(value=>{const parsed=sourceObservationSchema.safeParse(value);return parsed.success?[parsed.data.id]:[];});
   const unique=new Set(ids).size===ids.length;
   if(!unique)unshown=true;
-  const grants=originalAuthorities(snapshot),expectedHost=host(grants.website);
+  const grants=originalAuthorities(snapshot),captured=preparedCaptureObservationIds(snapshot),expectedHost=host(grants.website);
   for(const value of unique?raw:[]){
    const parsed=sourceObservationSchema.safeParse(value);
    if(!parsed.success){unshown=true;continue;}
    const source=parsed.data,expires=expirations.get(source.url);
-   if(!snapshot.permitted_urls.includes(source.url)||new Set(source.blocks.map(block=>block.id)).size!==source.blocks.length||!grants.authorities[source.id]||!expectedHost||host(source.url)!==expectedHost||!source.firstParty||source.truncated||Date.parse(source.retrievedAt)>now||expires!==undefined&&expires<=now||createHash('sha256').update(JSON.stringify(source.blocks)).digest('hex')!==source.relevantTextHash){unshown=true;continue;}
+   if(!snapshot.permitted_urls.includes(source.url)||new Set(source.blocks.map(block=>block.id)).size!==source.blocks.length||(!grants.authorities[source.id]&&!captured.has(source.id))||!expectedHost||host(source.url)!==expectedHost||!source.firstParty||source.truncated||Date.parse(source.retrievedAt)>now||expires!==undefined&&expires<=now||createHash('sha256').update(JSON.stringify(source.blocks)).digest('hex')!==source.relevantTextHash){unshown=true;continue;}
    usablePages++;
    if(expires!==undefined)usedSourceDeadlines.push(expires);
    for(const block of source.blocks){
