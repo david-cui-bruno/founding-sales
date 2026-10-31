@@ -1,0 +1,49 @@
+# Prepared supply loss audit
+
+Step1.2.2 under #797/#783. This audit informs the first repair in1.2.3; it does not change runtime, source grants, budgets or channel authority.
+
+## Scope and evidence
+
+The accepted candidate view already exposed42prepared briefs among400bounded candidate rows, with more pages available. Seven useful briefs and one honest no-source case were inspected. Those observations establish useful retained stock, not distinct-company totals, representative quality or replenishment.
+
+The new contrast sample deliberately selects18entries from one50-row `needs_review` Source inventory page plus six previously examined identity failures, including the recovered Scott Brown and Plano controls. This is not a random sample of the358 unresolved prepared-view rows. Inventory status and preparation state are different dimensions. Counts may overlap and cannot be extrapolated to the inventory.
+
+Inspection uses fixed-record metadata in one repeatable-read, read-only transaction: latest-run/revision/state, retained page completeness/counts, exact source/evidence associations, current loss/expiry vetoes, bounded older same-revision runs and exact-website duplicate rows. No original prose, source URL, endpoint or model selection is exported by the observer. URL equality is a diagnostic association, not a new permission grant. Existing rights-checked hosted briefs are the source for previously accepted original-text observations; raw qualification reads are not substituted for per-page authority.
+
+## Measured result, October30 at23:54:50.701UTC
+
+One new observer completed with schema151, stored emailOFFv4/zero dispatching, and zero provider/model/business writes. Exact temporary operations451/task80eef4fa730442f49a8ba46064444015 is STOPPED0/INACTIVE. Independent23:55:33 readback confirmed cleanup, normal operations448/migration192 and three normal service tasks with no nonterminal one-offs. Private selection/result/custody/cleanup metadata is retained in `prepared-supply-loss-audit-20261030` beside the accepted release evidence.
+
+| Observation within these24 records /88 retained pages | What it establishes and does not establish |
+| --- | --- |
+| All24 have nonempty latest runs at the current candidate revision;18review/six unavailable, all legacy context-v7 and finished before the23:06:36 accepted cutover. | Neither an empty newest run nor revision mismatch explains these cases. This does not evaluate the new identity producer. |
+| Seven records have **no exact candidate/origin/evidence association**, although each primary URL matches after trailing-slash trimming. | A concrete two-layer mismatch exists: the SQL permission reader trims slashes but the original-authority branch requires exact bytes. Five have a nontruncated slash-matching primary, two a truncated primary. Examples: On Q, Senné Boston, FirstService Massachusetts, RoundRoom Somerville, Auben, Horizon chamber listing and RI training. Those last two also illustrate intake noise; fixing an association does not prove useful business context. |
+| Only17 of88pages have an exact association, all primary-source matches; origin/evidence matches are zero.71lack an exact association, including60complete pages. No inspected expiry/terms, audit-loss or cross-record-loss veto is set. | Captured text can be excluded before interpretation. Same-host/`firstParty` flags are not verified company identity or permission. Absence of these veto flags is not a complete grant check. |
+|13pages across nine records are truncated; two records have an exact-associated primary page but it is truncated. Fifteen records have at least one complete exact-associated page. | Completeness and association overlap. Stonelink's directory hit is one of the two; the other is a how-to article. These are not13or two newly recoverable companies. |
+| Three records contain very little text: Cambridge Management20characters/page, iTxProp directory103, Shalom listing146. | A nonempty page is not substantive company research. Metadata cannot establish whether fetch/parser/access caused these thin results. |
+| Seven records have older nonempty same-revision runs, but none has an empty latest run. No selected record has another nondismissed row with exactly the same normalized website string. | History shadowing and duplicate companies remain broader hypotheses, not demonstrated causes here. Exact website comparison misses paths, redirects, brand/branch and franchise duplication. |
+| The six old identity failures still have `invalid_evidence`; Scott Brown/Plano already yielded useful briefs in accepted hosted inspection. | Extraction failure alone is not current view failure. Additional identity repair must target genuinely new ordinary input rather than replaying these attempts. |
+
+These are structural metadata observations. No new precision estimate, adjudication of all24businesses or count of recovered useful prospects is claimed. Missing sources remain real elsewhere (the accepted Lyon brief and earlier16-run post-release observation); this sample contains no empty captures and cannot estimate their prevalence.
+
+## Selected first repair for1.2.3
+
+**Repair capture-to-reader source association first**, ahead of looser business-word matching or more acquisition. The trailing-slash handoff is directly observed in seven selected records, while complete auxiliary pages are commonly unassociated. Start with a narrowly reviewed, validated same-resource rule aligned across granting and reading; preserve exact original bytes and refusal/loss checks. Root and path trailing slashes need separate treatment: trimming alone does not prove resource equivalence. Handle arbitrary redirects and auxiliary pages through explicit future capture provenance and permitted-source association, not a same-host shortcut. The intended result is access to valid company context already being collected, not invented identity or automatically qualified contacts.
+
+Then version future ordinary interpretation into independent source-backed identity/business/geography/workflow/people fields with explicit coverage. Partial-page use needs its own changed-behavior acceptance and contrary-context handling. Test URL variants, unrelated paths/hosts, rights loss after waits, expiry/deletion/revocation, conflicting context, thin pages and unchanged strict native/email/canonical boundaries. Do not rewrite old/queued/same-day paid attempts. Measure genuine new ordinary output after protected delivery under existing pacing; a docs merge cannot close1.2.3or1.2.5.
+
+## Mechanisms distinguished by source review
+
+| Potential loss | Existing mechanism | Safe repair boundary |
+| --- | --- | --- |
+| Captured pages without an exact granting association | Fetching follows redirects and saves final URLs; original authority requires the exact candidate source, matching discovery origin or exact retained evidence. Same website host alone is insufficient. | Preserve explicit requested→final provenance and an approved page association during future ordinary capture. Recheck loss/expiry for every dependency; do not infer permission from host equality. |
+| Intact context inside incomplete pages | The parser bounds pages to100blocks/12,000characters; qualification removes blocks over2,000characters and marks the page truncated. Preparation rejects the whole truncated page. | Version a passage/coverage representation that can expose intact positive context with partial-coverage notices and contrary evidence. Never relabel an incomplete page complete or use missing text to establish absence. |
+| Older context hidden by the latest run | The shared reader selects the newest run before requiring current candidate revision; preparation uses that snapshot. | Count history separately. Any later historical projection requires explicit lineage and current rights/loss checks; an older nonempty run is not usable-source proof. |
+| Substantive business wording not recognized | The current projection requires residential-management/business predicates in substantive individual blocks. Separate headings and facts may fail. | Independently represent source-backed identity, business, geography, workflow and people. Missing one field must not erase unrelated valid context; slogans/vendor/testimonial wording cannot establish the business. |
+| Repeated companies or intake noise | Candidate identity includes source/title/locality; exact-row navigation deduplication is not company identity. Search hits include directories, government/training/articles and listings. | Separate discovery labels from verified business context; conservatively group presentation while preserving branches/franchises/provenance and CRM identity. Do not count raw rows as companies. |
+
+See [qualification capture](../../packages/domain/sourcing/qualificationRun.ts), [page bounds](../../packages/domain/research/pageText.ts), [projection](../../packages/domain/sourcing/preparedProspectProjection.ts), [source reader](../../packages/domain/sourcing/manualProspectPhone.ts), [original authority](../../packages/domain/sourcing/manualProspectOriginalAuthority.ts) and [fetching](../../apps/worker/src/research/companyPageFetch.ts). An `invalid_evidence` extraction result alone is not a current preparation-loss diagnosis: PR861 independently scans permitted originals.
+
+## Controls
+
+No acquisition, model diagnostic, requalification, candidate correction, CRM/contact write or scheduling action is part of this audit. Email staysOFFv4; existing research$10/day/$200/month, search10/day/375/month, pacing, paused schedules, source/privacy/retention and UNKNOWN safeguards remain. Three protected original commits stay unpublished. Production remains the accepted `cccca1ed2`/schema151 application; documentation adoption requires no application dispatch.
