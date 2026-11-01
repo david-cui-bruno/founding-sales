@@ -10,10 +10,10 @@ function evidence(c:CandidateInput=candidate){
  const facts:QualificationFact[]=[...(['firm_identity','residential_management','service_area'] as const).map(kind=>({kind,value:observation.blocks[0]!.text,observationId:observation.id,blockId:'office'})),{kind:'business_phone',value:observation.blocks[1]!.text,observationId:observation.id,blockId:'phone'}];
  return {candidate:c,facts,observations:[observation],now};
 }
-it('pins the combined policy revisions; the prompt text is unchanged since v7 and v8 is the Gemini 3.8 Flash model move',()=>{
+it('pins the combined policy revisions without changing the extraction prompt',()=>{
  expect(QUALIFICATION_POLICY_VERSION).toBe('qualification-v5');
  expect(VERIFIED_FIRM_POLICY_VERSION).toBe('verified-firm-v3');
- expect(QUALIFICATION_PROMPT_VERSION).toBe('qualification-context-v8');
+ expect(QUALIFICATION_PROMPT_VERSION).toBe('qualification-context-v7');
 });
 it('requires a fresh explicit versioned attestation, not a legacy true flag or old reviewed report',()=>{
  const current={policyVersion:QUALIFICATION_POLICY_VERSION,promptVersion:QUALIFICATION_PROMPT_VERSION,verifiedFirmPolicyVersion:VERIFIED_FIRM_POLICY_VERSION,reportSha256:'a'.repeat(64),reviewedEligible:3,falseEligible:0};

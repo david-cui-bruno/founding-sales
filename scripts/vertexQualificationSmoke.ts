@@ -37,7 +37,7 @@ for (const argument of process.argv.slice(2)) {
   const outcome = await provider.extract(input);
   const actual = last?.usageMetadata;
   console.error(JSON.stringify({
-    firm: firmName, pages: observations.length, blocks: observations.reduce((total, observation) => total + observation.blocks.length, 0),
+    firm: firmName, pages: observations.length, truncatedPages: observations.filter(observation => observation.truncated).length, blocks: observations.reduce((total, observation) => total + observation.blocks.length, 0),
     countedInputTokens: counted, countedMinusActual: counted - (actual?.promptTokenCount ?? 0), allowance: QUALIFICATION_SCHEMA_TOKEN_ALLOWANCE,
     usage: actual, finishReason: last?.candidates?.[0]?.finishReason, secondsForOneCall: (Date.now() - started) / 1000,
     reservedCents: qualificationCents(QUALIFICATION_MODEL_NAME, {inputTokens: counted, outputTokens: QUALIFICATION_OUTPUT_TOKENS}, new Date().toISOString()),

@@ -200,6 +200,6 @@ it('finishes credit_route_unavailable without dispatch when no Vertex port exist
 it('records the Gemini model, not the research extraction model, on a new run',async()=>{
  const ids=await pending();
  await db.session.query("INSERT INTO research_settings(workspace_id,enabled) VALUES($1,true) ON CONFLICT(workspace_id) DO NOTHING",[workspaceId]);
- expect((await db.session.query('SELECT model_name,prompt_version FROM sourcing_qualification_runs WHERE id=$1',[ids.runId])).rows).toEqual([{model_name:'gemini-3.8-flash',prompt_version:'qualification-context-v8'}]);
+ expect((await db.session.query('SELECT model_name,prompt_version FROM sourcing_qualification_runs WHERE id=$1',[ids.runId])).rows).toEqual([{model_name:'gemini-3.8-flash',prompt_version:'qualification-context-v7'}]);
  expect((await db.session.query('SELECT model_name FROM research_settings WHERE workspace_id=$1',[workspaceId])).rows).toEqual([{model_name:'claude-haiku-4-5'}]);
 });
