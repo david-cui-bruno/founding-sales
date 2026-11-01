@@ -33,6 +33,19 @@ Tests run against a real PostgreSQL 16, never a mock or an in-memory substitute.
 * `createTestDatabase({ throughVersion: n })` is not a copy: it starts empty and stops
   after migration `n`, which is how the compatibility test seeds a previous version.
 
+* Every test database is pinned to `timezone=UTC` (`ALTER DATABASE … SET timezone`),
+  because CI's container is UTC and a local cluster otherwise inherits the machine's
+  zone. Constraints such as `crm_mail_imports`' `to_at-from_at=interval '90 days'`
+  hold only when no DST shift falls inside the window; in a DST zone, within 90 days
+  after a clock change, every fixture inserting `now()-interval '90 days'` was refused
+  as `crm_mail_imports_check`. Do not work around such failures with `TZ=UTC` per run.
+* `test/sourcing/prospectPhoneRefusalOriginal.pg.test.ts` is grant-gated. A local run
+  without `FSS_PHONE_REFUSAL_ORIGINAL_PG_GRANT=retained-only` reports its cases as
+  skipped (a bare `CI=true`, which agent shells export, is not hosted authority); hosted
+  GitHub Actions without the canonical service authority still fails. To run them,
+  from `packages/domain`:
+  `FSS_PHONE_REFUSAL_ORIGINAL_PG_GRANT=retained-only npx vitest run --config vitest.phoneRefusalOriginal.pg.config.ts`.
+
 Set `FSS_TEST_POSTGRES_VERBOSE=1` to see the server's own log.
 
 To exercise the CI branch on this machine:
