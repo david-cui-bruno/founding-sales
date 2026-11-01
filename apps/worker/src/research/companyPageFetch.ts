@@ -535,7 +535,9 @@ export function researchPageFetch(deps: PageFetchDeps = {}): PageFetchProvider {
             // firm's server could redirect `/robots.txt` to `/robots.txt?token=…`, and
             // the one request that was exempt from the rule would have carried a query
             // string this fetcher refuses everywhere else.
-            if (!isPublicResearchUrl(target) || !isSameResearchSite(url, target)) {
+            // A prepared capture whose company site moved (`followSiteMove`) follows that move here
+            // too: RFC 9309 lets a robots redirect cross authorities, and its rules then apply.
+            if (!isPublicResearchUrl(target) || (!isSameResearchSite(url, target) && input.followSiteMove?.(target) !== true)) {
               return { kind: 'unreadable' };
             }
             const nextHost = new URL(target).hostname.toLowerCase();
@@ -579,6 +581,13 @@ export function researchPageFetch(deps: PageFetchDeps = {}): PageFetchProvider {
       /** Each discovered URL's publishing page, for an opt-in page's `linkedFrom`. */
       const linkedFrom = new Map<string, string>();
       let discoveryDone = false;
+      /**
+       * The firm's own site. A prepared capture (`followSiteMove`) moves it once, when the first
+       * page of the firm's site redirects to another host the caller accepts: that host's robots,
+       * discovered pages and first-party marking then apply, and the chain stays in the trace.
+       */
+      let site = input.firmWebsite;
+      let siteMoved = false;
 
       for (let index = 0; index < queue.length; index += 1) {
         if (sourceAuthorityRefused) break;
@@ -597,7 +606,7 @@ export function researchPageFetch(deps: PageFetchDeps = {}): PageFetchProvider {
           continue;
         }
         let url = initial;
-        let permission: UrlPermission = permittedResearchUrl({ ...input, discovered }, url);
+        let permission: UrlPermission = permittedResearchUrl({ ...input, firmWebsite: site, discovered }, url);
         let followed = 0;
         const redirectUrls:string[]=[];
         for (;;) {
@@ -679,7 +688,14 @@ export function researchPageFetch(deps: PageFetchDeps = {}): PageFetchProvider {
               skips.bump('url_has_query');
               break;
             }
-            permission = permittedRedirectTarget({ ...input, discovered }, { url, permission }, target);
+            const prior = permission;
+            permission = permittedRedirectTarget({ ...input, firmWebsite: site, discovered }, { url, permission }, target);
+            if (permission === 'blocked' && !siteMoved && pages.length === 0 && site !== null
+              && isSameResearchSite(site, url) && isPublicResearchUrl(target) && input.followSiteMove?.(target) === true) {
+              site = `https://${new URL(target).hostname.toLowerCase()}/`;
+              siteMoved = true;
+              permission = prior;
+            }
             url = target;
             continue;
           }
@@ -707,15 +723,15 @@ export function researchPageFetch(deps: PageFetchDeps = {}): PageFetchProvider {
             // host** — `added_link` wins before the host check, so the firm's own words
             // were being marked as somebody else's and could not decide fit.
             firstParty:
-              input.firmWebsite !== null && isSameResearchSite(input.firmWebsite, url),
+              site !== null && isSameResearchSite(site, url),
           });
 
-          if (!discoveryDone && input.firmWebsite !== null && isSameResearchSite(input.firmWebsite, url)) {
+          if (!discoveryDone && site !== null && isSameResearchSite(site, url)) {
             // Once, from the first page of the firm's own site that answered — which is
             // an added first-party search result also qualifies; third-party links never do.
             discoveryDone = true;
             const navigation: string[] = [];
-            const published = [...discoverSameSiteUrls(input, {from: url, hrefs: anchorHrefs(response.body, contentType)})];
+            const published = [...discoverSameSiteUrls({ ...input, firmWebsite: site }, {from: url, hrefs: anchorHrefs(response.body, contentType)})];
             for (const candidate of published) {
               if (queue.slice(0,index+1).includes(candidate)) continue;
               discovered.push(candidate);

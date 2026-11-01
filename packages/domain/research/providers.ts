@@ -67,6 +67,12 @@ export interface PageFetchRequest {
   /** Prepared own-site capture only (ADR0034): read one contact, about and team page first. */
   readonly diversifyOwnSitePages?: boolean;
   /**
+   * Prepared capture only (ADR0034): the company's own site may have moved to another host. When
+   * the first page of `firmWebsite` redirects to a host this accepts, that host becomes the firm's
+   * site for the rest of the run (robots, discovered pages, first-party). Absent: never moves.
+   */
+  readonly followSiteMove?: ((url: string) => boolean) | undefined;
+  /**
    * The exact URLs that may be requested, in order. The caller builds them with
    * `researchUrlsForFirm`; the adapter must request nothing else, including after a
    * redirect, and re-asks `permittedResearchUrl` itself rather than trusting this.

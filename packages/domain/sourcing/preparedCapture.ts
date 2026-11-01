@@ -3,6 +3,7 @@ import {z} from 'zod';
 import {candidateInputSchema,sourceObservationSchema,sourcingUrlSchema,instant,uuid,type SourceObservation} from '@fss/contracts';
 import type {FetchedPage} from '../research/providers.ts';
 import {isPublicResearchUrl,isSameResearchSite,ownSitePageKind} from '../research/sourcePolicy.ts';
+import {classifyDiscoveryPage} from './discoveryIdentity.ts';
 import type {ManualPhoneSnapshot} from './manualProspectPhone.ts';
 
 export const PREPARED_CAPTURE_V1='prepared-source-association-v1';
@@ -31,7 +32,13 @@ function slashRedirects(urls:readonly string[],sourceUrl:string,finalUrl:string)
 }
 function tracedRedirects(urls:readonly string[],sourceUrl:string,finalUrl:string,policy:PreparedCapturePolicy):boolean {
  if(policy===PREPARED_CAPTURE_V1)return slashRedirects(urls,sourceUrl,finalUrl);
- return urls.length>=2&&urls.length<=6&&urls[0]===sourceUrl&&urls.at(-1)===finalUrl&&new Set(urls).size===urls.length&&urls.every(url=>isPublicResearchUrl(url)&&isSameResearchSite(sourceUrl,url));
+ return urls.length>=2&&urls.length<=6&&urls[0]===sourceUrl&&urls.at(-1)===finalUrl&&new Set(urls).size===urls.length&&urls.every(url=>isPublicResearchUrl(url))&&siteMovesOnce(urls,sourceUrl);
+}
+/** V2 (ADR0034): the chain stays on the source's site, or moves once to another company host
+ * (never a directory, portal or noise host) and stays there — the company's own site moved. */
+function siteMovesOnce(urls:readonly string[],sourceUrl:string):boolean {
+ const moved=urls.findIndex(url=>!isSameResearchSite(sourceUrl,url));
+ return moved<0||classifyDiscoveryPage({url:urls[moved]!,title:''})==='company'&&urls.slice(moved).every(url=>isSameResearchSite(urls[moved]!,url));
 }
 
 /** Strict binding is independent of model facts and cannot repair old captures. */

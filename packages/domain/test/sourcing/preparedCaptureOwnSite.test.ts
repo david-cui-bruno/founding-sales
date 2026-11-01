@@ -52,3 +52,14 @@ it('associates at most one linked contact, about and team page through the landi
  const offsite=observation('https://partner.example.test/contact');
  expect(buildPreparedCapture(binding,[pages[0]!,{source:{...offsite,firstParty:false},trace:trace(`${site}/contact-x`,'https://partner.example.test/contact'),linkedFrom:`${site}/`}])).toBeNull();
 });
+
+it('v2 lineage may follow the company site once to another company host, never to a directory or a second move',()=>{
+ const movedSite='https://tucson.moved-site.test',landing=observation(`${movedSite}/`),contact=observation(`${movedSite}/contact-us`);
+ const pages=[{source:landing,trace:trace(`${site}/`,`${movedSite}/`)},{source:contact,trace:trace(`${movedSite}/contact-us`),linkedFrom:`${movedSite}/`}];
+ expect(buildPreparedCapture(binding,pages)?.pages.map(p=>p.redirectUrls)).toEqual([[`${site}/`,`${movedSite}/`],[`${site}/`,`${movedSite}/`,`${movedSite}/contact-us`]]);
+ expect(buildPreparedCapture(binding,pages,'prepared-source-association-v1')).toBeNull();
+ const directory=observation('https://www.yelp.com/biz/harbor');
+ expect(buildPreparedCapture(binding,[{source:directory,trace:trace(`${site}/`,'https://www.yelp.com/biz/harbor')}])).toBeNull();
+ const third=observation('https://third-site.test/');
+ expect(buildPreparedCapture(binding,[{source:third,trace:trace(`${site}/`,`${movedSite}/`,'https://third-site.test/')}])).toBeNull();
+});

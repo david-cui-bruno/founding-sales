@@ -80,7 +80,7 @@ it.each([
 it('does not use locality or another call to invent property services or residential scope',()=>{
  expect(classifyPreparedPassage('Our team processes customer support requests for software users within one business day.','Residential Property Management')).toMatchObject({usefulBusiness:false,usefulOperations:false,residentialContext:false});
  classifyPreparedPassage('Our company manages residential homes for property owners across the local region.','');
- expect(classifyPreparedPassage('Property management services','')).toMatchObject({usefulBusiness:false,usefulOperations:false,residentialContext:false});
+ expect(classifyPreparedPassage('Property management','')).toMatchObject({usefulBusiness:false,usefulOperations:false,residentialContext:false});
 });
 
 it('keeps known contrary evidence visible even beyond the displayed quote bound',()=>{
@@ -195,5 +195,30 @@ it.each([
  'Residential property management offices in Boston use our platform for owner statements.',
  'Our firm manages real estate assets and capital for institutional investors in core markets nationwide.',
 ])('still refuses vendor, denial, short or investment-fund text: %s',text=>{
+ expect(classifyPreparedPassage(text,'').usefulBusiness).toBe(false);
+});
+
+// Source policy (David, Nov 1): Shift's own pages say they are a property-management company without "we manage".
+it.each([
+ 'Grand Rapids is attracting national attention as one of the fastest growing real estate markets in the country. With that growth, housing demand greatly increases. Being in property management we’re experiencing the forefront effects of that influx as new and existing residents need rental housing.',
+ 'As your property management company, we keep owners informed about every lease, inspection and repair.',
+ 'Property Management Services',
+ 'Property Management Grand Rapids MI',
+ 'Full-Service Property Management Company in Boston',
+ 'Residential Property Management in Spokane, Liberty Lake and the Spokane Valley',
+])('recognizes the company placing itself in property management or naming its service: %s',text=>{
+ expect(classifyPreparedPassage(text,'')).toMatchObject({usefulBusiness:true,contrary:false,kinds:expect.arrayContaining(['business'])});
+});
+it.each([
+ 'Property Management',
+ 'Property Management Software',
+ 'Property Management Services?',
+ 'Jobs in Property Management in Boston',
+ 'Directory of Property Management Services',
+ 'Being in property management for twenty years, I can say this team is the best we have hired.',
+ 'As a property management software company, we help property managers collect rent online.',
+ 'Testimonial: As your property management company, we were thrilled with their service.',
+ 'As a property management firm, we do not manage residential homes or apartments.',
+])('still refuses labels, products, jobs, directories, testimonials and denials: %s',text=>{
  expect(classifyPreparedPassage(text,'').usefulBusiness).toBe(false);
 });

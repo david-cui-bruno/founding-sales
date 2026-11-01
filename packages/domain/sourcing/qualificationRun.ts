@@ -24,6 +24,7 @@ import {preparedIdentityProducerAuthority} from './preparedIdentityAuthority.ts'
 import {PREPARED_CAPTURE_POLICY,isPreparedCapturePolicy,buildPreparedCapture,type PreparedCapture} from './preparedCapture.ts';
 import {preparedCaptureSourcesAvailable,preparedCaptureSourceWitness,type PreparedCaptureSourceWitness} from './preparedCaptureAccess.ts';
 import {isDeepStrictEqual} from 'node:util';
+import {classifyDiscoveryPage} from './discoveryIdentity.ts';
 interface Run extends QualificationRunRow {payload:CandidateInput;current_revision:number;candidate_status:string}
 const readSql=`SELECT r.*,c.payload,c.revision AS current_revision,c.status AS candidate_status FROM sourcing_qualification_runs r
  JOIN sourcing_candidates c ON c.workspace_id=r.workspace_id AND c.id=r.candidate_id WHERE r.workspace_id=$1 AND r.id=$2`;
@@ -90,7 +91,9 @@ export async function runQualification(ctx:RepositoryContext,input:{runId:string
  if(host(source)!==host(website)){await finish('official_site_unknown');return;}
  const settings=await readResearchSettings(ctx);
  try{
-  const fetched=await deps.pageFetch.fetchPages({urls:[...new Set([source,withoutFragment(website)])],firmWebsite:website,links:[source],prioritizeContactPages:true,diversifyOwnSitePages:true,maxPagesPerFirm:settings.maxPagesPerFirm,maxBytes:settings.maxPageBytes,shouldContinue:async()=>await allowed(ctx,run.id)!==null,...(captureEnabled?{recordRedirectTrace:true,mayFetchUrl:mayFetch}:{})});
+  const fetched=await deps.pageFetch.fetchPages({urls:[...new Set([source,withoutFragment(website)])],firmWebsite:website,links:[source],prioritizeContactPages:true,diversifyOwnSitePages:true,maxPagesPerFirm:settings.maxPagesPerFirm,maxBytes:settings.maxPageBytes,shouldContinue:async()=>await allowed(ctx,run.id)!==null,...(captureEnabled?{recordRedirectTrace:true,mayFetchUrl:mayFetch}:{}),
+   // ADR0034: a v2 capture follows the company site's move to another company host, never to a directory, portal or noise host.
+   ...(run['capture_policy_version']===PREPARED_CAPTURE_POLICY?{followSiteMove:(url:string)=>classifyDiscoveryPage({url,title:''})==='company'}:{})});
   if(!fetched.ok){diagnose('fetch_failed');await finish('source_unavailable');return;}
   if(captureEnabled&&fetched.value.skipped['source_authority_refused']){await finish('source_unavailable');return;}
   fetchedPages=fetched.value.pages.length;skipped=fetched.value.skipped;

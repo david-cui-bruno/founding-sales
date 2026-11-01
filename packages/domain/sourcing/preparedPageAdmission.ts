@@ -27,7 +27,8 @@ export function admitPreparedPages(snapshot:ManualPhoneSnapshot,now:number,expir
   const parsed=sourceObservationSchema.safeParse(value);
   if(!parsed.success){result.unshown=true;continue;}
   const source=parsed.data,expires=expirations.get(source.url);
-  if((!snapshot.permitted_urls.includes(source.url)&&!captured.has(source.id))||new Set(source.blocks.map(block=>block.id)).size!==source.blocks.length||(!grants.authorities[source.id]&&!captured.has(source.id))||!expectedHost||host(source.url)!==expectedHost||!source.firstParty||Date.parse(source.retrievedAt)>now||expires!==undefined&&expires<=now||createHash('sha256').update(JSON.stringify(source.blocks)).digest('hex')!==source.relevantTextHash){result.unshown=true;continue;}
+  // A captured page keeps its own host: its manifest lineage may follow the company site's move (ADR0034).
+  if((!snapshot.permitted_urls.includes(source.url)&&!captured.has(source.id))||new Set(source.blocks.map(block=>block.id)).size!==source.blocks.length||(!grants.authorities[source.id]&&!captured.has(source.id))||!expectedHost||host(source.url)!==expectedHost&&!captured.has(source.id)||!source.firstParty||Date.parse(source.retrievedAt)>now||expires!==undefined&&expires<=now||createHash('sha256').update(JSON.stringify(source.blocks)).digest('hex')!==source.relevantTextHash){result.unshown=true;continue;}
   result.pages.push({source,captured:captured.has(source.id),expires});
  }
  return result;

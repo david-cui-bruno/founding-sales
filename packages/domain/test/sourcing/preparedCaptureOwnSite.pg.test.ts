@@ -125,3 +125,21 @@ it('keeps own-kind order among linked pages under a navigation-only landing: the
  const shown=brief.value.passages.filter(p=>p.kind==='business').map(p=>p.url);
  expect(shown[0]).toBe(`${f.site}/about-us`);expect(shown).toHaveLength(4);
 });
+
+it('follows the company site to another company host and cites its pages through the traced move (production rentalsamericatucson.com shape)',async()=>{
+ let moved='';
+ const f=await capture({extra:site=>{moved=site.replace('ownsite-','moved-');return {[`${moved}/`]:'<nav><a href="/contact-us">Contact</a></nav><main><p>Our property management company manages residential homes for owners in Tucson.</p></main>',
+  [`${moved}/contact-us`]:'<main><p>(520) 555-0100</p></main>'};},redirects:site=>({[`${site}/robots.txt`]:`${site.replace('ownsite-','moved-')}/robots.txt`,[`${site}/`]:`${site.replace('ownsite-','moved-')}/`})});
+ const stored=await f.stored();
+ expect(stored.observations.map(o=>o.url)).toEqual([`${moved}/`,`${moved}/contact-us`]);
+ expect(stored.prepared_capture?.pages.map(p=>[p.url,p.redirectUrls])).toEqual([[`${moved}/`,[f.landing,`${moved}/`]],[`${moved}/contact-us`,[f.landing,`${moved}/`,`${moved}/contact-us`]]]);
+ const brief=await tx(()=>readPreparedProspect(ctx(),f.target));if(!brief.ok)throw Error(brief.reason);
+ expect(brief.value).toMatchObject({companyHost:new URL(f.landing).hostname,callable:{state:'callable',phone:'(520) 555-0100'}});
+ expect(new Set(brief.value.passages.map(p=>p.url))).toEqual(new Set([`${moved}/`,`${moved}/contact-us`]));
+});
+
+it.each(['https://www.yelp.com/biz/harbor','https://harbor.appfolio.com/','https://www.facebook.com/harbor'])('never follows the company site to a directory, portal or social host: %s',async target=>{
+ const f=await capture({redirects:site=>({[`${site}/`]:target})});
+ expect((await f.stored()).observations??[]).toEqual([]);
+ expect(f.requests.some(url=>url.startsWith(target))).toBe(false);
+});
