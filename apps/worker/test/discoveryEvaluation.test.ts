@@ -51,8 +51,8 @@ it('refuses paid CLI evaluation before credentials, ledger access or network, in
   expect(network).not.toHaveBeenCalled();expect(stdout).not.toHaveBeenCalled();
  }finally{stderr.mockRestore();stdout.mockRestore();network.mockRestore();}
 });
-it('keeps dry-run planning without activation and reports shared 10/day and 375/month limits',async()=>{
+it('keeps dry-run planning without activation and reports shared 20/day and 650/month limits',async()=>{
  const output:string[]=[],stdout=vi.spyOn(process.stdout,'write').mockImplementation(value=>{output.push(String(value));return true;});
- try{expect(await main(['--dry-run'],{})).toBe(0);expect(JSON.parse(output.join(''))).toMatchObject({mode:'dry_run',maximumBatchCredits:9,dailyAttemptLimit:10,monthlyAttemptLimit:375});}
+ try{expect(await main(['--dry-run'],{})).toBe(0);expect(JSON.parse(output.join(''))).toMatchObject({mode:'dry_run',maximumBatchCredits:9,dailyAttemptLimit:20,monthlyAttemptLimit:650});}
  finally{stdout.mockRestore();}
 });
