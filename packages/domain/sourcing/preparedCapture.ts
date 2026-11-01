@@ -2,7 +2,7 @@ import {createHash} from 'node:crypto';
 import {z} from 'zod';
 import {candidateInputSchema,sourceObservationSchema,sourcingUrlSchema,instant,uuid,type SourceObservation} from '@fss/contracts';
 import type {FetchedPage} from '../research/providers.ts';
-import {isPublicResearchUrl,isSameResearchSite} from '../research/sourcePolicy.ts';
+import {isPublicResearchUrl,isSameResearchSite,ownSitePageKind} from '../research/sourcePolicy.ts';
 import type {ManualPhoneSnapshot} from './manualProspectPhone.ts';
 
 export const PREPARED_CAPTURE_V1='prepared-source-association-v1';
@@ -47,9 +47,27 @@ export function validatePreparedCapture(value:unknown,binding:PreparedCaptureBin
 }
 
 /** The caller pairs each newly parsed observation with the adapter page that
- * supplied its bytes. Metadata stays outside observations and model inputs. */
-export function buildPreparedCapture(binding:Omit<PreparedCaptureBinding,'observations'>,pages:readonly {source:SourceObservation;trace:FetchedPage['redirectTrace']}[],policy:PreparedCapturePolicy=PREPARED_CAPTURE_POLICY):PreparedCapture|null {
- const matched=pages.flatMap(({source,trace})=>trace?.version==='page-redirect-trace-v1'&&source.firstParty&&tracedRedirects(trace.urls,binding.sourceUrl,source.url,policy)?[{observationId:source.id,url:source.url,contentHash:source.contentHash,relevantTextHash:source.relevantTextHash,retrievedAt:source.retrievedAt,redirectUrls:[...trace.urls]}]:[]);
+ * supplied its bytes. Metadata stays outside observations and model inputs.
+ * V2 also associates at most one contact, about and team page that the traced landing
+ * page itself linked to (ADR0034): its lineage is the landing page's request chain from
+ * the exact source followed by the linked page's own chain, so every URL the association
+ * depends on keeps its own loss/expiry/denial check. Any other auxiliary page stays unassociated. */
+export function buildPreparedCapture(binding:Omit<PreparedCaptureBinding,'observations'>,pages:readonly {source:SourceObservation;trace:FetchedPage['redirectTrace'];linkedFrom?:string|undefined}[],policy:PreparedCapturePolicy=PREPARED_CAPTURE_POLICY):PreparedCapture|null {
+ const traced=(urls:readonly string[]|undefined,url:string)=>urls!==undefined&&urls[0]===binding.sourceUrl&&urls.at(-1)===url;
+ const kinds=new Set<string>();
+ const matched=pages.flatMap(({source,trace,linkedFrom})=>{
+  if(trace?.version!=='page-redirect-trace-v1'||!source.firstParty)return [];
+  let urls:readonly string[]=trace.urls;
+  if(policy===PREPARED_CAPTURE_POLICY&&linkedFrom!==undefined){
+   const landing=pages.find(page=>page.source.url===linkedFrom&&page.linkedFrom===undefined&&page.source.firstParty&&traced(page.trace?.urls,linkedFrom));
+   const kind=ownSitePageKind(source.url);
+   if(!landing||kind===null||kinds.has(kind))return [];
+   urls=[...landing.trace!.urls,...trace.urls];
+   if(!tracedRedirects(urls,binding.sourceUrl,source.url,policy))return [];
+   kinds.add(kind);
+  }
+  return tracedRedirects(urls,binding.sourceUrl,source.url,policy)?[{observationId:source.id,url:source.url,contentHash:source.contentHash,relevantTextHash:source.relevantTextHash,retrievedAt:source.retrievedAt,redirectUrls:[...urls]}]:[];
+ });
  if(!matched.length)return null;
  return validatePreparedCapture({version:policy,...binding,pages:matched},{...binding,observations:pages.map(p=>p.source)});
 }

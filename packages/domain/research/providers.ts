@@ -98,6 +98,11 @@ export interface FetchedPage {
   readonly url: string;
   /** Opt-in page requests only: initial URL through the final URL, excluding robots reads. */
   readonly redirectTrace?: {readonly version:'page-redirect-trace-v1';readonly urls:readonly string[]};
+  /**
+   * Opt-in page requests only: the final URL of the first-party page whose own published
+   * link named this page's initial URL. Absent for a URL the caller asked for.
+   */
+  readonly linkedFrom?: string;
   /** A sha256 of the exact bytes read. The evidence item's `content_hash`. */
   readonly contentHash: string;
   /** The `content-type` header value, as received. */
