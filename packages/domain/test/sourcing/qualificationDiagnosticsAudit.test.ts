@@ -26,7 +26,7 @@ const fetcher=(pages:ReturnType<typeof page>[],skipped:Record<string,number>={})
 const audit=async(runId:string)=>(await db.session.query<{detail:Record<string,unknown>}>("SELECT detail FROM audit_events WHERE action='sourcing.qualification_recorded' AND detail->>'runId'=$1",[runId])).rows.map(r=>r.detail);
 const diagnostic={version:'qualification-diagnostic-v1',phase:'no_observations',fetchedPages:0,observations:0,completeFirstParty:0,truncatedObservations:0,skipped:{}};
 const failures=[
- ['fetch_failed','source_unavailable'],['fetch_exception','source_unavailable'],['no_observations','source_unavailable'],['observations_over_bound','source_unavailable'],
+ ['fetch_failed','source_unavailable'],['fetch_exception','source_unavailable'],['no_observations','source_unavailable'],
  ['no_complete_first_party','source_incomplete_or_unverified'],['unoffered_observation','invalid_evidence'],['evidence_rejected','invalid_evidence'],
 ] as const;
 it.each(failures)('records %s without changing terminal reason, admission or dispatch count',async(phase,reason)=>{
@@ -35,7 +35,6 @@ it.each(failures)('records %s without changing terminal reason, admission or dis
  if(phase==='fetch_failed')pageFetch={providerKey:'company_page',fetchPages:async()=>({ok:false,costCents:0,failureCode:'private provider message https://private.test'})};
  if(phase==='fetch_exception')pageFetch={providerKey:'company_page',fetchPages:async()=>{throw Error('private exception https://private.test');}};
  if(phase==='no_observations')pageFetch=fetcher([page('')],{status_403:1,status_418:2,'https://private.test':9});
- if(phase==='observations_over_bound')pageFetch=fetcher(Array.from({length:4},()=>page(Array.from({length:7},()=>`<p>${'界'.repeat(1500)}</p>`).join(''))));
  if(phase==='no_complete_first_party')pageFetch=fetcher([page('<p>Third party detail</p>',false),page(Array.from({length:101},(_,i)=>`<p>Detail ${i}</p>`).join(''))],{page_budget_reached:1});
  const extraction:QualificationExtractionProvider={providerKey:'aws_bedrock.sourcing_qualification',countInputTokens:async()=>{counted++;return 300;},extract:async input=>{
   paid++;return {ok:true,costCents:1,value:{openingQuestion:null,facts:[{kind:'firm_identity',value:'not published',observationId:phase==='unoffered_observation'?randomUUID():input.observations[0]!.id,blockId:'missing'}]}};
@@ -49,9 +48,19 @@ it.each(failures)('records %s without changing terminal reason, admission or dis
  expect((await db.session.query('SELECT state,settled_cents FROM provider_reservations')).rows).toEqual(modelPhase?[{state:'settled',settled_cents:1}]:[]);
  expect((await db.session.query('SELECT * FROM sourcing_admissions')).rows).toHaveLength(0);
  if(phase==='no_observations')expect(events[0]?.['diagnostic']).toEqual({...diagnostic,fetchedPages:1,skipped:{status_403:1,status_other:2}});
- if(phase==='observations_over_bound')expect(events[0]?.['diagnostic']).toMatchObject({fetchedPages:4,observations:4,completeFirstParty:4,truncatedObservations:0});
  if(phase==='no_complete_first_party')expect(events[0]?.['diagnostic']).toMatchObject({fetchedPages:2,observations:2,completeFirstParty:0,truncatedObservations:1});
  if(phase==='evidence_rejected')expect(events[0]?.['diagnostic']).toMatchObject({observations:1,completeFirstParty:1});
+});
+// One parsed page is bounded far below the 100000-byte observation bound (12000 characters), so
+// only several pages together exceed it. They are trimmed, lowest priority last, not refused.
+it('trims pages that together exceed the observation bound and offers the rest to the model once',async()=>{
+ const ids=await pending();let counted=0,offered=0;
+ const pageFetch=fetcher(Array.from({length:4},()=>page(Array.from({length:7},()=>`<p>${'界'.repeat(1500)}</p>`).join(''))));
+ await runQualification(ctx(),ids,{pageFetch,extraction:{providerKey:'aws_bedrock.sourcing_qualification',countInputTokens:async input=>{counted++;offered=input.observations.length;return 300;},
+  extract:async input=>({ok:true,costCents:1,value:{openingQuestion:null,facts:[{kind:'firm_identity',value:'not published',observationId:input.observations[0]!.id,blockId:'missing'}]}})}});
+ expect(counted).toBe(1);expect(offered).toBe(3);
+ const events=await audit(ids.runId);expect(events).toHaveLength(1);
+ expect(events[0]?.['diagnostic']).toMatchObject({phase:'evidence_rejected',fetchedPages:4,observations:3});
 });
 it('honestly records eight configured pages and omits over-ceiling capture, without extra model work',async()=>{
  for(const count of [8,9]){
