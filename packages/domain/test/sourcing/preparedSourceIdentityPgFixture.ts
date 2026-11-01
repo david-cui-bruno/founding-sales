@@ -7,6 +7,7 @@ import {seedTwoWorkspaces} from '../db/support/fixtures.ts';
 import {runDiscovery} from '../../sourcing/discovery.ts';
 import {requestQualification,QUALIFICATION_POLICY_VERSION,QUALIFICATION_PROMPT_VERSION} from '../../sourcing/qualificationStore.ts';
 import {VERIFIED_FIRM_POLICY_VERSION} from '../../sourcing/verifiedFirmPolicy.ts';
+import {refusingPageFetch} from './support/discoveryPageFetch.ts';
 
 /** Fictional search/page inputs only. The caller owns the one disposable PG grant. */
 export async function preparedSourceIdentityPgFixture(){
@@ -22,7 +23,7 @@ export async function preparedSourceIdentityPgFixture(){
   VALUES($1,true,2,$2,true,$3::jsonb)`,[workspace,owner,JSON.stringify(evaluation)]);
  await runtime.query('INSERT INTO sourcing_search_account(id) VALUES(true)');
  let searchCalls=0;
- await runDiscovery(worker,{providerKey:'tavily_basic',discover:async()=>{searchCalls++;return {ok:true,credits:1,requestId:'fictional-identity-search',hits:[{url:website,title:label,snippet:'Fictional residential property management in Boston.'}]};}});
+ await runDiscovery(worker,{providerKey:'tavily_basic',discover:async()=>{searchCalls++;return {ok:true,credits:1,requestId:'fictional-identity-search',hits:[{url:website,title:label,snippet:'Fictional residential property management in Boston.'}]};}},refusingPageFetch);
  // Current automatic sourcing intentionally hides fresh needs_review rows from
  // the human review list. Inspect the one actual stored intake row here.
  const acquired=(await runtime.query<{id:string;revision:number;status:string;created_at:Date;payload:unknown}>('SELECT id,revision,status,created_at,payload FROM sourcing_candidates WHERE workspace_id=$1',[workspace])).rows;

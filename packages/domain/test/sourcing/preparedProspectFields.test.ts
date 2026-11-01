@@ -1,9 +1,33 @@
 import {expect,it} from 'vitest';
 import {classifyPreparedPassage} from '../../sourcing/preparedProspectFields.ts';
 
-it('recognizes explicit property-management business without manufacturing residential scope',()=>{
- const text='Our property management company provides professional management services for landlords and property owners.';
+it('recognizes explicit property-management business without manufacturing residential scope from commercial landlords',()=>{
+ const text='Our property management company provides professional management services for commercial landlords and office building owners.';
  expect(classifyPreparedPassage(text,'')).toMatchObject({usefulBusiness:true,residentialContext:false,contrary:false,kinds:expect.arrayContaining(['business'])});
+});
+
+// ADR0034/Step1.6: October31 Peak Richmond, Astoria and TCS briefs showed
+// "Residential fit unknown" although their own passages describe residential
+// landlords, residents and single-family homes. These were red before 1.6.
+it.each([
+ ['Peak Richmond business','Peak Property Management manages rental properties for landlords and investors throughout the Richmond area.'],
+ ['Peak Richmond resident portal','Over 90% of our residents use the resident portal to pay rent online and submit maintenance requests, which our team tracks and schedules.'],
+ ['Astoria tenant portal','When you partner with Astoria Charm, you can rest assured that your tenants are in capable hands. We serve as a reliable point of contact for tenants, addressing concerns, handling inquiries, and providing residents with an online portal for rent payments, maintenance requests, and access to their ledgers. With our proactive approach and personalized service we ensure that every detail is managed efficiently and effectively.'],
+ ['TCS single-family homes','Our team collects rent online and coordinates maintenance for tenants of the single-family homes in our care.'],
+ ['landlord services','Our property management company provides professional management services for landlords and property owners.'],
+ ['community association management','We provide community association management for HOA and condominium communities across Richmond.'],
+])('recognizes residential property-management context: %s',(_case,text)=>{
+ const result=classifyPreparedPassage(text,'');
+ expect(result).toMatchObject({residentialContext:true,contrary:false});expect(result.usefulBusiness||result.usefulOperations).toBe(true);
+});
+
+it.each([
+ 'We manage commercial properties only, including office buildings and retail centers for landlords.',
+ 'Our property management team coordinates maintenance requests for commercial tenants in office buildings.',
+ 'Our platform helps landlords and property managers track tenant maintenance requests and rent payments.',
+ 'We teach landlords how to screen tenants and collect rent from residents.',
+])('keeps contrary, commercial-only, vendor and educational refusals out of residential context: %s',text=>{
+ expect(classifyPreparedPassage(text,'')).toMatchObject({residentialContext:false});
 });
 
 it.each([
@@ -129,7 +153,7 @@ it('retains an explicit name followed by its source role without needing a narra
 
 it('retains the whole tenant-portal process as workflow rather than treating serve-as contact handling as geography',()=>{
  const text='When you partner with Astoria Charm, you can rest assured that your tenants are in capable hands. We serve as a reliable point of contact for tenants, addressing concerns, handling inquiries, and providing residents with an online portal for rent payments, maintenance requests, and access to their ledgers. With our proactive approach and personalized service we ensure that every detail is managed efficiently and effectively.';
- expect(classifyPreparedPassage(text,'')).toEqual({kinds:['workflow'],usefulBusiness:false,usefulOperations:true,residentialContext:false,contrary:false});
+ expect(classifyPreparedPassage(text,'')).toEqual({kinds:['workflow'],usefulBusiness:false,usefulOperations:true,residentialContext:true,contrary:false});
 });
 
 it.each([

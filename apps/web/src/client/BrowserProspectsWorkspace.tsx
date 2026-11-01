@@ -44,7 +44,7 @@ export function BrowserProspectsWorkspace({ client, onOpenCalling }: WorkspaceSc
     </nav>
     {view==='prepared'&&client.pendingResearch()!==null?<p role="status">A saved research request is available in Qualified publications.</p>:null}
     {client.current?.status !== 'signed_in' ? <p role="status">Sign in to read your current prospect supply.</p>
-      : view === 'prepared' ? <PreparedProspects client={client} />
+      : view === 'prepared' ? <PreparedProspects client={client} {...(onOpenCalling ? { onOpenCalling: openCalling } : {})} />
       : view === 'qualified' ? <BrowserResearchQueue client={client} {...(onOpenCalling ? { onOpenCalling: openCalling } : {})} />
       : view === 'retained' ? client.current.role === 'admin' ? <BrowserManualProspects client={client} {...(onOpenCalling ? { onOpenCalling: openCalling } : {})} /> : <p role="status">Retained review requires current administrator access.</p>
       : <div className="prospects-secondary"><BrowserCandidateInventory client={client} /></div>}

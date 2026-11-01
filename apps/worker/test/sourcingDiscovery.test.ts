@@ -6,6 +6,7 @@ import {enqueueJob} from '@fss/domain/jobs/jobStore.ts';
 import {HandlerRegistry} from '@fss/domain/jobs/handlerRegistry.ts';
 import {runOnce} from '../src/runner/jobRunner.ts';
 import {sourcingDiscoveryHandler,sourcingDiscoverySource} from '../src/handlers/sourcingDiscovery.ts';
+import {htmlPageFetch} from '@fss/domain/test/sourcing/support/discoveryPageFetch.ts';
 let db:TestDatabase;
 beforeAll(async()=>{db=await createTestDatabase();});afterAll(async()=>{await db.drop();});
 it('runs a scheduled search outside a rollbackable handler transaction and creates only unverified candidates',async()=>{
@@ -19,12 +20,17 @@ it('runs a scheduled search outside a rollbackable handler transaction and creat
  const peer=await db.appRuntimeSession();
  const discover=vi.fn(async()=>{
   expect((await peer.query('SELECT * FROM sourcing_discovery_attempts')).rows).toHaveLength(1);
-  return {ok:true as const,credits:1,requestId:'fixture',hits:[{url:'https://example.test/',title:'Example PM',snippet:'Residential management'}]};
+  return {ok:true as const,credits:1,requestId:'fixture',hits:[{url:'https://example.test/',title:'Example PM',snippet:'Residential management'},{url:'https://www.allpropertymanagement.com/tx/dallas',title:'Dallas Property Managers',snippet:'Directory'}]};
  });
- const registry=new HandlerRegistry().register(sourcingDiscoveryHandler({providerKey:'tavily_basic',discover}));
+ // The handler hands the injected research fetcher to discovery for the list page (ADR0034).
+ const pageFetch=htmlPageFetch({'https://www.allpropertymanagement.com/tx/dallas':'<a href="https://listed-pm.example.test/">Listed PM</a>'});
+ const registry=new HandlerRegistry().register(sourcingDiscoveryHandler({provider:{providerKey:'tavily_basic',discover},pageFetch}));
  expect((await runOnce(db.session,{registry,owner:'discovery-test',limit:5})).failed).toBe(0);
  expect(discover).toHaveBeenCalledTimes(1);
- expect((await db.session.query('SELECT status,payload FROM sourcing_candidates')).rows[0]).toMatchObject({status:'needs_review',payload:{signal:'fit_only',discoveryQuery:'Dallas Fort Worth residential property management'}});
+ expect(pageFetch.requests.map(r=>[r.urls,r.maxPagesPerFirm])).toEqual([[['https://www.allpropertymanagement.com/tx/dallas'],1]]);
+ const candidates=(await db.session.query<{status:string;payload:{website:string}}>("SELECT status,payload FROM sourcing_candidates ORDER BY payload->>'website'")).rows;
+ expect(candidates.map(c=>c.payload.website)).toEqual(['https://example.test/','https://listed-pm.example.test/']);
+ for(const candidate of candidates)expect(candidate).toMatchObject({status:'needs_review',payload:{signal:'fit_only',discoveryQuery:'Dallas Fort Worth residential property management'}});
  expect((await db.session.query('SELECT id FROM firms')).rows).toHaveLength(0);
  expect(await sourcingDiscoverySource(true).find(db.session,new Date().toISOString())).toEqual([]);
 });

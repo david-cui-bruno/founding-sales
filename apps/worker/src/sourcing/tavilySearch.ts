@@ -1,5 +1,5 @@
 import {z} from 'zod';
-import {DISCOVERY_DIRECTORY_DOMAINS} from '@fss/domain/sourcing/discoveryIdentity.ts';
+import {DISCOVERY_SEARCH_EXCLUDED_DOMAINS} from '@fss/domain/sourcing/discoveryIdentity.ts';
 import {DISCOVERY_RESULT_LIMIT,type DiscoverySearchProvider,type DiscoveryHit} from '@fss/domain/sourcing/discoveryProvider.ts';
 import {isPublicResearchUrl,withoutFragment} from '@fss/domain/research/sourcePolicy.ts';
 import {boundedProviderRequest,type ProviderHttp} from '../providers/boundedHttp.ts';
@@ -17,7 +17,7 @@ export function tavilySearch(apiKey:string,options:{http?:ProviderHttp}={}):Disc
   try {
    const reply=await boundedProviderRequest(http,'https://api.tavily.com/search',{
     method:'POST',headers:{Authorization:`Bearer ${apiKey}`,'Content-Type':'application/json'},
-    body:JSON.stringify({query,search_depth:'basic',topic:'general',max_results:DISCOVERY_RESULT_LIMIT,exclude_domains:DISCOVERY_DIRECTORY_DOMAINS,auto_parameters:false,
+    body:JSON.stringify({query,search_depth:'basic',topic:'general',max_results:DISCOVERY_RESULT_LIMIT,exclude_domains:DISCOVERY_SEARCH_EXCLUDED_DOMAINS,auto_parameters:false,
      include_answer:false,include_raw_content:false,include_images:false,include_usage:true}),
    },new AbortController().signal,15000);
    if(reply.status===401||reply.status===403)return {ok:false,code:'auth_failed'};

@@ -2,14 +2,17 @@
 import '../../src/client/schemaRuntime.ts';
 import {afterEach,expect,it,vi} from 'vitest';
 import {act,cleanup,fireEvent,render,screen,waitFor,within} from '@testing-library/react';
-import {preparedProspectBriefSchema,preparedProspectSummarySchema,type PreparedProspectSummary} from '@fss/contracts';
+import {preparedProspectBriefSchema,preparedProspectSummarySchema,type PreparedProspectCallable,type PreparedProspectSummary} from '@fss/contracts';
 import {BrowserClient} from '../../src/client/BrowserClient.ts';
 import {PreparedProspects} from '../../src/client/PreparedProspects.tsx';
 import {BrowserProspectsWorkspace} from '../../src/client/BrowserProspectsWorkspace.tsx';
 const at='2026-10-30T12:00:00.000Z',id='10000000-0000-4000-8000-000000000001',run='10000000-0000-4000-8000-000000000002';
 const revision='a'.repeat(64),expiry='2026-10-31T12:00:00.000Z';
-const row=(index=1):PreparedProspectSummary=>preparedProspectSummarySchema.parse({target:{candidateId:`10000000-0000-4000-8000-${String(index).padStart(12,'0')}`,candidateRevision:2,runId:run},displayName:`Harbor Residential ${index}`,discoveryLabel:`Home | HRM ${index}`,website:'https://harbor.example.test/',targetingLocality:'Boston',targetingRegion:'MA',state:'prepared',summary:'Retained first-party residential management and maintenance workflow context.',unknowns:['Business email is unknown','Buying intent is unknown'],validUntil:expiry});
-const brief=preparedProspectBriefSchema.parse({...row(),policyVersion:'prepared-prospect-v1',checkedAt:at,coverage:'complete_retained_pages',nextAction:'Research who owns maintenance intake and vendor coordination.',contactAuthority:'not_granted',passages:[
+const notCallable:PreparedProspectCallable={state:'not_callable',missing:['no_published_phone'],phone:null,person:null,residential:true};
+const row=(index=1,callable:PreparedProspectCallable=notCallable):PreparedProspectSummary=>preparedProspectSummarySchema.parse({target:{candidateId:`10000000-0000-4000-8000-${String(index).padStart(12,'0')}`,candidateRevision:2,runId:run},displayName:`Harbor Residential ${index}`,discoveryLabel:`Home | HRM ${index}`,website:'https://harbor.example.test/',targetingLocality:'Boston',targetingRegion:'MA',state:'prepared',summary:'Retained first-party residential management and maintenance workflow context.',unknowns:['Business email is unknown','Buying intent is unknown'],validUntil:expiry,callable,companyHost:'harbor.example.test'});
+// V1 briefs predate callable assessment; rolling clients still read them.
+const legacy=({callable:_callable,companyHost:_companyHost,...summary}:PreparedProspectSummary)=>summary;
+const brief=preparedProspectBriefSchema.parse({...legacy(row()),policyVersion:'prepared-prospect-v1',checkedAt:at,coverage:'complete_retained_pages',nextAction:'Research who owns maintenance intake and vendor coordination.',contactAuthority:'not_granted',passages:[
  {kind:'business',observationId:id,blockId:'business',url:'https://harbor.example.test/about',retrievedAt:at,quote:'Harbor Residential manages residential homes and apartments.'},
  {kind:'workflow',observationId:id,blockId:'workflow',url:'https://harbor.example.test/services',retrievedAt:at,quote:'The account manager coordinates tenant intake and outside vendors.'},
  {kind:'person',observationId:id,blockId:'person',url:'https://harbor.example.test/team',retrievedAt:at,quote:'Morgan Lane is listed as the owner.'},
@@ -140,7 +143,7 @@ it('preserves inherited source notices in both the page and selected brief witho
 
 it('shows partial retained blocks with their coverage and leaves missing fields unknown',async()=>{
  const f=await mounted();await screen.findByRole('heading',{name:row().displayName});
- f.read({...brief,policyVersion:'prepared-prospect-v2',coverage:'partial_retained_pages',
+ f.read({...brief,policyVersion:'prepared-prospect-v2',coverage:'partial_retained_pages',callable:notCallable,companyHost:'harbor.example.test',
   unknowns:['Some source content was omitted; buyer and residential fit remain unknown.'],
   passages:brief.passages.map(p=>({...p,sourceCoverage:'partial_page'}))});
  fireEvent.click(screen.getByRole('button',{name:'Open company brief for '+row().displayName}));
@@ -154,7 +157,7 @@ it('shows partial retained blocks with their coverage and leaves missing fields 
 });
 
 it('refuses partial V2 passages whose response claims complete coverage or omits provenance',()=>{
- const partial={...brief,policyVersion:'prepared-prospect-v2',coverage:'partial_retained_pages',passages:brief.passages.map(p=>({...p,sourceCoverage:'partial_page'}))};
+ const partial={...brief,policyVersion:'prepared-prospect-v2',coverage:'partial_retained_pages',callable:notCallable,companyHost:'harbor.example.test',passages:brief.passages.map(p=>({...p,sourceCoverage:'partial_page'}))};
  expect(preparedProspectBriefSchema.safeParse(partial).success).toBe(true);
  expect(preparedProspectBriefSchema.safeParse({...partial,coverage:'complete_retained_pages'}).success).toBe(false);
  expect(preparedProspectBriefSchema.safeParse({...partial,passages:partial.passages.map(p=>Object.fromEntries(Object.entries(p).filter(([key])=>key!=='sourceCoverage')))}).success).toBe(false);
@@ -193,7 +196,7 @@ it('groups adjacent exact website/location metadata even when discovery labels d
  expect(screen.getAllByRole('button',{name:/Open company brief for/iu})).toHaveLength(5);
  expect(screen.getAllByRole('heading',{level:3}).map(h=>h.textContent)).toEqual([first.displayName,second.displayName,office.displayName,directory.displayName,separated.displayName]);
  expect(screen.getByText('5 prepared · 0 need research on this page. This is research supply, not a contact-ready count.')).toBeTruthy();
- f.read({...brief,...second});fireEvent.click(screen.getByRole('button',{name:'Open company brief for '+second.displayName}));
+ f.read({...brief,...legacy(second)});fireEvent.click(screen.getByRole('button',{name:'Open company brief for '+second.displayName}));
  await screen.findByRole('article',{name:'Prepared company brief'});expect(f.requests.at(-1)?.body).toEqual(second.target);
  expect(f.requests.map(r=>r.url)).toEqual(['/browser/api/sourcing/prepared-prospects/list','/browser/api/sourcing/prepared-prospects/list','/browser/api/sourcing/prepared-prospects/read']);
  f.client.dispose();
@@ -210,4 +213,83 @@ it('does not group records without a website or across distinct directory paths,
  f.rows(records);fireEvent.click(screen.getByRole('button',{name:'Refresh companies'}));await screen.findByRole('heading',{name:records[6]!.displayName});
  expect(screen.queryByRole('group',{name:'Records with the same website'})).toBeNull();expect(screen.getAllByRole('button',{name:/Open company brief for/iu})).toHaveLength(7);
  f.client.dispose();
+});
+
+const callable:PreparedProspectCallable={state:'callable',missing:[],phone:'(804) 555-0142',person:'Jordan Reyes, Owner',residential:true};
+const listUrl='/browser/api/sourcing/prepared-prospects/list';
+it('badges callable rows and Callable today reads newest order, showing only callable rows of this page honestly',async()=>{
+ const f=await mounted();await screen.findByRole('heading',{name:row().displayName});
+ expect(screen.queryByText('Callable',{exact:true})).toBeNull();
+ f.rows([row(1),row(2,callable)],true);
+ const toggle=screen.getByRole('button',{name:'Callable today'});expect(toggle.getAttribute('aria-pressed')).toBe('false');
+ fireEvent.click(toggle);await screen.findByRole('heading',{name:row(2).displayName});
+ expect(f.requests.at(-1)).toEqual({url:listUrl,body:{offset:0,order:'newest'}});
+ expect(screen.getByRole('button',{name:'Callable today'}).getAttribute('aria-pressed')).toBe('true');
+ expect(screen.queryByRole('heading',{name:row(1).displayName})).toBeNull();
+ expect(screen.getByText('Callable',{exact:true})).toBeTruthy();
+ expect(screen.getByText('Published phone: (804) 555-0142 · Person in sources: Jordan Reyes, Owner · Residential context observed')).toBeTruthy();
+ expect(screen.queryByRole('link',{name:/555-0142/u})).toBeNull();
+ expect(screen.getByText(/^1 callable company \(one per website host, not repeating earlier pages\) among 2 newest records on this page\..*not permission to call\.$/u)).toBeTruthy();
+ f.rows([row(3)]);fireEvent.click(screen.getByRole('button',{name:'Next companies'}));
+ await screen.findByText('No callable companies on this page. Later pages may include more.');
+ expect(f.requests.at(-1)).toEqual({url:listUrl,body:{offset:50,viewRevision:revision,order:'newest'}});
+ f.rows([row(1),row(2,callable)]);fireEvent.click(screen.getByRole('button',{name:'Callable today'}));
+ await screen.findByRole('heading',{name:row(1).displayName});
+ expect(f.requests.at(-1)).toEqual({url:listUrl,body:{offset:0}});
+ expect(screen.getByText('2 prepared · 0 need research on this page. This is research supply, not a contact-ready count.')).toBeTruthy();f.client.dispose();
+});
+
+it('opens the existing Calling selection for a callable brief without creating calling work',async()=>{
+ vi.spyOn(Date,'now').mockReturnValue(Date.parse(at));const f=setup();await f.client.refresh();const onOpenCalling=vi.fn();
+ const target=row(2,callable);f.rows([target]);
+ f.read({...brief,...target,policyVersion:'prepared-prospect-v2'});
+ render(<BrowserProspectsWorkspace client={f.client} onOpenCalling={onOpenCalling}/>);
+ await screen.findByRole('heading',{name:target.displayName});
+ fireEvent.click(screen.getByRole('button',{name:'Open company brief for '+target.displayName}));
+ const detail=await screen.findByRole('article',{name:'Prepared company brief'});
+ expect(within(detail).getByText('Callable',{exact:true})).toBeTruthy();expect(within(detail).getByText(/Published phone: \(804\) 555-0142/u)).toBeTruthy();
+ expect(within(detail).getByText(/No permission to call or email/u)).toBeTruthy();
+ fireEvent.click(within(detail).getByRole('button',{name:'Open in Calling'}));
+ expect(onOpenCalling).toHaveBeenCalledTimes(1);expect(onOpenCalling).toHaveBeenCalledWith({kind:'candidate',candidateId:target.target.candidateId,expectedCandidateRevision:2,prospectPage:{state:'all',offset:0,candidateId:target.target.candidateId,expectedRevision:2}});
+ expect(f.requests.map(r=>r.url)).toEqual([listUrl,'/browser/api/sourcing/prepared-prospects/read']);f.client.dispose();
+});
+
+it('offers no Calling action for a brief that is not callable',async()=>{
+ vi.spyOn(Date,'now').mockReturnValue(Date.parse(at));const f=setup();await f.client.refresh();const onOpenCalling=vi.fn();
+ f.read({...brief,...row(),policyVersion:'prepared-prospect-v2'});
+ render(<BrowserProspectsWorkspace client={f.client} onOpenCalling={onOpenCalling}/>);
+ await screen.findByRole('heading',{name:row().displayName});
+ fireEvent.click(screen.getByRole('button',{name:'Open company brief for '+row().displayName}));
+ const detail=await screen.findByRole('article',{name:'Prepared company brief'});
+ expect(within(detail).queryByRole('button',{name:'Open in Calling'})).toBeNull();expect(within(detail).queryByText('Callable',{exact:true})).toBeNull();f.client.dispose();
+});
+
+it('Callable today shows and counts one callable company per host while the normal view keeps every research row',async()=>{
+ const f=await mounted();await screen.findByRole('heading',{name:row().displayName});
+ const other={...row(3,callable),website:'https://other.example.test/',companyHost:'other.example.test'};
+ f.rows([row(1,callable),row(2,callable),other]);
+ fireEvent.click(screen.getByRole('button',{name:'Callable today'}));await screen.findByRole('heading',{name:other.displayName});
+ expect(screen.getByRole('heading',{name:row(1).displayName})).toBeTruthy();expect(screen.queryByRole('heading',{name:row(2).displayName})).toBeNull();
+ expect(screen.getByText(/^2 callable companies \(one per website host, not repeating earlier pages\) among 3 newest records on this page\./u)).toBeTruthy();
+ fireEvent.click(screen.getByRole('button',{name:'Callable today'}));await screen.findByRole('heading',{name:row(2).displayName});
+ expect(screen.getAllByRole('button',{name:/Open company brief for/iu})).toHaveLength(3);f.client.dispose();
+});
+
+it('Callable today does not repeat a host across pages of one continuation and Previous reproduces the same result',async()=>{
+ const f=await mounted();await screen.findByRole('heading',{name:row().displayName});
+ const shared=(index:number)=>({...row(index,callable),website:'https://shared.example.test/',companyHost:'shared.example.test'});
+ const first=[...Array.from({length:49},(_,index)=>row(index+1)),shared(50)],other={...row(52,callable),website:'https://other.example.test/',companyHost:'other.example.test'};
+ f.rows(first,true);fireEvent.click(screen.getByRole('button',{name:'Callable today'}));await screen.findByRole('heading',{name:shared(50).displayName});
+ expect(screen.getByText(/^1 callable company \(one per website host, not repeating earlier pages\) among 50 newest records on this page\./u)).toBeTruthy();
+ f.rows([shared(51),other]);fireEvent.click(screen.getByRole('button',{name:'Next companies'}));await screen.findByRole('heading',{name:other.displayName});
+ expect(screen.queryByRole('heading',{name:shared(51).displayName})).toBeNull();
+ expect(screen.getByText(/^1 callable company \(one per website host, not repeating earlier pages\) among 2 newest records on this page\./u)).toBeTruthy();
+ f.rows(first,true);fireEvent.click(screen.getByRole('button',{name:'Previous companies'}));await screen.findByRole('heading',{name:shared(50).displayName});
+ f.rows([shared(51),other]);fireEvent.click(screen.getByRole('button',{name:'Next companies'}));await screen.findByRole('heading',{name:other.displayName});
+ expect(screen.queryByRole('heading',{name:shared(51).displayName})).toBeNull();
+ expect(f.requests.slice(-3).map(r=>r.body)).toEqual([{offset:50,viewRevision:revision,order:'newest'},{offset:0,viewRevision:revision,order:'newest'},{offset:50,viewRevision:revision,order:'newest'}]);
+ // A fresh read (toggle off and on) starts a new continuation: the shared host shows again on its first page.
+ fireEvent.click(screen.getByRole('button',{name:'Callable today'}));await screen.findByRole('heading',{name:shared(51).displayName});
+ fireEvent.click(screen.getByRole('button',{name:'Callable today'}));await screen.findByRole('heading',{name:shared(51).displayName});
+ expect(screen.getByText(/^2 callable companies/u)).toBeTruthy();f.client.dispose();
 });

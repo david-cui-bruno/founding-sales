@@ -5,6 +5,7 @@ import {repositoryContext,workspaceScope} from '../../db/workspaceScope.ts';
 import {withTransaction} from '../../db/queryable.ts';
 import {saveTargetingProposal,applyTargetingProposal,readTargetingPolicy} from '../../sourcing/targetingProposals.ts';
 import {runDiscovery} from '../../sourcing/discovery.ts';
+import {refusingPageFetch} from './support/discoveryPageFetch.ts';
 let db:TestDatabase;let seeded:TwoWorkspaces;
 const ctx=()=>repositoryContext(workspaceScope(seeded.alpha.workspaceId,{kind:'user',userId:seeded.alpha.admin.userId,role:'admin'}),db.session);
 const tx=<T>(fn:()=>Promise<T>)=>withTransaction(db.session,fn);
@@ -33,7 +34,7 @@ it('freezes the query version and location before the provider call even if poli
  await runDiscovery(ctx(),{providerKey:'tavily_basic',discover:async()=>{
   expect((await tx(()=>applyTargetingProposal(ctx(),{id:draft.value.id,expectedRevision:1}))).ok).toBe(true);
   return {ok:true,credits:1,requestId:'policy-race',hits:[{url:'https://frozen-policy.example.test/',title:'PM',snippet:'Source excerpt'}]};
- }});
+ }},refusingPageFetch);
  expect((await db.session.query('SELECT policy_version,query_id FROM sourcing_discovery_attempts WHERE workspace_id=$1',[seeded.alpha.workspaceId])).rows[0]).toMatchObject({policy_version:before.version,query_id:before.queries[0]!.id});
  expect((await db.session.query("SELECT payload FROM sourcing_candidates WHERE payload->>'website'='https://frozen-policy.example.test/'")).rows[0]).toMatchObject({payload:{locality:before.queries[0]!.locality,region:before.queries[0]!.region}});
 });

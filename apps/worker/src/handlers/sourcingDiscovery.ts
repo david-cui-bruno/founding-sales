@@ -4,16 +4,18 @@ import type {JobSpecification} from '@fss/domain/jobs/jobStore.ts';
 import {repositoryContext,workspaceScope} from '@fss/domain/db/workspaceScope.ts';
 import type {JobHandler} from '@fss/domain/jobs/handlerRegistry.ts';
 import type {DiscoverySearchProvider} from '@fss/domain/sourcing/discoveryProvider.ts';
+import type {PageFetchProvider} from '@fss/domain/research/providers.ts';
 import {runDiscovery} from '@fss/domain/sourcing/discovery.ts';
 import {readResearchSettings} from '@fss/domain/research/settings.ts';
 import {listApplicableHolds} from '@fss/domain/policy/holds.ts';
 import type {DueWorkSource} from '../scheduler/schedulerPass.ts';
-export function sourcingDiscoveryHandler(provider:DiscoverySearchProvider|undefined,apollo?:ApolloDiscoveryDependencies):JobHandler {
+/** Search needs the research page fetcher: list hits are read once for company links (ADR0034). */
+export function sourcingDiscoveryHandler(search:{readonly provider:DiscoverySearchProvider;readonly pageFetch:PageFetchProvider}|undefined,apollo?:ApolloDiscoveryDependencies):JobHandler {
  return {kind:'sourcing.discover',protection:'outbound_fence',maxAttempts:1,leaseSeconds:60,
   handle:async input=>{
    const ctx=repositoryContext(input.scope,input.session);
    if(input.job.payload['provider']==='apollo_free'){if(apollo)await runApolloDiscovery(ctx,apollo);return;}
-   if(provider)await runDiscovery(ctx,provider);
+   if(search)await runDiscovery(ctx,search.provider,search.pageFetch);
   }};
 }
 export function sourcingDiscoverySource(enabled:boolean):DueWorkSource {

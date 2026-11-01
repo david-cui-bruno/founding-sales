@@ -1,7 +1,7 @@
 import {manualPhoneChoiceSchema,manualPhoneSchema,type ManualPhoneChoice} from '@fss/contracts';
 import type {z} from 'zod';
 import {canonicalizePhone} from '../src/rules/suppressionCanonicalization.ts';
-import {isWholeManualPhoneLiteral} from './manualProspectLiteralPhone.ts';
+import {V2_ONLY_PHONE_LABEL,isWholeManualPhoneLiteral,phoneBlockAllowsV2} from './manualProspectLiteralPhone.ts';
 import {projectProspectPhoneDiscovery} from './prospectPhoneDiscoveryProjection.ts';
 import type {PhoneDiscoveryRun} from './prospectPhoneDiscoveryStore.ts';
 
@@ -19,7 +19,10 @@ export function projectManualPhoneChoice(run:PhoneDiscoveryRun|undefined,raw:unk
  const reviewed=evidence.state==='conflicting'&&evidence.diagnostics?.entries.some(v=>v.reason==='unattached_label_content'&&location(v));
  if(!supported&&!reviewed)return null;
  const label=block.text.slice(choice.labelStart,choice.labelEnd),gap=block.text.slice(choice.labelEnd,choice.start),literal=block.text.slice(choice.start,choice.end);
- if(!/^(?:office\s+phone|main\s+phone|telephone|phone|tel|call\s+us)$/iu.test(label)||gap.length>80||
+ // v2 verb and phone-emoji labels are real spans before the literal; a standalone self-span is never a choice.
+ // Supported and reviewed-diagnostic paths alike: a v2-only label never attaches beside another line or purpose.
+ if(V2_ONLY_PHONE_LABEL.test(label)&&!phoneBlockAllowsV2(block.text))return null;
+ if(!/^(?:office\s+phone|main\s+phone|telephone|phone|tel|call\s+us|please\s+call|call|📞|☎\uFE0F?)$/iu.test(label)||gap.length>80||
   !/^\s*(?::|[.-])?\s*(?:today\s+)?(?:at\s*:?)?\s*$/iu.test(gap)||
   /\b(?:fax|mobile|personal|emergency|vendor|powered\s+by|website\s+by|testimonial|customer\s+review)\b/iu.test(block.text)||
   !/^[0-9+(). \t-]+$/u.test(literal)||!isWholeManualPhoneLiteral(block.text,choice.start,choice.end))return null;

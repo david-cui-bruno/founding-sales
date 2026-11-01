@@ -288,7 +288,9 @@ export function registerHandlers(
   // the opposite of `classify.reply`, and the difference is that a classification
   // with no model has nothing at all to record.
   registry.register(socialDraftHandler(composition.classifier?.processEnabled?socialDraftModel(composition.classifier.transport):null));
-  if(composition.discovery||composition.apolloDiscovery)registry.register(sourcingDiscoveryHandler(composition.discovery,composition.apolloDiscovery));
+  // Tavily discovery reads list pages through the same research fetcher as qualification.
+  const search=composition.discovery&&composition.research?{provider:composition.discovery,pageFetch:composition.research.pageFetch}:undefined;
+  if(search||composition.apolloDiscovery)registry.register(sourcingDiscoveryHandler(search,composition.apolloDiscovery));
   if(composition.research){
     registry.register(sourcingQualificationHandler({pageFetch:composition.research.pageFetch,extraction:composition.classifier?.processEnabled?qualificationExtraction(composition.classifier.transport):null}));
     registry.register(prospectPhoneDiscoveryHandler({pageFetch:composition.research.pageFetch,...log?{log}:{}}));
@@ -496,7 +498,7 @@ export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom'
     ...composition.crmExtraction?.mailEvidence===undefined?{}:{crmMailProcessing:composition.crmExtraction.mailEvidence},
     socialDraft: composition.classifier?.processEnabled===true, crmCaptureRead:composition.crmCaptureRead!==undefined,
     qualification: composition.research !== undefined && composition.classifier?.processEnabled===true,
-    discovery: composition.discovery !== undefined,
+    discovery: composition.discovery !== undefined && composition.research !== undefined,
     ...composition.apolloDiscovery?{apolloDiscovery:{accountRef:composition.apolloDiscovery.accountRef,keyRef:composition.apolloDiscovery.keyRef}}:{},
     sourcing: composition.research !== undefined,
     meetingAutoRecording: composition.meetingAutoRecording !== undefined,

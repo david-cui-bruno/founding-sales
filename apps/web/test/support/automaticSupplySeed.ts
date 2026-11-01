@@ -37,7 +37,7 @@ export async function ingestAutomaticSupply(app: ThinHostApp, suffixes: readonly
   await runDiscovery(supplyContext(app), { providerKey: 'tavily_basic', discover: async () => {
     searches += 1;
     return { ok: true, credits: 1, requestId: `controlled-${suffixes.join('-')}`, hits: names.map((title, i) => ({ title, url: websites[i]!, snippet: 'Residential property management in Arlington Texas' })) };
-  } });
+  } }, { providerKey: 'fixture', fetchPages: async () => ({ ok: false, failureCode: 'fixture_refused', costCents: 0 }) });
   assert.equal(searches, 1);
   const rows = await app.fixture.db.query<{ id: string; revision: number; payload: CandidateInput; attempt_id: string }>('SELECT c.id,c.revision,c.payload,h.attempt_id FROM sourcing_candidates c JOIN sourcing_discovery_hits h ON h.workspace_id=c.workspace_id AND h.candidate_id=c.id WHERE c.workspace_id=$1 AND c.payload->>\'website\'=ANY($2::text[])', [app.fixture.alpha.workspaceId, websites]);
   assert.equal(rows.rows.length, suffixes.length);

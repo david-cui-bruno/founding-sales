@@ -6,8 +6,10 @@ const hash = z.string().regex(/^[a-f0-9]{64}$/u);
 const url = z.string().min(1).max(2000);
 const revision = z.number().int().positive();
 const offset = z.number().int().min(0).max(PROSPECT_PHONE_CAPTURE_LIMITS.maxBlockCharacters);
+/** v2 (ADR0034) adds verb-before-prose and standalone published numbers; v1 spans are unchanged and still readable. */
+const parser = z.enum(['manual-literal-phone-v1', 'manual-literal-phone-v2']);
 export const manualLiteralPhoneCoverageSchema = z.strictObject({
-  parser: z.literal('manual-literal-phone-v1'),
+  parser,
   state: z.enum(['complete', 'unavailable', 'changed', 'bounded']),
   observations: z.number().int().min(0).max(8),
   blocks: z.number().int().min(0).max(1024),
@@ -30,7 +32,7 @@ export const manualLiteralPhoneDiagnosticSchema = z.strictObject({
   reason: z.enum(['unattached_label_content', 'unsupported_literal', 'ambiguous_context']),
   runId: uuid, observationId: uuid, blockId: z.string().min(1).max(80),
   url, retrievedAt: instant, contentHash: hash, relevantTextHash: hash,
-  parser: z.literal('manual-literal-phone-v1'),
+  parser,
   label: z.string().min(1).max(200), labelStart: offset, labelEnd: offset,
   authority, lineage,
 }).superRefine((value, ctx) => {
@@ -50,7 +52,7 @@ export const manualLiteralPhoneSourceSchema = z.strictObject({
   method: z.literal('retained_original_literal'),
   runId: uuid, observationId: uuid, blockId: z.string().min(1).max(80),
   url, retrievedAt: instant, contentHash: hash, relevantTextHash: hash,
-  parser: z.literal('manual-literal-phone-v1'),
+  parser,
   literal: z.string().min(1).max(200), start: offset, end: offset,
   label: z.string().min(1).max(200), labelStart: offset, labelEnd: offset,
   normalizedValue: z.string().regex(/^\+[1-9]\d{7,14}$/u).nullable(),

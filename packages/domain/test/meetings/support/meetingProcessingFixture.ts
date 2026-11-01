@@ -5,7 +5,7 @@ import { meetingTranscriptionFixture } from './meetingTranscriptionFixture.ts';
 export const at = '2026-10-03T03:00:00.000Z';
 export const accountId = '123456789012';
 export const jobPrefix = 'fss-test';
-export const coverage = { accountId, service: 'transcribe' as const, evidenceRef: 'test-only-credit-evidence', verifiedAt: '2026-10-01T00:00:00.000Z', validUntil: '2026-11-01T00:00:00.000Z', status: 'verified' as const };
+export const coverage = { accountId, service: 'transcribe' as const, evidenceRef: 'test-only-credit-evidence', verifiedAt: '2026-10-01T00:00:00.000Z', validUntil: new Date(Date.now() + 30 * 86_400_000).toISOString(), status: 'verified' as const };
 export function prepared(recordingId: string, durationMs = 1200000) {
   return { inputKey: `meetings-processing/${recordingId}/${randomUUID()}.flac`, durationMs, sizeBytes: 500, sha256: 'a'.repeat(64), mediaFormat: 'flac' as const };
 }

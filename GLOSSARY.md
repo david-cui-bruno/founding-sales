@@ -36,6 +36,10 @@ _Avoid_: human confirmation or contact eligibility when referring only to source
 A company research brief supported by attributed business or substantive operational evidence, with sources, dates and coverage gaps visible. Company authorship, residential fit, buyer, intent and contact readiness may remain unknown; the brief grants no contact permission.
 _Avoid_: eligible lead when referring only to useful company research
 
+**Callable prospect**:
+A prepared prospect for one company host whose own-site retained passages include a published phone and attributed property-management business context, with no contrary context. It is research readiness for a founder call; Calling's own checks still decide whether a call may proceed.
+_Avoid_: contact-ready or eligible lead when referring only to this research state
+
 **Calling preparation**:
 An unqualified company record whose reviewed context and phone depend on a current retained source and explicit kept choice. It conveys no qualification or contact permission.
 _Avoid_: prepared prospect when referring only to this source-dependent context

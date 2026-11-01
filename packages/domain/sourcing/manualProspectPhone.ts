@@ -4,7 +4,7 @@ import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {canonicalizePhone} from '../src/rules/suppressionCanonicalization.ts';
 import {MANUAL_SOURCE_LOSS_ACTION} from './manualProspectSourceLoss.ts';
 import {safeManualReference,type ManualProspectRow} from './manualProspectProjection.ts';
-import {scanManualLiteralPhones} from './manualProspectLiteralPhone.ts';
+import {MANUAL_LITERAL_PHONE_PARSER,scanManualLiteralPhones} from './manualProspectLiteralPhone.ts';
 import {originalAuthorities,originalLineage,type ManualOriginalSnapshot} from './manualProspectOriginalAuthority.ts';
 
 type PhoneEvidence=NonNullable<ManualProspect['phoneEvidence']>;
@@ -88,7 +88,7 @@ export function projectManualPhone(snapshot:ManualPhoneSnapshot|undefined,now=Da
  if(!snapshot)return missing;
  if(snapshot.dependency_changed)return changedManualPhone();
  const lineage=originalLineage(snapshot);
- if(!lineage)return {state:'not_extracted',reason:'retained_ancestry_unavailable',coverage:{parser:'manual-literal-phone-v1',state:'unavailable',observations:0,blocks:0}};
+ if(!lineage)return {state:'not_extracted',reason:'retained_ancestry_unavailable',coverage:{parser:MANUAL_LITERAL_PHONE_PARSER,state:'unavailable',observations:0,blocks:0}};
  const factEvidence=projectFactPhone(snapshot,now);
  // Untagged legacy fact provenance remains compatible. First-party originals,
  // however, are parsed independently even when model facts were malformed.
@@ -107,7 +107,7 @@ export function projectManualPhone(snapshot:ManualPhoneSnapshot|undefined,now=Da
  if(values.size===1)return {state:'observed',value:[...values][0]!,sources,coverage:scan.coverage};
  return {state:'not_extracted',reason:'retained_text_not_extracted',coverage:scan.coverage};
 }
-export function changedManualPhone():PhoneEvidence{return {state:'not_extracted',reason:'optional_source_changed',coverage:{parser:'manual-literal-phone-v1',state:'changed',observations:0,blocks:0}};}
+export function changedManualPhone():PhoneEvidence{return {state:'not_extracted',reason:'optional_source_changed',coverage:{parser:MANUAL_LITERAL_PHONE_PARSER,state:'changed',observations:0,blocks:0}};}
 /** Preserve existing whole-fact behavior, never promote narrative model text to a literal. */
 function projectFactPhone(snapshot:ManualPhoneSnapshot,now:number):PhoneEvidence{
  const missing:PhoneEvidence={state:'not_extracted',reason:'no_current_permitted_phone_evidence'};

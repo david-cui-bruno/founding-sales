@@ -13,6 +13,7 @@ import {updateResearchSettings} from '../../research/settings.ts';
 import {readQualification,requestQualification} from '../../sourcing/qualificationStore.ts';
 import type {PageFetchProvider} from '../../research/providers.ts';
 import type {QualificationExtractionProvider} from '../../sourcing/qualificationPrompt.ts';
+import {refusingPageFetch} from './support/discoveryPageFetch.ts';
 let db:TestDatabase,workspaceId:string;
 const ctx=()=>repositoryContext(workspaceScope(workspaceId,{kind:'system',component:'worker'}),db.session);
 beforeAll(async()=>{db=await createTestDatabase();await registerOpeningCompatibilityDatabases();workspaceId=(await seedTwoWorkspaces(db.session)).alpha.workspaceId;});
@@ -35,7 +36,7 @@ const extraction:QualificationExtractionProvider={providerKey:'aws_bedrock.sourc
  return {ok:true,costCents:1,value:{facts:[...(['firm_identity','residential_management','service_area'] as const).map(kind=>({kind,observationId:source.id,blockId:block.id,value:block.text})),{kind:'business_email',observationId:source.id,blockId:email.id,value:email.text}],openingQuestion:null}};
 }};
 async function discovered(){
- await runDiscovery(ctx(),{providerKey:'tavily_basic',discover:async()=>({ok:true,credits:1,requestId:'fixture',hits:[{url:'https://example.test/',title:'Boston Real Estate Development - Property Management - ERG',snippet:'Recorded search excerpt; not verified.'}]})});
+ await runDiscovery(ctx(),{providerKey:'tavily_basic',discover:async()=>({ok:true,credits:1,requestId:'fixture',hits:[{url:'https://example.test/',title:'Boston Real Estate Development - Property Management - ERG',snippet:'Recorded search excerpt; not verified.'}]})},refusingPageFetch);
  const listed=await listCandidates(ctx(),{status:'needs_review',offset:0});if(!listed.ok)throw Error(listed.reason);
  const candidate=listed.value.candidates[0]!;
  // Identity recovery exercises explicitly requested research, never discovery fan-out.
@@ -178,7 +179,7 @@ it.each(['workspace','channel'] as const)('sees a %s research hold committed whi
 // the public runner. No model or page network calls; this is not yield evidence.
 it('recovers the recorded BRG office locality missed by extraction and requires fresh revision evidence',async()=>{
  const payload=recordedBrg.candidate;
- await runDiscovery(ctx(),{providerKey:'tavily_basic',discover:async()=>({ok:true,credits:1,requestId:'recorded-brg',hits:[{url:payload.website,title:payload.firmName,snippet:payload.evidence}]})});
+ await runDiscovery(ctx(),{providerKey:'tavily_basic',discover:async()=>({ok:true,credits:1,requestId:'recorded-brg',hits:[{url:payload.website,title:payload.firmName,snippet:payload.evidence}]})},refusingPageFetch);
  const listed=await listCandidates(ctx(),{status:'needs_review',offset:0});if(!listed.ok)throw Error(listed.reason);
  const candidate=listed.value.candidates[0]!;
  await withTransaction(db.session,()=>requestQualification(ctx(),{candidateId:candidate.id,expectedRevision:candidate.revision}));

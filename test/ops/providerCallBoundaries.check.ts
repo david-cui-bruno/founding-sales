@@ -88,7 +88,7 @@ export const BOUNDARIES: readonly Boundary[] = [
     owner: 'finishOfficeResearch',
     methods: { fetchPages: 1, countInputTokens: 1, extract: 1 },
   },
-  {name:'continuous discovery search',site:'packages/domain/sourcing/discovery.ts',owner:'runDiscovery',methods:{discover:1}},
+  {name:'continuous discovery search',site:'packages/domain/sourcing/discovery.ts',owner:'runDiscovery',methods:{discover:1,fetchPages:1}},
   {name:'discovery evaluation search',site:'apps/worker/src/sourcing/evaluateDiscovery.ts',owner:'evaluateDiscovery',methods:{discover:1}},
   { name:'Zoom local recording update', site:'packages/domain/meetings/autoRecording.ts', owner:'runMeetingRecordingSetup', methods:{setLocalAutoRecording:1} },
   {
