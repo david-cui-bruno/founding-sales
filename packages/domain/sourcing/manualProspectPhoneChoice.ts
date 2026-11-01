@@ -1,7 +1,7 @@
 import {manualPhoneChoiceSchema,manualPhoneSchema,type ManualPhoneChoice,type ManualProspect} from '@fss/contracts';
 import type {z} from 'zod';
 import {canonicalizePhone} from '../src/rules/suppressionCanonicalization.ts';
-import {V2_ONLY_PHONE_LABEL,isWholeManualPhoneLiteral,phoneBlockAllowsV2} from './manualProspectLiteralPhone.ts';
+import {V2_ONLY_PHONE_LABEL,isStandalonePublishedLiteral,isWholeManualPhoneLiteral,phoneBlockAllowsV2} from './manualProspectLiteralPhone.ts';
 import {projectManualPhone,type ManualPhoneSnapshot} from './manualProspectPhone.ts';
 import {preparedPhoneSource} from './preparedPhoneSource.ts';
 import {projectProspectPhoneDiscovery} from './prospectPhoneDiscoveryProjection.ts';
@@ -49,7 +49,7 @@ function selectedPhone(source:ChoiceSource,choice:ManualPhoneChoice):ManualPhone
  if(!standalone&&(!/^(?:office\s+phone|main\s+phone|telephone|phone|tel|call\s+us|please\s+call|call|📞|☎\uFE0F?)$/iu.test(label)||gap.length>80||
   !/^\s*(?::|[.-])?\s*(?:today\s+)?(?:at\s*:?)?\s*$/iu.test(gap))||
   /\b(?:fax|mobile|personal|emergency|vendor|powered\s+by|website\s+by|testimonial|customer\s+review)\b/iu.test(block.text)||
-  !/^[0-9+(). \t-]+$/u.test(literal)||!isWholeManualPhoneLiteral(block.text,choice.start,choice.end))return null;
+  !/^[0-9+(). \t-]+$/u.test(literal)||!(isWholeManualPhoneLiteral(block.text,choice.start,choice.end)||supported&&isStandalonePublishedLiteral(block.text,choice.start,choice.end)))return null;
  const normalized=canonicalizePhone(literal);
  if(!normalized.ok)return null;
  return manualPhoneSchema.parse({value:normalized.handle.value,choice,sourceUrl:observation.url,retrievedAt:observation.retrievedAt,expiresAt:source.expiresAt});

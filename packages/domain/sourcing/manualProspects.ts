@@ -11,8 +11,7 @@ import {phoneDiscoverySnapshots} from './prospectPhoneDiscoveryStore.ts';
 import {composeProspectPhoneDiscovery,projectProspectPhoneDiscovery} from './prospectPhoneDiscoveryProjection.ts';
 import {readProspectPhoneDiscoverySnapshot} from './prospectPhoneDiscovery.ts';
 import {currentManualPhoneChoice,projectManualPhoneChoice,projectPreparedPhoneChoice} from './manualProspectPhoneChoice.ts';
-import {readPreparedPhoneChoice} from './manualProspectPreparedPhone.ts';
-import {withPreparedCaptureSnapshots} from './preparedCaptureStore.ts';
+import {readPreparedPhoneChoice,withPreparedPhoneSnapshots} from './manualProspectPreparedPhone.ts';
 import {lockPreparedCaptureDependencies} from './preparedCaptureDependencies.ts';
 import {lockLivePreparationCleanup} from '../calling/preparationLifecycle.ts';
 import {readManualProspectSubject} from './manualProspectRows.ts';
@@ -50,7 +49,7 @@ async function projectManualProspectPage(ctx:RepositoryContext,input:z.infer<typ
   [ctx.scope.workspaceId,page.map(row=>row.id)])).rows:[];
  // Calling's exact read (includeManualPhone) also reads a current prepared source association (ADR0034);
  // the default queue list is unchanged. Lock order matches the prepared reads: dependencies before exact evidence.
- const withPrepared=(snapshots:ManualPhoneSnapshot[])=>input.includeManualPhone?withPreparedCaptureSnapshots(ctx,snapshots):Promise.resolve(snapshots);
+ const withPrepared=(snapshots:ManualPhoneSnapshot[])=>input.includeManualPhone?withPreparedPhoneSnapshots(ctx,page,snapshots):Promise.resolve(snapshots);
  if(input.includeManualPhone&&page.length)await lockPreparedCaptureDependencies(ctx,page);
  const phones=await withPrepared(await manualPhoneSnapshots(ctx,page));
  const discoveries=await phoneDiscoverySnapshots(ctx,page);

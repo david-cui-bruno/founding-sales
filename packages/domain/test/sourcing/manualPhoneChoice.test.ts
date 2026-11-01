@@ -83,3 +83,10 @@ it.each([
  const {run,choice}=fixture(text,literal,label);expect(choice.labelStart).toBe(text.indexOf(label));
  expect(projectManualPhoneChoice(run,choice,now)).toMatchObject({choice});
 });
+it.each([['412-685-3970 24hr@company.test','412-685-3970'],['📞 412-685-3970 24hr@company.test','📞']])('a standalone number with a digit-leading email tail is offered and can be saved: %s',(text,label)=>{
+ const {run,choice}=fixture(text,'412-685-3970',label);
+ expect(projectManualPhoneChoice(run,choice,now)).toMatchObject({value:'+14126853970',choice});
+});
+it.each([['412-685-3970 ext 5 24hr@company.test'],['412-685-3970-HOME 24hr@company.test']])('a standalone email tail never rescues an extension or vanity suffix: %s',text=>{
+ const {run,choice}=fixture(text,'412-685-3970','412-685-3970');expect(projectManualPhoneChoice(run,choice,now)).toBeNull();
+});

@@ -24,7 +24,7 @@ const API = `sha256:${'1'.repeat(64)}`, WORKER = `sha256:${'2'.repeat(64)}`;
 const source = { candidate: CANDIDATE, gateId: 41243290797, imagesId: 41243290872, prHead: HEAD, prNumber: 871, upgradeJobId: 124661428799 };
 const bindings = (overrides: Record<string, unknown> = {}) => ({ runId: null, jobId: null, ...source, ...overrides });
 const preflightFixture = () => ({
-  at: '2026-10-31T21:48:12.586Z', production: PRODUCTION, schema: 153, bindings: { ...source },
+  at: '2026-10-31T21:48:12.586Z', production: PRODUCTION, schema: 153, targetSchema: 153, migration: null as null | Record<string, unknown>, bindings: { ...source },
   normal: { operations: def('operations', 482), migration: def('migration', 197) }, normalDigests: { operations: WORKER, migration: WORKER }, nonterminalOneoffs: 0,
   services: [{ name: 'fss-prod-api', definition: def('api', 185), count: 2 }, { name: 'fss-prod-worker', definition: def('worker', 186), count: 1 }],
   runtime: [{ arn: task(1), definition: def('worker', 186), digest: WORKER }, { arn: task(2), definition: def('api', 185), digest: API }, { arn: task(3), definition: def('api', 185), digest: API }],
@@ -34,7 +34,7 @@ const preflightFixture = () => ({
   historical40522197864: 'UNKNOWN', cloudWrites: 0,
 });
 const expectedBaseline = {
-  production: PRODUCTION, schema: 153, at: '2026-10-31T21:48:12.586Z',
+  production: PRODUCTION, schema: 153, targetSchema: 153, schemaMigration: null, at: '2026-10-31T21:48:12.586Z',
   api: { definition: def('api', 185), revision: 185, count: 2, digest: API }, worker: { definition: def('worker', 186), revision: 186, count: 1, digest: WORKER },
   operations: { definition: def('operations', 482), revision: 482, digest: WORKER }, migration: { definition: def('migration', 197), revision: 197, digest: WORKER },
 };
@@ -49,9 +49,16 @@ const native = (overrides: Record<string, unknown> = {}) => ({
   },
 });
 
+// One contiguous migration: actual CI disposable-PostgreSQL evidence shape (see tools/upgrade) for 153 → 154.
+const MIGRATION = '0154_manual_phone_choice_standalone.sql', REVIEW = { reviewer: 'MigrationSpecialist', report: 'agent://MigrationSpecialist#0154', classification: 'touches-existing' };
+const evidence = (cls: string, from = 153) => [`upgrade test: schema ${from} → ${from + 1}`, '  base         /home/runner/work/_temp/upgrade-base', `  migrations   1..${from} from the base checkout, ${from + 1}..${from + 1} from head`, `  deployed     ${from} file(s) byte-identical in both checkouts`, '', 'migrations this upgrade applies', `  ${MIGRATION}  ${cls}  constraint swap on sourcing_manual_prospect_states`, '', '  cluster      service-container on 127.0.0.1', `  database     fss_upgrade_${'0'.repeat(32)}`, '', 'step  1  fresh database, fss_migrator owns it                    0.01s', `step  2  migrations 1..${from} from the base checkout, as fss_migrator    1.12s  ${from} applied; runtime user created`, `step  5  migrations ${from + 1}..${from + 1} from head, as fss_migrator          0.01s  1 applied`, '', `PASS  schema ${from} → ${from + 1}`, ''].join('\n');
+const upgradeFiles = (cls = 'additive', text = evidence(cls)) => ({ 'main-upgrade/upgrade-binding.json': { from: PRODUCTION, to: CANDIDATE }, [`main-upgrade/upgrade-evidence-${CANDIDATE}.txt`]: text });
+
 // Stub production: reads plus only the reviewed reader register/run/retire; anything else fails the check.
 const OBSERVED_AT = '2026-10-31T21:50:00.000Z', READER = def('operations', 491), READER_TASK = task(7);
-function cloud(fault = '', onWrite: (action: string) => void = () => {}) {
+function cloud(fault = '', onWrite: (action: string) => void = () => {}, artifactEvidence = evidence('additive')) {
+  const target = fault === 'migration-n2' ? 155 : fault.startsWith('migration') ? 154 : 153;
+  const migrations = (ref: string) => [...Array.from({ length: 153 }, (_, i) => ({ type: 'file', name: `${String(i + 1).padStart(4, '0')}_m.sql`, sha: ref !== PRODUCTION && fault === 'migration-blob' && i === 9 ? 'e'.repeat(40) : String(i + 1).padStart(40, '0') })), ...(ref === PRODUCTION ? [] : [{ type: 'file', name: MIGRATION, sha: 'f'.repeat(40) }])];
   const calls: string[][] = [], attempts: Record<string, string | undefined>[] = [];
   const reader: { document?: { tags?: unknown }; status: string; owner?: string } = { status: 'ACTIVE' };
   const operations = { taskDefinitionArn: def('operations', 482), family: 'fss-prod-operations', status: 'ACTIVE', containerDefinitions: [{ name: 'operations', image: image('worker', WORKER), entryPoint: ['node', 'apps/worker/src/tools/fss.ts'], command: ['verify'], logConfiguration: { options: { 'awslogs-group': '/fss/prod', 'awslogs-stream-prefix': 'fss' } } }] };
@@ -85,11 +92,17 @@ function cloud(fault = '', onWrite: (action: string) => void = () => {}) {
     }
     if (program === 'gh' && args.slice(0, 3).join(' ') === 'api --method GET') {
       const path = args[3]!.replace('repos/david-cui-bruno/founding-sales/', '');
-      if (path.startsWith(`compare/${PRODUCTION}...${CANDIDATE}`)) return JSON.stringify({ base_commit: { sha: PRODUCTION }, merge_base_commit: { sha: PRODUCTION }, status: 'ahead', behind_by: 0, total_commits: 1, ahead_by: 1, commits: [{ sha: CANDIDATE }], files: [{ filename: 'packages/domain/sourcing/discoveryIdentity.ts' }, ...(fault === 'schema' ? [{ filename: 'packages/domain/db/migrations/154_change.sql' }] : [])] });
+      const files = [{ filename: 'packages/domain/sourcing/discoveryIdentity.ts', status: 'modified' }, ...(fault === 'schema' ? [{ filename: 'packages/domain/db/migrations/154_change.sql', status: 'added' }] : []), ...(target > 153 ? [{ filename: 'packages/domain/db/schemaRange.ts', status: 'modified' }, { filename: `packages/domain/db/migrations/${MIGRATION}`, status: 'added' }] : [])];
+      if (path.startsWith(`compare/${PRODUCTION}...${CANDIDATE}`)) return JSON.stringify({ base_commit: { sha: PRODUCTION }, merge_base_commit: { sha: PRODUCTION }, status: 'ahead', behind_by: 0, total_commits: 1, ahead_by: 1, commits: [{ sha: CANDIDATE }], files });
+      if (path.startsWith('contents/packages/domain/db/schemaRange.ts?ref=')) return JSON.stringify({ encoding: 'base64', content: Buffer.from(`export const REQUIRED_SCHEMA = ${path.endsWith(PRODUCTION) ? 153 : target};\n`).toString('base64') });
+      if (path.startsWith('contents/packages/domain/db/migrations?ref=')) return JSON.stringify(migrations(path.split('=')[1]!));
+      if (path === `actions/runs/${source.gateId}/artifacts?per_page=100`) return JSON.stringify({ total_count: 1, artifacts: [{ id: 77, name: `upgrade-evidence-${CANDIDATE}`, expired: false, workflow_run: { id: source.gateId, head_sha: CANDIDATE } }] });
+      if (path === 'actions/artifacts/77/zip') return 'zip';
       if (path.endsWith('variables?per_page=100')) return JSON.stringify({ total_count: 0, variables: [] });
       if (path === 'environments/production-release-review') return JSON.stringify({ can_admins_bypass: false, deployment_branch_policy: { custom_branch_policies: true }, protection_rules: [{ type: 'required_reviewers', reviewers: [{ type: 'User' }] }] });
       if (path === 'environments/production-release-review/deployment-branch-policies?per_page=100') return JSON.stringify({ total_count: 1, branch_policies: [{ name: 'main' }] });
     }
+    if (program === 'python3') return JSON.stringify({ 'upgrade-binding.json': JSON.stringify({ from: PRODUCTION, to: CANDIDATE }), [`upgrade-evidence-${CANDIDATE}.txt`]: artifactEvidence });
     throw new Error(`unexpected ${program} ${args.join(' ')}`);
   };
   const fetchJson = async () => ({ status: 'serving', build: { commit: fault === 'candidate-live' ? CANDIDATE : fault === 'production-moved' ? 'e'.repeat(40) : PRODUCTION }, schema: { databaseVersion: 153, accepted: true } });
@@ -100,12 +113,12 @@ const directories: string[] = [];
 afterEach(() => { for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }); });
 function runDirectory(files: Record<string, unknown>) {
   const directory = mkdtempSync(join(tmpdir(), 'fss-release-operator-'));
-  directories.push(directory); mkdirSync(join(directory, 'main-images'));
-  for (const [name, value] of Object.entries(files)) writeFileSync(join(directory, name), JSON.stringify(value));
+  directories.push(directory); mkdirSync(join(directory, 'main-images')); mkdirSync(join(directory, 'main-upgrade'));
+  for (const [name, value] of Object.entries(files)) writeFileSync(join(directory, name), typeof value === 'string' ? value : JSON.stringify(value));
   return directory;
 }
-async function refused(directory: string, command: Command, reason: string, fault = '') {
-  const stub = cloud(fault);
+async function refused(directory: string, command: Command, reason: string, fault = '', artifactEvidence?: string) {
+  const stub = cloud(fault, undefined, artifactEvidence);
   await expect(operator.createOperator({ directory, run: stub.run, fetchJson: stub.fetchJson })[command]()).rejects.toThrow(reason);
   return stub.calls;
 }
@@ -132,6 +145,8 @@ describe('application release operator arguments and bindings', () => {
     ] as const) expect(() => operator.validateBindings(value), reason).toThrow(reason);
     expect(() => operator.validateBindings(bindings(), true)).toThrow('release_application_unbound');
     expect(() => operator.validateBindings(bindings({ runId: source.gateId, jobId: 1 }), true)).toThrow('candidate_invalid');
+    expect(operator.validateBindings(bindings({ migrationReview: REVIEW }))).toMatchObject({ migrationReview: REVIEW });
+    for (const review of [null, 'reviewed', { ...REVIEW, classification: 'additive' }, { ...REVIEW, classification: 'privilege' }, { ...REVIEW, report: ' ' }, { ...REVIEW, extra: 'x' }]) expect(() => operator.validateBindings(bindings({ migrationReview: review })), JSON.stringify(review)).toThrow('migration_review_invalid');
   });
 });
 
@@ -152,6 +167,14 @@ describe('baseline derived from the saved live preflight', () => {
     ];
     for (const [change, reason] of cases) { const p = preflightFixture(); change(p); expect(() => operator.baselineFromPreflight(p), reason).toThrow(reason); }
   });
+
+  it('binds one authorized migration and refuses unauthorized saved classifications', () => {
+    const migration = (m: Record<string, unknown> | null, target = 154) => ({ ...preflightFixture(), targetSchema: target, migration: m });
+    const additive = { file: MIGRATION, sha: 'f'.repeat(40), class: 'additive', review: null };
+    expect(operator.baselineFromPreflight(migration(additive))).toMatchObject({ schema: 153, targetSchema: 154, schemaMigration: additive, migration: expectedBaseline.migration });
+    expect(operator.baselineFromPreflight(migration({ ...additive, class: 'touches-existing', review: REVIEW }))).toMatchObject({ schemaMigration: { review: REVIEW } });
+    for (const [p, reason] of [[migration(null), 'baseline_preflight_target_invalid'], [migration(additive, 155), 'baseline_preflight_target_invalid'], [{ ...migration(null), targetSchema: 153, migration: additive }, 'baseline_preflight_target_invalid'], [migration({ ...additive, class: 'touches-existing' }), 'migration_review_required'], [migration({ ...additive, class: 'destructive' }), 'migration_classification_refused'], [migration({ ...additive, review: REVIEW }), 'migration_review_mismatch']] as const) expect(() => operator.baselineFromPreflight(p), reason).toThrow(reason);
+  });
 });
 
 describe('preflight', () => {
@@ -171,9 +194,60 @@ describe('preflight', () => {
 
   it('refuses unbound bindings, a schema-changing source, a candidate already live and a mixed runtime before saving', async () => {
     expect(await refused(runDirectory({ 'release-bindings.json': bindings({ prNumber: null }) }), 'preflight', 'release_source_ci_unbound')).toEqual([]);
-    for (const [fault, reason] of [['schema', 'schema_change_refused'], ['candidate-live', 'candidate_already_production'], ['mixed-digest', 'runtime_digest_changed']]) {
+    for (const [fault, reason] of [['schema', 'same_schema_source_changed'], ['candidate-live', 'candidate_already_production'], ['mixed-digest', 'runtime_digest_changed']]) {
       const directory = runDirectory({ 'release-bindings.json': bindings() });
       await refused(directory, 'preflight', reason!, fault);
+      expect(existsSync(join(directory, 'release-preflight.json'))).toBe(false);
+    }
+  });
+});
+
+describe('preflight for exactly one contiguous migration', () => {
+  async function migrate(files: Record<string, unknown>, fault = 'migration', artifactEvidence?: string) {
+    const directory = runDirectory({ 'release-bindings.json': bindings(), ...files }), stub = cloud(fault, undefined, artifactEvidence ?? (files[`main-upgrade/upgrade-evidence-${CANDIDATE}.txt`] as string | undefined));
+    const result = operator.createOperator({ directory, run: stub.run, fetchJson: stub.fetchJson, now: () => Date.parse('2026-10-31T21:48:12.586Z') }).preflight();
+    return { directory, stub, result };
+  }
+  const saved = (directory: string) => JSON.parse(readFileSync(join(directory, 'release-preflight.json'), 'utf8'));
+
+  it('accepts N→N+1 additive from the bound disposable-PostgreSQL upgrade evidence and records the classifier result', async () => {
+    const { directory, stub, result } = await migrate(upgradeFiles('additive'));
+    await expect(result).resolves.toContain(`schema153→154 (${MIGRATION}, additive)`);
+    expect(saved(directory)).toMatchObject({ schema: 153, targetSchema: 154, migration: { file: MIGRATION, sha: 'f'.repeat(40), class: 'additive', review: null } });
+    expect(operator.baselineFromPreflight(saved(directory))).toMatchObject({ targetSchema: 154, schemaMigration: { class: 'additive' } });
+    expect(stub.calls.some(c => c[0] === 'gh' && c[4] === 'repos/david-cui-bruno/founding-sales/actions/artifacts/77/zip')).toBe(true);
+  });
+
+  it('accepts touches-existing only with a matching explicit migration review', async () => {
+    const refusedReview = await migrate(upgradeFiles('touches-existing'));
+    await expect(refusedReview.result).rejects.toThrow('migration_review_required');
+    expect(existsSync(join(refusedReview.directory, 'release-preflight.json'))).toBe(false);
+    const reviewed = await migrate({ ...upgradeFiles('touches-existing'), 'release-bindings.json': bindings({ migrationReview: REVIEW }) });
+    await expect(reviewed.result).resolves.toContain('touches-existing');
+    expect(saved(reviewed.directory).migration).toEqual({ file: MIGRATION, sha: 'f'.repeat(40), class: 'touches-existing', review: REVIEW });
+    for (const cls of ['additive', 'privilege', 'destructive']) {
+      const mismatch = await migrate({ ...upgradeFiles(cls), 'release-bindings.json': bindings({ migrationReview: REVIEW }) });
+      await expect(mismatch.result, cls).rejects.toThrow('migration_review_mismatch');
+    }
+  });
+
+  it('refuses destructive, privilege, replaced-routine and unclassified migrations outright', async () => {
+    for (const cls of ['destructive', 'privilege', 'replaces-routine', 'unclassified']) await expect((await migrate(upgradeFiles(cls))).result, cls).rejects.toThrow('migration_classification_refused');
+  });
+
+  it('refuses N→N+2, a changed deployed migration blob, a review on a same-schema source and missing or non-upgrade evidence', async () => {
+    const cases: [Record<string, unknown>, string, string, string?][] = [
+      [upgradeFiles(), 'migration-n2', 'multiple_migrations_refused'],
+      [upgradeFiles(), 'migration-blob', 'migration_blob_changed'],
+      [{ 'release-bindings.json': bindings({ migrationReview: REVIEW }) }, '', 'migration_review_unexpected'],
+      [{}, 'migration', 'upgrade_evidence_missing', evidence('additive')],
+      [upgradeFiles('additive', evidence('additive').replace(/^step {2}5 .*$/mu, 'step  5  skipped')), 'migration', 'upgrade_evidence_not_disposable_upgrade'],
+      [upgradeFiles('additive', evidence('additive', 152)), 'migration', 'upgrade_evidence_not_passing'],
+      [upgradeFiles(), 'migration', 'upgrade_evidence_changed', evidence('touches-existing')],
+    ];
+    for (const [files, fault, reason, artifact] of cases) {
+      const { directory, result } = await migrate(files, fault, artifact);
+      await expect(result, reason).rejects.toThrow(reason);
       expect(existsSync(join(directory, 'release-preflight.json'))).toBe(false);
     }
   });
@@ -216,8 +290,13 @@ describe('later steps bind to the saved preflight', () => {
     const application = bindings({ runId: 41245379477, jobId: 124667631715 });
     expect(await refused(prepared({ 'application-native-input.json': native() }), 'verify-application', 'release_application_unbound')).toEqual([]);
     expect(await refused(prepared({ 'application-acceptance.json': {} }, application), 'verify-application', 'report_already_exists')).toEqual([]);
-    expect(await refused(prepared({ 'application-native-input.json': native({ targetSchema: 154 }) }, application), 'verify-application', 'schema_change_refused')).toEqual([]);
-    expect(await refused(prepared({ 'application-native-input.json': native({ migrationStarted: true }) }, application), 'verify-application', 'schema_change_refused')).toEqual([]);
+    expect(await refused(prepared({ 'application-native-input.json': native({ targetSchema: 154 }) }, application), 'verify-application', 'native_schema_binding_changed')).toEqual([]);
+    expect(await refused(prepared({ 'application-native-input.json': native({ migrationStarted: true }) }, application), 'verify-application', 'native_schema_binding_changed')).toEqual([]);
+    const migrationPreflight = { ...preflightFixture(), targetSchema: 154, migration: { file: MIGRATION, sha: 'f'.repeat(40), class: 'touches-existing', review: REVIEW } };
+    const migrated = (input: unknown, bound: Record<string, unknown> = { ...application, migrationReview: REVIEW }) => runDirectory({ 'release-bindings.json': bound, 'release-preflight.json': migrationPreflight, 'application-native-input.json': input });
+    expect(await refused(migrated(native({ targetSchema: 154, observedSchema: 154, migrationStarted: true }), application), 'verify-application', 'bindings_changed_since_preflight')).toEqual([]);
+    expect(await refused(migrated(native({ targetSchema: 154, observedSchema: 154 })), 'verify-application', 'native_schema_binding_changed')).toEqual([]);
+    expect(await refused(migrated(native({ targetSchema: 155, observedSchema: 155, migrationStarted: true })), 'verify-application', 'native_schema_binding_changed')).toEqual([]);
     const live = native(); live.nativeFinalStatus.previousDefinitions.api = def('api', 184);
     expect(await refused(prepared({ 'application-native-input.json': live }, application), 'verify-application', 'native_definition_binding_changed')).toEqual([]);
     const sameCommit = { ...preflightFixture(), bindings: { ...source, candidate: PRODUCTION } };

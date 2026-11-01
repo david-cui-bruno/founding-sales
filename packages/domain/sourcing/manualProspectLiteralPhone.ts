@@ -91,6 +91,12 @@ function standaloneNumber(text:string):BlockPhoneLabel[]{
  const emoji=/(?:📞|☎)\uFE0F?/u.exec(prefix),label=emoji?{label:emoji[0],labelStart:emoji.index,labelEnd:emoji.index+emoji[0].length}:{label:literal,labelStart:start,labelEnd:end};
  return [{...label,complete:true,unattached:false,literals:[{literal,start,value:normalized.handle.value,reason:null}]}];
 }
+/** The exact span is the one literal of a standalone published number, whose permitted email tail is not part of it.
+ * Extension and vanity suffixes never reach here: they are not supported NANP literals, so no standalone block exists. */
+export function isStandalonePublishedLiteral(text:string,start:number,end:number):boolean{
+ const literal=phoneBlockAllowsV2(text)?standaloneNumber(text)[0]?.literals[0]:undefined;
+ return literal!==undefined&&literal.start===start&&literal.start+literal.literal.length===end;
+}
 export function scanManualLiteralPhones(input:LiteralInput):LiteralScan {
  const coverage:LiteralScan['coverage']={parser,state:'complete',observations:0,blocks:0};
  const result:LiteralScan={sources:[],coverage,unresolved:false};

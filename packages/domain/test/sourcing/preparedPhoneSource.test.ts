@@ -16,14 +16,15 @@ function page(blocks:string[],extra:Partial<SourceObservation>={}):SourceObserva
  const list=blocks.map((text,index)=>({id:`b${index+1}`,text}));
  return {id:randomUUID(),url:pageUrl,contentHash:'a'.repeat(64),relevantTextHash:createHash('sha256').update(JSON.stringify(list)).digest('hex'),retrievedAt:'2026-10-31T01:00:00.000Z',publishedAt:null,publishedAtBlockId:null,firstParty:true,truncated:false,blocks:list,...extra};
 }
-function snapshot(pages:SourceObservation[],options:{captured?:SourceObservation[];permitted?:string[];validUntil?:string|null;denied?:boolean}={}):ManualPhoneSnapshot{
+function snapshot(pages:SourceObservation[],options:{captured?:SourceObservation[];permitted?:string[];validUntil?:string|null;denied?:boolean;deadlines?:Record<string,number>;granted?:SourceObservation[]}={}):ManualPhoneSnapshot{
  const captured=options.captured??pages.slice(0,1);
  const binding={candidateId,candidateRevision:1,sourceUrl};
  const manifest=captured.length?buildPreparedCapture(binding,captured.map(source=>({source,trace:{version:'page-redirect-trace-v1',urls:[sourceUrl,middle,source.url]}}))):null;
  const dependencyUrls=manifest?[...new Set(manifest.pages.flatMap(entry=>entry.redirectUrls))].sort():[];
  return {id:runId,candidate_id:candidateId,candidate_revision:1,payload:{firmName:'Capture Property Management',website,sourceUrl,locality:'Columbus',region:'OH',signal:'fit_only',evidence:'Fictional',observedOn:'2026-10-30',preparedBy:'Fixture'},
   observations:pages,facts:[],permitted_urls:options.permitted??[],capture_policy_version:'prepared-source-association-v2',capture_state:'review',prepared_capture:manifest,
-  prepared_capture_authority:{dependencyUrls,denied:options.denied??false,validUntil:options.validUntil??null}};
+  prepared_capture_authority:{dependencyUrls,denied:options.denied??false,validUntil:options.validUntil??null},prepared_source_deadlines:options.deadlines??{},
+  evidence_authorities:(options.granted??[]).map(source=>({id:randomUUID(),url:source.url,contentHash:source.contentHash,retrievedAt:source.retrievedAt}))};
 }
 const locate=(source:SourceObservation,text:string,literal:string,label=literal):ManualPhoneChoice=>{
  const block=source.blocks.find(entry=>entry.text===text)!,labelStart=text.indexOf(label),start=text.indexOf(literal);
@@ -121,4 +122,39 @@ it('leaves a candidate without a current prepared association on the unchanged e
  expect(projectManualPhone(plain,now)).toMatchObject({state:'not_extracted',reason:'original_not_usable'});
  const truncated=snapshot([page([business,LABELLED],{truncated:true})],{captured:[]});
  expect(projectManualPhone(truncated,now)).toMatchObject({state:'not_extracted',reason:'original_not_usable'});
+});
+
+const auxiliaryUrl='https://www.capture.example.test/team';
+const auxiliaryAt=now+60_000;
+it('bounds a page admitted through an exact retained grant by that grant deadline, not the seven-day horizon',()=>{
+ const own=page([business]),aux=page([LABELLED],{url:auxiliaryUrl}),choice=locate(aux,LABELLED,'(614) 725-3059','Office phone');
+ const current=snapshot([own,aux],{captured:[own],permitted:[aux.url],granted:[aux],deadlines:{[aux.url]:auxiliaryAt}});
+ const source=preparedPhoneSource(current,now);
+ expect(source?.authorities[aux.id]).toMatchObject({kind:'prepared_capture',expiresAt:new Date(auxiliaryAt).toISOString()});
+ expect(projectManualPhone(current,now)).toMatchObject({state:'observed',value:'+16147253059'});
+ expect(projectPreparedPhoneChoice(current,choice,now)?.expiresAt).toBe(new Date(auxiliaryAt).toISOString());
+ expect(projectPreparedPhoneChoice(current,choice,auxiliaryAt)).toBeNull();
+ expect(projectManualPhone(current,auxiliaryAt)).not.toMatchObject({state:'observed'});
+ // Without the deadline the same page would live for the horizon: it is the deadline that bounds it.
+ const unbounded=snapshot([own,aux],{captured:[own],permitted:[aux.url],granted:[aux]});
+ expect(projectPreparedPhoneChoice(unbounded,choice,now)?.expiresAt).toBe(new Date(Date.parse(aux.retrievedAt)+PREPARED_PHONE_HORIZON_MS).toISOString());
+});
+it('never reads a snapshot that was not decorated with the shared source deadlines',()=>{
+ const source=page([business,LABELLED]),current=snapshot([source]);
+ delete current['prepared_source_deadlines'];
+ expect(preparedPhoneSource(current,now)).toBeNull();
+ expect(projectPreparedPhoneChoice(current,locate(source,LABELLED,'(614) 725-3059','Office phone'),now)).toBeNull();
+});
+it.each([
+ ['412-685-3970 24hr@company.test','412-685-3970','412-685-3970'],
+ ['📞 412-685-3970 24hr@company.test','412-685-3970','📞'],
+])('offers and then saves a standalone number with an email tail whose local part starts with digits: %s',(text,literal,label)=>{
+ const source=page([business,text]),current=snapshot([source]);
+ expect(projectManualPhone(current,now)).toMatchObject({state:'observed',value:'+14126853970'});
+ expect(projectPreparedPhoneChoice(current,locate(source,text,literal,label),now)).toMatchObject({value:'+14126853970'});
+});
+it.each([['412-685-3970 ext 5 24hr@company.test'],['412-685-3970-HOME 24hr@company.test'],['412-685-3970 24hr@company.test 412-685-3971']])('still refuses standalone extension, vanity or second-number blocks: %s',text=>{
+ const source=page([business,text]),current=snapshot([source]);
+ expect(projectManualPhone(current,now).state).not.toBe('observed');
+ expect(projectPreparedPhoneChoice(current,locate(source,text,'412-685-3970','412-685-3970'),now)).toBeNull();
 });

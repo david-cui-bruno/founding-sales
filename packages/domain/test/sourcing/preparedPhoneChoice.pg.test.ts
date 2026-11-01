@@ -14,6 +14,9 @@ import {readCallingPreparation} from '../../calling/preparation.ts';
 import {researchPageFetch,type RawResponse} from '../../../../apps/worker/src/research/companyPageFetch.ts';
 import {lockDiscoveryReviewSources} from '../../sourcing/discoveryReviewVisibility.ts';
 import {rememberExpiredManualSources} from '../../sourcing/manualProspectSourceLoss.ts';
+import {withPreparedSourceDeadlines} from '../../sourcing/preparedSourceDeadlines.ts';
+import type {ManualPhoneSnapshot} from '../../sourcing/manualProspectPhone.ts';
+import type {ManualProspectRow} from '../../sourcing/manualProspectProjection.ts';
 
 let db:TestDatabase,seed:TwoWorkspaces,runtime:SessionQueryable;
 const ctx=(session=runtime,worker=false)=>repositoryContext(workspaceScope(seed.alpha.workspaceId,worker?{kind:'system',component:'worker'}:{kind:'user',role:'admin',userId:seed.alpha.admin.userId}),session);
@@ -117,4 +120,12 @@ it('leaves Calling preparation to its own checks: a prepared-page choice creates
  const before=await counts();
  expect(await tx(()=>readCallingPreparation(ctx(),{candidateId:f.candidateId,expectedCandidateRevision:1,choice},async()=>true))).toMatchObject({state:'refused',reason:'source_withdrawn'});
  expect(await counts()).toBe(before);
+});
+it('attaches the earliest retained-evidence expiry of each permitted page from the shared prepared-source collection',async()=>{
+ const f=await captured('<p>Office phone: (614) 725-3059</p>'),expires=new Date(Date.now()+60_000),page='https://auxiliary.example.test/team';
+ const firm=(await runtime.query<{id:string}>("INSERT INTO firms(workspace_id,name) VALUES($1,'Fictional page grant') RETURNING id",[seed.alpha.workspaceId])).rows[0]!.id;
+ await tx(async()=>{await lockDiscoveryReviewSources(ctx());for(const at of [expires,new Date(Date.now()+3_600_000)])await runtime.query("INSERT INTO evidence_items(workspace_id,firm_id,provider,source_reference,content_hash,terms_allow_retention,retention_expires_at) VALUES($1,$2,'fixture',$3,$4,true,$5)",[seed.alpha.workspaceId,firm,page+'/',`${at.getTime()}`.padEnd(64,'a'),at]);});
+ const snapshot={permitted_urls:[page],candidate_id:f.candidateId} as unknown as ManualPhoneSnapshot,row={id:f.candidateId} as unknown as ManualProspectRow;
+ const [decorated]=await tx(()=>withPreparedSourceDeadlines(ctx(),[row],[snapshot]));
+ expect(decorated?.['prepared_source_deadlines']).toEqual({[page]:expires.getTime()});
 });
