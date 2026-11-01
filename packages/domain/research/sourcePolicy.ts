@@ -133,10 +133,12 @@ export const DISCOVERED_PATH_PATTERN = /about|service|team|staff|contact|career|
 
 /**
  * The own-site pages a prepared company brief cites besides its landing page (ADR0034), in
- * preference order: where the company publishes its phone, who it is, and who runs it. Path
- * segments only, so `/property-management-company` is not an about page.
+ * preference order: what the company does (its homepage, cited when the landing page is deeper),
+ * where it publishes its phone, who it is, and who runs it. Path segments only, so
+ * `/property-management-company` is not an about page.
  */
 export const OWN_SITE_PAGE_KINDS = [
+  ['home', /^\/$/u],
   ['contact', /contact/iu],
   ['about', /(?:^|\/)(?:about|company|our-company|who-we-are|our-story)(?:[-_/]|$)/iu],
   ['team', /(?:^|\/)(?:team|our-team|meet-the-team|meet-our-team|leadership|staff|our-staff|people|our-people)(?:[-_/]|$)/iu],
@@ -144,7 +146,7 @@ export const OWN_SITE_PAGE_KINDS = [
 export type OwnSitePageKind = (typeof OWN_SITE_PAGE_KINDS)[number][0];
 export function ownSitePageKind(url: string): OwnSitePageKind | null {
   const path = new URL(url).pathname;
-  return path === '/' ? null : OWN_SITE_PAGE_KINDS.find(([, pattern]) => pattern.test(path))?.[0] ?? null;
+  return OWN_SITE_PAGE_KINDS.find(([, pattern]) => pattern.test(path))?.[0] ?? null;
 }
 
 /** Maximum discovered URLs; default runs also stop after this many same-site candidates. */
@@ -243,6 +245,15 @@ function sameSite(firmHost: string, host: string): boolean {
  * robots file. Anything that is not is not this host's rules, and a host whose rules
  * cannot be read is a host whose pages are not fetched.
  */
+/** Whether a URL is its host's root page (`https://example.test/`), whatever its query. */
+export function isSiteRootUrl(value: string): boolean {
+  try {
+    return new URL(value).pathname.replace(/\/+$/u, '') === '';
+  } catch {
+    return false;
+  }
+}
+
 export function isSameResearchSite(a: string, b: string): boolean {
   const left = normalizedHost(a);
   const right = normalizedHost(b);
@@ -358,7 +369,7 @@ export function permittedRedirectTarget(
  */
 export function discoverSameSiteUrls(
   input: PermittedUrlInput,
-  found: { readonly from: string; readonly hrefs: readonly string[] },
+  found: { readonly from: string; readonly hrefs: readonly string[]; readonly requested?: readonly string[] },
 ): readonly string[] {
   const firmHost = input.firmWebsite === null ? null : normalizedHost(input.firmWebsite);
   if (firmHost === null || isBlockedHost(firmHost)) return [];
@@ -392,11 +403,18 @@ export function discoverSameSiteUrls(
     if (input.prioritizeContactPages) relevant.sort((a,b)=>Number(/contact/iu.test(new URL(b).pathname))-Number(/contact/iu.test(new URL(a).pathname)));
     return Object.freeze(relevant.slice(0, MAX_DISCOVERED_CANDIDATES));
   }
-  // One page of each own-site kind first (contact, about, team), then the remaining contact
-  // pages, then the rest in page order, so a small page budget reads one of each.
+  // A deep landing page (a search hit's /contact or listing page) rarely says what the company
+  // does; its own host's homepage does, so it leads, linked or not. Then one page of each
+  // own-site kind (contact, about, team), the remaining contact pages, then the rest in page
+  // order, so a small page budget reads one of each.
+  // A landing whose own request chain passed through a root of this site (www.example.test/ →
+  // example.test/en/) already read the homepage.
+  const from = new URL(found.from), fromHost = from.hostname.toLowerCase().replace(/\.$/u, '');
+  const viaRoot = [found.from, ...(found.requested ?? [])].some(url => isSiteRootUrl(url) && isSameResearchSite(url, found.from));
+  const home = !viaRoot && sameSite(firmHost, fromHost) ? [`https://${fromHost}/`] : [];
   const first = OWN_SITE_PAGE_KINDS.flatMap(([kind]) => relevant.filter(url => ownSitePageKind(url) === kind).slice(0, 1));
   const contacts = relevant.filter(url => !first.includes(url) && ownSitePageKind(url) === 'contact');
-  const ordered = [...first, ...contacts, ...relevant.filter(url => !first.includes(url) && !contacts.includes(url))];
+  const ordered = [...home, ...first, ...contacts, ...relevant.filter(url => !first.includes(url) && !contacts.includes(url))];
   return Object.freeze(ordered.slice(0, MAX_DISCOVERED_CANDIDATES));
 }
 

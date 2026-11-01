@@ -113,7 +113,7 @@ export async function runQualification(ctx:RepositoryContext,input:{runId:string
     retrievedAt:page.retrievedAt,publishedAt:date?.value??null,publishedAtBlockId:date?.blockId??null,firstParty:page.firstParty,blocks,truncated:parsed.truncated||blocks.length<parsed.blocks.length};
    captured.push({source:observation,trace:page.redirectTrace,linkedFrom:page.linkedFrom});return [observation];
   });
-  // Pages arrive landing first, then contact, about and team. Over the input bound, the
+  // Pages arrive landing first, then homepage (deep landing only), contact, about and team. Over the input bound, the
   // lowest-priority extra pages are left out rather than losing the whole capture.
   while(observations.length>1&&Buffer.byteLength(JSON.stringify(observations))>100000){const dropped=observations.pop()!;captured.splice(captured.findIndex(c=>c.source.id===dropped.id),1);}
   if(captureEnabled)preparedCapture=buildPreparedCapture({candidateId:run.candidate_id,candidateRevision:run.candidate_revision,sourceUrl:run.payload.sourceUrl},captured,isPreparedCapturePolicy(run['capture_policy_version'])?run['capture_policy_version']:undefined,fetched.value.pages.map(page=>({url:page.url,trace:page.redirectTrace,linkedFrom:page.linkedFrom,firstParty:page.firstParty})));

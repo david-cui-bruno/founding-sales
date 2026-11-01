@@ -2,7 +2,7 @@ import {createHash} from 'node:crypto';
 import {z} from 'zod';
 import {candidateInputSchema,sourceObservationSchema,sourcingUrlSchema,instant,uuid,type SourceObservation} from '@fss/contracts';
 import type {FetchedPage} from '../research/providers.ts';
-import {isPublicResearchUrl,isSameResearchSite,ownSitePageKind} from '../research/sourcePolicy.ts';
+import {isPublicResearchUrl,isSameResearchSite,isSiteRootUrl,ownSitePageKind} from '../research/sourcePolicy.ts';
 import {classifyDiscoveryPage} from './discoveryIdentity.ts';
 import type {ManualPhoneSnapshot} from './manualProspectPhone.ts';
 
@@ -55,8 +55,8 @@ export function validatePreparedCapture(value:unknown,binding:PreparedCaptureBin
 
 /** The caller pairs each newly parsed observation with the adapter page that
  * supplied its bytes. Metadata stays outside observations and model inputs.
- * V2 also associates at most one contact, about and team page that the traced landing
- * page itself linked to (ADR0034): its lineage is the landing page's request chain from
+ * V2 also associates at most one homepage (a deeper landing page's own host root), contact, about and team page that the traced landing
+ * page led to (ADR0034): its lineage is the landing page's request chain from
  * the exact source followed by the linked page's own chain, so every URL the association
  * depends on keeps its own loss/expiry/denial check. Any other auxiliary page stays unassociated. */
 export interface PreparedCaptureLineage {url:string;trace:FetchedPage['redirectTrace'];linkedFrom?:string|undefined;firstParty:boolean}
@@ -71,7 +71,8 @@ export function buildPreparedCapture(binding:Omit<PreparedCaptureBinding,'observ
   let urls:readonly string[]=trace.urls;
   if(policy===PREPARED_CAPTURE_POLICY&&linkedFrom!==undefined){
    const landing=fetched.find(page=>page.url===linkedFrom&&page.linkedFrom===undefined&&page.firstParty&&page.trace?.version==='page-redirect-trace-v1'&&traced(page.trace.urls,linkedFrom));
-   const kind=ownSitePageKind(source.url);
+   // A requested site root is the homepage wherever it redirected on its site (/home, /en/, /index.html).
+   const kind=trace.urls[0]!==undefined&&isSiteRootUrl(trace.urls[0])?'home':ownSitePageKind(source.url);
    if(!landing||kind===null||kinds.has(kind))return [];
    urls=[...landing.trace!.urls,...trace.urls];
    if(!tracedRedirects(urls,binding.sourceUrl,source.url,policy))return [];

@@ -918,3 +918,50 @@ describe('a prepared capture following the company site to another host (ADR0034
     }
   });
 });
+
+describe('a prepared capture from a deep landing page reads its homepage once (ADR0034)', () => {
+  const moved = (location: string): RawResponse => ({ statusCode: 301, headers: { location }, body: null, abortedOverCap: false });
+  const capture = { maxPagesPerFirm: 2, maxBytes: 1_000_000, recordRedirectTrace: true, prioritizeContactPages: true, diversifyOwnSitePages: true };
+  const pagesOf = (outcome: Awaited<ReturnType<ReturnType<typeof researchPageFetch>['fetchPages']>>) =>
+    outcome.ok ? outcome.value.pages.map(page => [page.url, page.redirectTrace?.urls, page.linkedFrom]) : outcome;
+
+  it('fetches the synthesized homepage through its same-host redirect, keeping the requested root in the trace', async () => {
+    const { provider } = harness({ answers: { 'deep.test': ['93.184.216.34'] }, responses: {
+      'https://deep.test/robots.txt': robotsAllowing,
+      'https://deep.test/contact': ok('<p>Call (617) 555-0100.</p>'),
+      'https://deep.test/': moved('https://deep.test/home'),
+      'https://deep.test/home': ok(HOME),
+    } });
+    expect(pagesOf(await provider.fetchPages({ ...capture, firmWebsite: 'https://deep.test/contact', links: ['https://deep.test/contact'], urls: ['https://deep.test/contact'] }))).toEqual([
+      ['https://deep.test/contact', ['https://deep.test/contact'], undefined],
+      ['https://deep.test/home', ['https://deep.test/', 'https://deep.test/home'], 'https://deep.test/contact'],
+    ]);
+  });
+
+  it('does not fetch the homepage again when the landing chain passed through a root of the same site', async () => {
+    const { provider, sent } = harness({ answers: { 'www.root.test': ['93.184.216.34'], 'root.test': ['93.184.216.34'] }, responses: {
+      'https://www.root.test/robots.txt': robotsAllowing, 'https://root.test/robots.txt': robotsAllowing,
+      'https://www.root.test/': moved('https://root.test/en/'),
+      'https://root.test/en/': ok('<a href="/contact-us">Contact</a><p>We manage residential property.</p>'),
+      'https://root.test/contact-us': ok('<p>Call (617) 555-0100.</p>'),
+    } });
+    expect(pagesOf(await provider.fetchPages({ ...capture, firmWebsite: 'https://www.root.test/', links: ['https://www.root.test/'], urls: ['https://www.root.test/'] }))).toEqual([
+      ['https://root.test/en/', ['https://www.root.test/', 'https://root.test/en/'], undefined],
+      ['https://root.test/contact-us', ['https://root.test/contact-us'], 'https://root.test/en/'],
+    ]);
+    expect(sent.map(request => request.url)).not.toContain('https://root.test/');
+  });
+
+  it('reads a queued apex root as the homepage of a www deep landing instead of a second www root', async () => {
+    const { provider, sent } = harness({ answers: { 'www.apex.test': ['93.184.216.34'], 'apex.test': ['93.184.216.34'] }, responses: {
+      'https://www.apex.test/robots.txt': robotsAllowing, 'https://apex.test/robots.txt': robotsAllowing,
+      'https://www.apex.test/contact': ok('<a href="/about">About</a><p>Call (617) 555-0100.</p>'),
+      'https://apex.test/': ok(HOME),
+    } });
+    expect(pagesOf(await provider.fetchPages({ ...capture, firmWebsite: 'https://www.apex.test/contact', links: ['https://www.apex.test/contact'], urls: ['https://www.apex.test/contact', 'https://apex.test/'] }))).toEqual([
+      ['https://www.apex.test/contact', ['https://www.apex.test/contact'], undefined],
+      ['https://apex.test/', ['https://apex.test/'], 'https://www.apex.test/contact'],
+    ]);
+    expect(sent.map(request => request.url)).not.toContain('https://www.apex.test/');
+  });
+});
