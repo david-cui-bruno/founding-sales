@@ -17,10 +17,6 @@ import {rememberExpiredManualSources} from '../../sourcing/manualProspectSourceL
 import {withPreparedSourceDeadlines} from '../../sourcing/preparedSourceDeadlines.ts';
 import type {ManualPhoneSnapshot} from '../../sourcing/manualProspectPhone.ts';
 import type {ManualProspectRow} from '../../sourcing/manualProspectProjection.ts';
-import {residentialFacts,selectingExtraction} from './support/modelSelections.ts';
-import {qualificationExtraction} from '../../../../apps/worker/src/sourcing/qualificationExtraction.ts';
-import {qualificationCitationRoles} from '../../sourcing/qualificationCitationRoles.ts';
-import type {QualificationExtractionProvider} from '../../sourcing/qualificationPrompt.ts';
 
 let db:TestDatabase,seed:TwoWorkspaces,runtime:SessionQueryable;
 const ctx=(session=runtime,worker=false)=>repositoryContext(workspaceScope(seed.alpha.workspaceId,worker?{kind:'system',component:'worker'}:{kind:'user',role:'admin',userId:seed.alpha.admin.userId}),session);
@@ -35,7 +31,7 @@ beforeEach(async()=>{
 afterAll(async()=>db?.drop());
 
 /** A real redirected own-site capture whose final page carries the supplied blocks. */
-async function captured(page:string,options:{moved?:boolean;extraction?:QualificationExtractionProvider}={}){
+async function captured(page:string,options:{moved?:boolean}={}){
  const domain=`phone-${randomUUID()}.example.test`,website=`https://${domain}/`,sourceUrl=website+'old-landing',middle=`https://www.${domain}/new-entry`;
  // A moved company site: the old host's landing redirects to another company host (ADR0034).
  const final=options.moved?`https://${domain.replace('phone-','moved-')}/contact`:`https://www.${domain}/contact`;
@@ -51,8 +47,8 @@ async function captured(page:string,options:{moved?:boolean;extraction?:Qualific
   return {statusCode:404,headers:{},body:null,abortedOverCap:false};
  }});
  const target={candidateId:saved.value.id,candidateRevision:1,runId:requested.value.runId};
- await runQualification(ctx(runtime,true),target,{pageFetch:provider,extraction:options.extraction??selectingExtraction()});
- return {target,candidateId:saved.value.id,final,candidate:{firmName:'Capture Property Management',website,locality:'Columbus',region:'OH' as const}};
+ await runQualification(ctx(runtime,true),target,{pageFetch:provider,extraction:{providerKey:'aws_bedrock.sourcing_qualification',countInputTokens:async()=>100,extract:async()=>({ok:false,failureCode:'invalid_evidence',costCents:1})}});
+ return {target,candidateId:saved.value.id,final};
 }
 const list=(candidateId:string,includeManualPhone=true)=>tx(()=>listManualProspects(ctx(),{state:'all',offset:0,candidateId,expectedRevision:1,...(includeManualPhone?{includeManualPhone:true}:{})}));
 const only=async(candidateId:string,includeManualPhone=true):Promise<ManualProspect>=>{const answer=await list(candidateId,includeManualPhone);if(!answer.ok)throw Error(answer.reason);const found=answer.value.prospects.find(p=>p.candidateId===candidateId);if(!found)throw Error('missing prospect');return found;};
@@ -142,7 +138,7 @@ it('offers and keeps the phone of an incomplete own-source page the brief cites 
  const requested=await tx(()=>requestQualification(ctx(runtime,true),{candidateId:saved.value.id,expectedRevision:1},{enqueue:false}));if(!requested.ok)throw Error(requested.reason);
  const blocks=[{id:'b1',text:'(614) 725-3059 info@rlpmg.test'},{id:'b2',text:'Our property management company manages residential homes for owners and coordinates tenant maintenance requests.'},{id:'b83',text:'(614) 725-3059'}];
  const page={id:randomUUID(),url:website,contentHash:'a'.repeat(64),relevantTextHash:createHash('sha256').update(JSON.stringify(blocks)).digest('hex'),retrievedAt:new Date(Date.now()-60_000).toISOString(),publishedAt:null,publishedAtBlockId:null,firstParty:true,truncated:true,blocks};
- await runtime.query("UPDATE sourcing_qualification_runs SET state='review',observations=$3::jsonb,facts=$4::jsonb WHERE workspace_id=$1 AND id=$2",[seed.alpha.workspaceId,requested.value.runId,JSON.stringify([page]),JSON.stringify(residentialFacts([page]))]);
+ await runtime.query("UPDATE sourcing_qualification_runs SET state='review',observations=$3::jsonb WHERE workspace_id=$1 AND id=$2",[seed.alpha.workspaceId,requested.value.runId,JSON.stringify([page])]);
  const id=saved.value.id;
  expect(await tx(()=>readPreparedProspect(ctx(),{candidateId:id,candidateRevision:1,runId:requested.value.runId}))).toMatchObject({ok:true,value:{callable:{state:'callable',phone:'(614) 725-3059'},coverage:'partial_retained_pages'}});
  const prospect=await only(id);
@@ -153,20 +149,8 @@ it('offers and keeps the phone of an incomplete own-source page the brief cites 
  expect((await only(id)).manualPhone).toMatchObject({value:'+16147253059',choice,sourceUrl:website});
 });
 
-/** The production Bedrock adapter over a scripted model that selects every kind on the moved page. */
-const movedSiteModel=()=>qualificationExtraction({kind:'bedrock',countTokens:async()=>200,create:async request=>{
- const offered=JSON.parse(String(request.messages[0]?.content)) as {observations:{id:string;blocks:{id:string;text:string}[]}[]};
- const select=(kind:string,pattern:RegExp)=>{for(const source of offered.observations){const block=source.blocks.find(b=>pattern.test(b.text));if(block)return {kind,observationId:source.id,blockId:block.id};}throw Error('Controlled block missing');};
- const selections=[select('residential_management',/manages residential homes/u),select('firm_identity',/property management company/u),select('service_area',/residential homes/u)];
- return {usage:{input_tokens:200,output_tokens:80},content:[{type:'text',text:JSON.stringify({selections,openingQuestion:null})}]};
-}});
 it('keeps and prepares the phone of a company whose site moved to another host, through the traced move only',async()=>{
- const f=await captured('<p>Office phone: (614) 725-3059</p>',{moved:true,extraction:movedSiteModel()});
- // The production adapter keeps only the moved page's residential_management selection, as prepared business
- // context; it is never a native/publication citation.
- const stored=(await runtime.query<{state:string;facts:{kind:string}[];observations:never[]}>('SELECT state,facts,observations FROM sourcing_qualification_runs WHERE id=$1',[f.target.runId])).rows[0]!;
- expect(stored.state).not.toBe('unavailable');expect(stored.facts.map(fact=>fact.kind)).toEqual(['residential_management']);
- expect(qualificationCitationRoles(f.candidate,stored.facts as never,stored.observations)).toEqual({ok:true,facts:[]});
+ const f=await captured('<p>Office phone: (614) 725-3059</p>',{moved:true});
  expect(await tx(()=>readPreparedProspect(ctx(),f.target))).toMatchObject({ok:true,value:{callable:{state:'callable',phone:'(614) 725-3059'}}});
  const prospect=await only(f.candidateId);
  expect(prospect.phoneEvidence).toMatchObject({state:'observed',value:'+16147253059',sources:[{url:f.final,authority:{kind:'prepared_capture',sourceUrl:f.final}}]});

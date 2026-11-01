@@ -1,4 +1,4 @@
-import {qualificationFactSchema,type PreparedProspectCallable,type PreparedProspectCurrentBrief,type PreparedProspectTarget} from '@fss/contracts';
+import type {PreparedProspectCallable,PreparedProspectCurrentBrief,PreparedProspectTarget} from '@fss/contracts';
 import {projectManualProspect,type ManualProspectRow} from './manualProspectProjection.ts';
 import type {ManualPhoneSnapshot} from './manualProspectPhone.ts';
 import {originalLineage} from './manualProspectOriginalAuthority.ts';
@@ -12,12 +12,6 @@ import {ownSitePageKind,type OwnSitePageKind} from '../research/sourcePolicy.ts'
 export interface PreparedRunIdentity {id:string;candidate_revision:number}
 type Passage=PreparedProspectCurrentBrief['passages'][number];
 const OWN_SITE_SECTION:Partial<Record<Passage['kind'],OwnSitePageKind>>={contact:'contact',business:'about',person:'team'};
-/** The blocks this run's qualification model selected as residential management: the brief's business context
- * and residential fit. A selection counts only where it resolves to an admitted page's block. */
-const modelBusinessBlocks=(facts:unknown)=>new Set((Array.isArray(facts)?facts:[]).flatMap(value=>{
- const fact=qualificationFactSchema.safeParse(value);
- return fact.success&&fact.data.kind==='residential_management'?[`${fact.data.observationId}\u0000${fact.data.blockId}`]:[];
-}));
 /** Dated original passages only. A preparation assessment never changes a stored
  * qualification, resolves a canonical identity, or grants a channel/endpoint. */
 export function projectPreparedProspect(row:ManualProspectRow,snapshot:ManualPhoneSnapshot|undefined,latest:PreparedRunIdentity|undefined,now:number,expirations:PreparedSourceExpirations=new Map()):PreparedProspectCurrentBrief|null {
@@ -27,7 +21,7 @@ export function projectPreparedProspect(row:ManualProspectRow,snapshot:ManualPho
  let usablePages=0,partialPages=0,unshown=false,contraryBeyondBound=false;
  const linked=new Set<string>();
  if(snapshot&&!snapshot.dependency_changed&&snapshot.id===latest?.id&&snapshot.candidate_revision===row.revision&&originalLineage(snapshot)){
-  const admitted=admitPreparedPages(snapshot,now,expirations),selected=modelBusinessBlocks(snapshot.facts);
+  const admitted=admitPreparedPages(snapshot,now,expirations);
   unshown=admitted.unshown;
   // A linked page's lineage runs through the landing's final URL; a captured page that is no
   // other page's lineage step is linked, whatever its path and whether the landing has citable text.
@@ -38,7 +32,7 @@ export function projectPreparedProspect(row:ManualProspectRow,snapshot:ManualPho
    if(captured&&admitted.captureDeadline!==null)usedSourceDeadlines.push(admitted.captureDeadline);
    if(expires!==undefined)usedSourceDeadlines.push(expires);
    for(const block of source.blocks){
-    const classification=classifyPreparedPassage(block.text,selected.has(`${source.id}\u0000${block.id}`));
+    const classification=classifyPreparedPassage(block.text,observed.locality??'');
     if(block.text.length>2000){unshown=true;if(classification.contrary)contraryBeyondBound=true;continue;}
     if(!classification.kinds.length)continue;
     // Callable needs a supported US literal under the reviewed same-block phone grammar, as published.
@@ -67,6 +61,7 @@ export function projectPreparedProspect(row:ManualProspectRow,snapshot:ManualPho
  const has=(kind:Passage['kind'])=>all.some(item=>item.classification.kinds.includes(kind));
  const hasContrary=has('contrary')||contraryBeyondBound;
  const hasOperations=all.some(item=>item.classification.usefulOperations);
+ const hasResidential=all.some(item=>item.classification.residentialContext);
  const prepared=(has('business')||hasOperations)&&!hasContrary;
  // ADR0034: research readiness only. Only a company page is callable; phone and person
  // come from blocks included in this brief.
@@ -76,7 +71,7 @@ export function projectPreparedProspect(row:ManualProspectRow,snapshot:ManualPho
  const page=observed.website===null?null:classifyDiscoveryPage({url:observed.website,title:observed.observedName});
  const missing:PreparedProspectCallable['missing']=[...(!prepared?['needs_research' as const]:[]),...(hasContrary?['contrary_context' as const]:[]),
   ...(!has('business')?['no_business_context' as const]:[]),...(phone===null?['no_published_phone' as const]:[]),...(page==='list'?['list_page' as const]:page!=='company'?['not_company_page' as const]:[])];
- const callable:PreparedProspectCallable={state:missing.length?'not_callable':'callable',missing,phone,person,residential:has('business')};
+ const callable:PreparedProspectCallable={state:missing.length?'not_callable':'callable',missing,phone,person,residential:hasResidential};
  // Hidden/oversized contrary context still contributes to the assessment.
  const deadlines=usedSourceDeadlines;
  const unknowns=[
@@ -84,7 +79,7 @@ export function projectPreparedProspect(row:ManualProspectRow,snapshot:ManualPho
   'Buyer, purchasing authority and buying intent are unknown',
   'Maintenance pain or an unmet need has not been established',
   'Phone and email passages are observations, not verified routes or contact permission',
-  ...(!has('business')?['Residential-management fit is unknown; retained context alone does not establish it']:[]),
+  ...(!hasResidential?['Residential-management fit is unknown; retained context alone does not establish it']:[]),
   ...(!has('location')?['Office location and service coverage are unknown; query geography is a targeting hint']:['Observed office or market wording does not establish complete service coverage']),
   ...(!has('person')?['No current named buyer is established']:['Dated people or roles are leads for research, not confirmed current buying authority']),
   ...(!has('contact')?[partialPages?'Contact context remains unknown in the retained portion':'No current contact passage is available']:['Endpoint purpose, ownership and reachability remain unverified']),
@@ -95,7 +90,7 @@ export function projectPreparedProspect(row:ManualProspectRow,snapshot:ManualPho
  ];
  return {target,displayName:observed.observedName,discoveryLabel:observed.observedName,website:observed.website,
   targetingLocality:observed.locality??'',targetingRegion:observed.region??'',sourceNotices:observed.sourceNotices,state:prepared?'prepared':'needs_research',
-  summary:prepared?(has('business')?'Attributed retained source/site context describes residential property management. Publisher and company identity remain unverified.':'Attributed retained source/site context describes property operations. Residential fit, publisher and company identity remain unverified.'):hasContrary?'Retained business context conflicts with residential-management fit. Review the contrary passage before treating this as a prepared company.':'The permitted discovery record still needs substantive current company research; a search label alone is not a prepared brief.',
+  summary:prepared?(hasResidential?'Attributed retained source/site context describes residential property management. Publisher and company identity remain unverified.':has('business')?'Attributed retained source/site context describes property-management services. Residential fit, publisher and company identity remain unverified.':'Attributed retained source/site context describes property operations. Residential fit, publisher and company identity remain unverified.'):hasContrary?'Retained business context conflicts with residential-management fit. Review the contrary passage before treating this as a prepared company.':'The permitted discovery record still needs substantive current company research; a search label alone is not a prepared brief.',
   unknowns,validUntil:deadlines.length?new Date(Math.min(...deadlines)).toISOString():null,callable,companyHost:observed.website===null?null:companyHost(observed.website),
   policyVersion:'prepared-prospect-v2',checkedAt:new Date(now).toISOString(),passages,coverage:partialPages?'partial_retained_pages':usablePages?'complete_retained_pages':'no_usable_retained_pages',
   nextAction:prepared?'Research the appropriate Person and current route. Ask how maintenance requests are coordinated without assuming a problem.':'Review the actual source or fit gap; no automatic capture or qualification is started by opening this brief.',contactAuthority:'not_granted'};
