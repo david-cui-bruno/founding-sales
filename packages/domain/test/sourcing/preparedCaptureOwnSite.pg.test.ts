@@ -113,3 +113,15 @@ it('ranks a linked page ahead of a non-root landing of the same kind: a /contact
  expect(brief.value.passages.filter(p=>p.kind==='contact').map(p=>[p.url,p.quote])).toEqual([[`${f.site}/contact-us`,'(617) 555-0113'],[f.landing,'(617) 555-0111']]);
  expect(brief.value.callable).toMatchObject({state:'callable',phone:'(617) 555-0113'});
 });
+
+it('keeps own-kind order among linked pages under a navigation-only landing: the about page leads business context over four contact-page blocks',async()=>{
+ const business=(i:number)=>`<p>Our property management company manages residential homes for owners in Boston, office note ${i}.</p>`;
+ const f=await capture({extra:site=>({[`${site}/`]:'<nav><a href="/contact-us">Contact</a><a href="/about-us">About</a></nav>',
+  [`${site}/contact-us`]:`<main><p>(617) 555-0121</p>${[1,2,3,4].map(business).join('')}</main>`,
+  [`${site}/about-us`]:'<main><p>Our property management company manages residential homes for owners in Boston, about us.</p></main>'})});
+ const stored=await f.stored();
+ expect(stored.observations.map(o=>o.url)).toEqual([`${f.site}/contact-us`,`${f.site}/about-us`]);
+ const brief=await tx(()=>readPreparedProspect(ctx(),f.target));if(!brief.ok)throw Error(brief.reason);
+ const shown=brief.value.passages.filter(p=>p.kind==='business').map(p=>p.url);
+ expect(shown[0]).toBe(`${f.site}/about-us`);expect(shown).toHaveLength(4);
+});

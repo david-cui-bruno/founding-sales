@@ -23,10 +23,10 @@ export function projectPreparedProspect(row:ManualProspectRow,snapshot:ManualPho
  if(snapshot&&!snapshot.dependency_changed&&snapshot.id===latest?.id&&snapshot.candidate_revision===row.revision&&originalLineage(snapshot)){
   const admitted=admitPreparedPages(snapshot,now,expirations);
   unshown=admitted.unshown;
-  // A linked own-site page is captured through another admitted page's URL (the landing's);
-  // the landing itself, whatever its path, is not linked.
-  const admittedUrls=new Set(admitted.pages.map(page=>page.source.url));
-  for(const page of preparedCaptureManifest(snapshot)?.pages??[])if(admitted.capturedIds.has(page.observationId)&&page.redirectUrls.slice(0,-1).some(url=>url!==page.url&&admittedUrls.has(url)))linked.add(page.observationId);
+  // A linked page's lineage runs through the landing's final URL; a captured page that is no
+  // other page's lineage step is linked, whatever its path and whether the landing has citable text.
+  const pages=preparedCaptureManifest(snapshot)?.pages??[],steps=new Set(pages.flatMap(page=>page.redirectUrls.slice(0,-1)));
+  for(const page of pages)if(admitted.capturedIds.has(page.observationId)&&!steps.has(page.url))linked.add(page.observationId);
   for(const {source,captured,expires} of admitted.pages){
    usablePages++;if(source.truncated)partialPages++;
    if(captured&&admitted.captureDeadline!==null)usedSourceDeadlines.push(admitted.captureDeadline);
