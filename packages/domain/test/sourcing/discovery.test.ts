@@ -69,12 +69,12 @@ it('does not resurface a dismissed candidate on repeated discovery of the same s
 
 it('serializes account quota across concurrent workspaces',async()=>{
  await db.session.query('DELETE FROM sourcing_discovery_hits');await db.session.query('DELETE FROM sourcing_discovery_attempts');
- await db.session.query('UPDATE sourcing_search_account SET halted=false,daily_used=9,monthly_used=9');
+ await db.session.query('UPDATE sourcing_search_account SET halted=false,daily_used=19,monthly_used=19');
  await db.session.query('UPDATE sourcing_discovery_settings SET next_run_at=now()');
  await db.session.query('INSERT INTO sourcing_discovery_settings(workspace_id,enabled) VALUES($1,true)',[otherWorkspaceId]);
  let calls=0;const provider={providerKey:'tavily_basic',discover:async()=>{calls++;return {ok:true as const,credits:1,requestId:'parallel',hits:[]};}};
  await Promise.all([runDiscovery(repositoryContext(workspaceScope(workspaceId,{kind:'system',component:'worker'}),db.session),provider,refusingPageFetch),runDiscovery(repositoryContext(workspaceScope(otherWorkspaceId,{kind:'system',component:'worker'}),await db.appRuntimeSession()),provider,refusingPageFetch)]);
- expect(calls).toBe(1);expect((await db.session.query('SELECT daily_used FROM sourcing_search_account')).rows[0]).toMatchObject({daily_used:10});
+ expect(calls).toBe(1);expect((await db.session.query('SELECT daily_used FROM sourcing_search_account')).rows[0]).toMatchObject({daily_used:20});
 });
 it('halts after a crash leaves an old dispatch whose usage is unknown',async()=>{
  await db.session.query('UPDATE sourcing_discovery_settings SET next_run_at=now()');
@@ -128,26 +128,26 @@ it('preserves raw directory hits without creating firms and cleans candidate tit
  expect((await db.session.query('SELECT id FROM sourcing_qualification_runs WHERE candidate_id=$1',[firmHit.candidate_id])).rows).toHaveLength(0);
 });
 
-it('looks beyond duplicate and directory hits but drafts at most five new candidates per run without research',async()=>{
+it('looks beyond duplicate and directory hits but drafts at most ten new candidates per run without research',async()=>{
  await db.session.query('DELETE FROM sourcing_discovery_hits');await db.session.query('DELETE FROM sourcing_discovery_attempts');
  await db.session.query('UPDATE sourcing_search_account SET halted=false,daily_used=0,monthly_used=0');
  await db.session.query('UPDATE sourcing_discovery_settings SET next_run_at=now(),enabled=true');
  const ctx=repositoryContext(workspaceScope(workspaceId,{kind:'system',component:'worker'}),db.session);
  const hits=[
   ...Array.from({length:5},(_,i)=>({url:`https://www.allpropertymanagement.com/area-${i}`,title:'Directory',snippet:'Directory'})),
-  ...Array.from({length:7},(_,i)=>({url:`https://yield-${i}.test/`,title:`Yield Realty ${i}`,snippet:'Residential management'})),
+  ...Array.from({length:12},(_,i)=>({url:`https://yield-${i}.test/`,title:`Yield Realty ${i}`,snippet:'Residential management'})),
  ];
  const provider={providerKey:'tavily_basic',discover:async()=>({ok:true as const,credits:1,requestId:'yield',hits})};
  await runDiscovery(ctx,provider,refusingPageFetch);
  const rows=async()=>(await db.session.query<{candidate_id:string|null}>("SELECT candidate_id FROM sourcing_discovery_hits WHERE workspace_id=$1 AND source_url LIKE 'https://yield-%'",[workspaceId])).rows;
- expect((await rows()).filter(r=>r.candidate_id)).toHaveLength(5);
- expect(await rows()).toHaveLength(7);
+ expect((await rows()).filter(r=>r.candidate_id)).toHaveLength(10);
+ expect(await rows()).toHaveLength(12);
  expect((await db.session.query("SELECT count(*)::int AS count FROM sourcing_qualification_runs q JOIN sourcing_candidates c ON c.id=q.candidate_id WHERE c.workspace_id=$1 AND c.payload->>'website' LIKE 'https://yield-%'",[workspaceId])).rows[0]).toEqual({count:0});
  // Previously seen, unprocessed hits remain available when the next day's search returns them.
  await db.session.query('UPDATE sourcing_discovery_attempts SET day=day-1');
  await db.session.query('UPDATE sourcing_discovery_settings SET next_run_at=now()');
  await runDiscovery(ctx,provider,refusingPageFetch);
- expect((await rows()).filter(r=>r.candidate_id)).toHaveLength(7);
+ expect((await rows()).filter(r=>r.candidate_id)).toHaveLength(12);
  expect((await db.session.query('SELECT daily_used FROM sourcing_search_account')).rows[0]).toEqual({daily_used:2});
 });
 
@@ -164,48 +164,48 @@ it('defaults to one daily slot and preserves the original next-day schedule',asy
  await runDiscovery(ctx,provider,refusingPageFetch);expect(calls).toBe(1);
 });
 
-it('paces opt-in slots, serializes same-workspace dispatch and cannot exceed ten daily searches',async()=>{
+it('paces opt-in slots, serializes same-workspace dispatch and cannot exceed twenty daily searches',async()=>{
  await db.session.query('DELETE FROM sourcing_discovery_hits');await db.session.query('DELETE FROM sourcing_discovery_attempts');
  await db.session.query('UPDATE sourcing_search_account SET halted=false,daily_used=0,monthly_used=0');
- await db.session.query('UPDATE sourcing_discovery_settings SET searches_per_day=10,next_run_at=now() WHERE workspace_id=$1',[workspaceId]);
+ await db.session.query('UPDATE sourcing_discovery_settings SET searches_per_day=20,next_run_at=now() WHERE workspace_id=$1',[workspaceId]);
  const ctx=repositoryContext(workspaceScope(workspaceId,{kind:'system',component:'worker'}),db.session);
  const peer=repositoryContext(ctx.scope,await db.appRuntimeSession());
  let calls=0;const provider={providerKey:'tavily_basic',discover:async()=>{calls++;return {ok:true as const,credits:1,requestId:`slot-${calls}`,hits:[]};}};
  await Promise.all([runDiscovery(ctx,provider,refusingPageFetch),runDiscovery(peer,provider,refusingPageFetch)]);
  expect(calls).toBe(1);
- expect((await db.session.query("SELECT next_run_at BETWEEN now()+interval '143 minutes' AND now()+interval '145 minutes' AS paced FROM sourcing_discovery_settings WHERE workspace_id=$1",[workspaceId])).rows[0]).toEqual({paced:true});
+ expect((await db.session.query("SELECT next_run_at BETWEEN now()+interval '71 minutes' AND now()+interval '73 minutes' AS paced FROM sourcing_discovery_settings WHERE workspace_id=$1",[workspaceId])).rows[0]).toEqual({paced:true});
  await runDiscovery(ctx,provider,refusingPageFetch);expect(calls).toBe(1);
- for(let n=0;n<10;n++){
+ for(let n=0;n<20;n++){
   await db.session.query('UPDATE sourcing_discovery_settings SET next_run_at=now() WHERE workspace_id=$1',[workspaceId]);
   await runDiscovery(ctx,provider,refusingPageFetch);
  }
- expect(calls).toBe(10);
- expect((await db.session.query('SELECT slot FROM sourcing_discovery_attempts WHERE workspace_id=$1 ORDER BY slot',[workspaceId])).rows).toEqual(Array.from({length:10},(_,slot)=>({slot})));
- expect((await db.session.query('SELECT daily_used,monthly_used FROM sourcing_search_account')).rows[0]).toEqual({daily_used:10,monthly_used:10});
+ expect(calls).toBe(20);
+ expect((await db.session.query('SELECT slot FROM sourcing_discovery_attempts WHERE workspace_id=$1 ORDER BY slot',[workspaceId])).rows).toEqual(Array.from({length:20},(_,slot)=>({slot})));
+ expect((await db.session.query('SELECT daily_used,monthly_used FROM sourcing_search_account')).rows[0]).toEqual({daily_used:20,monthly_used:20});
  // Moving workspace slots alone never refunds the global account day.
  await db.session.query('UPDATE sourcing_discovery_attempts SET day=day-1');
- await runDiscovery(ctx,provider,refusingPageFetch);expect(calls).toBe(10);
+ await runDiscovery(ctx,provider,refusingPageFetch);expect(calls).toBe(20);
  // A real UTC account-day rollover opens capacity without refunding monthly use.
  await db.session.query("UPDATE sourcing_search_account SET day=day-1");
- await runDiscovery(ctx,provider,refusingPageFetch);expect(calls).toBe(11);
- expect((await db.session.query('SELECT monthly_used FROM sourcing_search_account')).rows[0]).toEqual({monthly_used:11});
+ await runDiscovery(ctx,provider,refusingPageFetch);expect(calls).toBe(21);
+ expect((await db.session.query('SELECT monthly_used FROM sourcing_search_account')).rows[0]).toEqual({monthly_used:21});
 });
 
 it('does not bypass a monthly account cap with an available workspace slot',async()=>{
  await db.session.query('UPDATE sourcing_discovery_settings SET next_run_at=now()');
- await db.session.query('UPDATE sourcing_search_account SET daily_used=0,monthly_used=375');
+ await db.session.query('UPDATE sourcing_search_account SET daily_used=0,monthly_used=650');
  let calls=0;await runDiscovery(repositoryContext(workspaceScope(workspaceId,{kind:'system',component:'worker'}),db.session),{providerKey:'tavily_basic',discover:async()=>{calls++;throw new Error('must not call');}},refusingPageFetch);
  expect(calls).toBe(0);
- expect((await db.session.query('SELECT monthly_used FROM sourcing_search_account')).rows[0]).toEqual({monthly_used:375});
+ expect((await db.session.query('SELECT monthly_used FROM sourcing_search_account')).rows[0]).toEqual({monthly_used:650});
 });
 
-it('enforces migration118 settings and slot constraints on actual inserts, including composite uniqueness',async()=>{
+it('enforces migration118/156 settings and slot constraints on actual inserts, including composite uniqueness',async()=>{
  const {randomUUID}=await import('node:crypto');
- for(const searches of [0,11]){
+ for(const searches of [0,21]){
   await expect(db.session.query('INSERT INTO sourcing_discovery_settings(workspace_id,searches_per_day) VALUES($1,$2)',[randomUUID(),searches])).rejects.toMatchObject({code:'23514',constraint:'sourcing_discovery_searches_per_day'});
  }
  const insert=(slot:number)=>db.session.query("INSERT INTO sourcing_discovery_attempts(workspace_id,query_id,query,slot) VALUES($1,'constraint-fixture','fixture',$2)",[workspaceId,slot]);
- for(const slot of [-1,10])await expect(insert(slot)).rejects.toMatchObject({code:'23514',constraint:'sourcing_discovery_slot'});
+ for(const slot of [-1,20])await expect(insert(slot)).rejects.toMatchObject({code:'23514',constraint:'sourcing_discovery_slot'});
  await db.session.query('DELETE FROM sourcing_discovery_attempts');
  await insert(0);await insert(1);
  await expect(insert(1)).rejects.toMatchObject({code:'23505',constraint:'sourcing_discovery_attempts_workspace_day_slot'});
