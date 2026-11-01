@@ -5,7 +5,7 @@ import {withTransaction,type SessionQueryable} from '../../db/queryable.ts';
 import {repositoryContext,workspaceScope} from '../../db/workspaceScope.ts';
 import {seedTwoWorkspaces,type TwoWorkspaces} from '../db/support/fixtures.ts';
 import {saveCandidate} from '../../sourcing/candidates.ts';
-import {saveDiscoveryCandidate} from '../../sourcing/discoveryIntake.ts';
+import {seedDiscoveryCandidate} from './support/discoverySeed.ts';
 import {manualOrdinaryFixture,manualDiscoveryFixture} from './support/manualProspectFixture.ts';
 import {MANUAL_ACTIVITY_RAW_SQL} from '../../sourcing/manualProspectActivityAccess.ts';
 import {readManualProspectSubject,manualProspectRows} from '../../sourcing/manualProspectRows.ts';
@@ -23,9 +23,8 @@ async function ordinary(workspace:'alpha'|'beta'='alpha') {
 }
 async function discovery(workspace:'alpha'|'beta'='alpha') {
  const input=manualDiscoveryFixture(`exact-${++serial}`);input.row.website=`https://discovery-${serial}.example.test/`;
- const result=await withTransaction(runtime,()=>saveDiscoveryCandidate(ctx(workspace),input));
- if(!result.ok)throw Error(result.reason);
- return {id:result.value.id,input};
+ const result=await withTransaction(runtime,()=>seedDiscoveryCandidate(ctx(workspace),input));
+ return {id:result.id,input};
 }
 async function parity(id:string,permitted:boolean,revision=1,workspace:'alpha'|'beta'='alpha') {
  const context=ctx(workspace);

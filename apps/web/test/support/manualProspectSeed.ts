@@ -3,18 +3,18 @@ import type {Page} from 'playwright/test';
 import {repositoryContext,workspaceScope} from '@fss/domain/db/workspaceScope.ts';
 import {withTransaction} from '@fss/domain/db/queryable.ts';
 import {saveCandidate} from '@fss/domain/sourcing/candidates.ts';
-import {saveDiscoveryCandidate} from '@fss/domain/sourcing/discoveryIntake.ts';
+import {seedDiscoveryCandidate} from '@fss/domain/test/sourcing/support/discoverySeed.ts';
 import {manualDiscoveryFixture,manualOrdinaryFixture} from '../../../../packages/domain/test/sourcing/support/manualProspectFixture.ts';
 import type {ManualProspectApp} from './manualProspectApp.ts';
 export async function seedManualProspects(app:ManualProspectApp){
  const f=app.fixture,runtime=await f.database.appRuntimeSession(),ctx=repositoryContext(workspaceScope(f.alpha.workspaceId,{kind:'user',userId:f.alpha.admin.userId,role:'admin'}),runtime);
  const ids:string[]=[];
- for(let i=0;i<51;i++){const input=manualDiscoveryFixture(`browser-${i}`);const result=await withTransaction(runtime,()=>saveDiscoveryCandidate(ctx,input));assert(result.ok);ids.push(result.value.id);}
- for(const key of ['dup-a','dup-b']){const input=manualDiscoveryFixture(key);input.row.firmName='Possible duplicate observation';input.row.website='https://duplicate.example.test/';const result=await withTransaction(runtime,()=>saveDiscoveryCandidate(ctx,input));assert(result.ok);ids.push(result.value.id);}
- const input=manualDiscoveryFixture('hostile');input.row.firmName='<img src=x onerror=alert(1)> Unverified raw';input.row.website='javascript:alert(1)';const raw=await withTransaction(runtime,()=>saveDiscoveryCandidate(ctx,input));assert(raw.ok);ids.push(raw.value.id);
+ for(let i=0;i<51;i++){const input=manualDiscoveryFixture(`browser-${i}`);const result=await withTransaction(runtime,()=>seedDiscoveryCandidate(ctx,input));ids.push(result.id);}
+ for(const key of ['dup-a','dup-b']){const input=manualDiscoveryFixture(key);input.row.firmName='Possible duplicate observation';input.row.website='https://duplicate.example.test/';const result=await withTransaction(runtime,()=>seedDiscoveryCandidate(ctx,input));ids.push(result.id);}
+ const input=manualDiscoveryFixture('hostile');input.row.firmName='<img src=x onerror=alert(1)> Unverified raw';input.row.website='javascript:alert(1)';const raw=await withTransaction(runtime,()=>seedDiscoveryCandidate(ctx,input));ids.push(raw.id);
  const ordinary=await withTransaction(runtime,()=>saveCandidate(ctx,manualOrdinaryFixture(764)));assert(ordinary.ok);ids.push(ordinary.value.id);
- const betaCtx=repositoryContext(workspaceScope(f.beta.workspaceId,{kind:'user',userId:f.beta.admin.userId,role:'admin'}),runtime),beta=await withTransaction(runtime,()=>saveDiscoveryCandidate(betaCtx,manualDiscoveryFixture('beta-only')));assert(beta.ok);
- return {ids,rawId:raw.value.id,ordinaryId:ordinary.value.id,betaId:beta.value.id};
+ const betaCtx=repositoryContext(workspaceScope(f.beta.workspaceId,{kind:'user',userId:f.beta.admin.userId,role:'admin'}),runtime),beta=await withTransaction(runtime,()=>seedDiscoveryCandidate(betaCtx,manualDiscoveryFixture('beta-only')));
+ return {ids,rawId:raw.id,ordinaryId:ordinary.value.id,betaId:beta.id};
 }
 export async function manualProductSnapshot(app:ManualProspectApp){
  const value:Record<string,unknown[]>={};

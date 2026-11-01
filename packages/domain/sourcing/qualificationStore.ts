@@ -17,7 +17,7 @@ import { workspaceBusinessZone } from '../research/ledger.ts';
 import { enqueueJob } from '../jobs/jobStore.ts';
 import { jobIdempotencyKey } from '../jobs/jobKinds.ts';
 import { normalizeQualificationDiagnostic } from './qualificationDiagnostics.ts';
-import {isCurrentPreparedCandidatePayload} from './discoveryIntake.ts';
+import {isCurrentPreparedCandidatePayload} from './candidatePayload.ts';
 import {retainedCandidateOnly,retainedWallNow} from './retainedAcquisition.ts';
 import {LEGACY_QUALIFICATION_PRODUCER,PREPARED_IDENTITY_PRODUCER,effectivePreparedCandidate,type PreparedIdentityProof} from './preparedIdentity.ts';
 import {preparedIdentityProducerAuthority} from './preparedIdentityAuthority.ts';
@@ -123,7 +123,7 @@ export async function finishQualification(context:RepositoryContext,input:{runId
     return refused(invalid);
   }
   if(evidence.data.observations.some(source=>Date.parse(source.retrievedAt)>Date.parse(now)+1000))return refused('invalid_evidence');
-  const producer=run['producer_version']===undefined?LEGACY_QUALIFICATION_PRODUCER:run['producer_version'];
+  const producer=run['producer_version'];
   if(producer!==LEGACY_QUALIFICATION_PRODUCER&&producer!==PREPARED_IDENTITY_PRODUCER)return refused('invalid_evidence');
   if(producer===PREPARED_IDENTITY_PRODUCER&&!emptyWorkerDrain&&!await preparedIdentityProducerAuthority(context,candidate.id,candidate.revision,candidate.payload))return refused('source_authority_changed');
   if(input.preparedIdentity!==undefined&&(input.reason!==null||producer!==PREPARED_IDENTITY_PRODUCER||!effectivePreparedCandidate(candidate.payload,evidence.data.facts,evidence.data.observations,producer,input.preparedIdentity,now)))return refused('invalid_evidence');

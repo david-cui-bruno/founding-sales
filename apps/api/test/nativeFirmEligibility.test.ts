@@ -6,8 +6,9 @@ import {localNoopSuppressionJournal} from '../src/journal/index.ts';
 import {createAuthFixture,CURRENT_CLIENT_VERSION,type AuthFixture} from './support/authFixture.ts';
 import {issueSessionFor} from './support/sessionFixture.ts';
 import {readFirmQualification} from '@fss/domain/sourcing/qualificationStore.ts';
-import {workspaceScope} from '@fss/domain/db/workspaceScope.ts';
-import type {Queryable,QueryResultRowLike} from '@fss/domain/db/queryable.ts';
+import {repositoryContext,workspaceScope} from '@fss/domain/db/workspaceScope.ts';
+import {withTransaction,type Queryable,type QueryResultRowLike} from '@fss/domain/db/queryable.ts';
+import {seedDiscoveryCandidate,type DiscoverySeed} from '@fss/domain/test/sourcing/support/discoverySeed.ts';
 let f:AuthFixture,admin:string,sales:string,beta:string;
 const envelope=<T extends object>(value:T)=>({...value,commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION});
 async function post(path:string,body:unknown,token=admin){return dispatch({method:'POST',path,query:new URLSearchParams(),headers:{authorization:`Bearer ${token}`},body} as ApiRequest,{session:f.db,auth:f.deps,supportedClientVersions:f.deps.config.supportedClientVersions,sendingEnabled:false,suppressionJournal:localNoopSuppressionJournal()});}
@@ -16,8 +17,8 @@ afterAll(async()=>{await f.stop();});
 async function linked(){
  const unique=randomUUID(),name=`Synthetic Native ${unique}`,website=`https://${unique}.example.test/`;
  const source={provider:'overture_places',release:'synthetic-fixture',recordId:unique,retrievedAt:null,sourceUrl:'https://example.test/source'};
- const saved=await post('/sourcing/candidates/discovery/save-v1',envelope({row:{source,observations:[source],firmName:name,website,locality:'Dallas',region:'TX',sourceConfidence:null,residentialFit:'unknown',websiteAssociation:'unknown',officePhoneEvidence:'unknown',probableGroupKey:null},origins:[{source,sourceMetadata:{sourcesJson:'[]'},licenses:['synthetic'],notices:[{label:'Fixture',url:'https://example.test/license',sha256:'a'.repeat(64)}]}]}));expect(saved.body).toMatchObject({status:'accepted'});
- const rawId=(saved.body as {result:{id:string}}).result.id;
+ const seeded=await withTransaction(f.db,()=>seedDiscoveryCandidate(repositoryContext(workspaceScope(f.alpha.workspaceId,{kind:'user',userId:f.alpha.admin.userId,role:'admin'}),f.db),{row:{source,observations:[source],firmName:name,website,locality:'Dallas',region:'TX',sourceConfidence:null,residentialFit:'unknown',websiteAssociation:'unknown',officePhoneEvidence:'unknown',probableGroupKey:null},origins:[{source,sourceMetadata:{sourcesJson:'[]'},licenses:['synthetic'],notices:[{label:'Fixture',url:'https://example.test/license',sha256:'a'.repeat(64)}]}]} as DiscoverySeed));
+ const rawId=seeded.id;
  const prepared=await post('/sourcing/candidates/discovery/prepare-v1',envelope({discoveryCandidateId:rawId,expectedRevision:1,source:{provider:source.provider,release:source.release,recordId:unique},candidate:{firmName:name,website,locality:'Dallas',region:'TX',signal:'fit_only',evidence:'Synthetic fixture, never real qualification.',sourceUrl:website,observedOn:'2026-10-21',preparedBy:'Controlled test'}}));expect(prepared.body).toMatchObject({status:'accepted'});
  const candidateId=(prepared.body as {result:{qualificationCandidateId:string}}).result.qualificationCandidateId;
  const made=await post('/crm/firms/add',envelope({firm:{name,website}}));expect(made.body).toMatchObject({status:'accepted'});const firmId=(made.body as {result:{firmId:string}}).result.firmId;

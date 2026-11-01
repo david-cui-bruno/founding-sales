@@ -1,5 +1,6 @@
-import type {CandidateInput,DiscoveryIntakeSaveInput} from '@fss/contracts';
-export function manualDiscoveryFixture(recordId='manual-1'):DiscoveryIntakeSaveInput{
+import type {CandidateInput} from '@fss/contracts';
+import type {DiscoverySeed} from './discoverySeed.ts';
+export function manualDiscoveryFixture(recordId='manual-1'):DiscoverySeed{
  const source={provider:'overture_places' as const,recordId,release:'manual-fixture',retrievedAt:null,sourceUrl:`https://source.example.test/${recordId}`};
  return {row:{source,observations:[source],firmName:`Unverified ${recordId}`,website:null,locality:null,region:null,sourceConfidence:null,residentialFit:'unknown',websiteAssociation:'unknown',officePhoneEvidence:'unknown',probableGroupKey:null},
  origins:[{source,sourceMetadata:{sourcesJson:'[]'},licenses:['CDLA-Permissive-2.0'],notices:[{label:'Retained synthetic notice',url:'https://source.example.test/license',sha256:'a'.repeat(64)}]}]};

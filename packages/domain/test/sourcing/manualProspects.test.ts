@@ -3,7 +3,7 @@ import {createTestDatabase,type TestDatabase} from '../../db/testing/testDatabas
 import {withTransaction,type SessionQueryable} from '../../db/queryable.ts';
 import {repositoryContext,workspaceScope} from '../../db/workspaceScope.ts';
 import {seedTwoWorkspaces,type TwoWorkspaces} from '../db/support/fixtures.ts';
-import {saveDiscoveryCandidate} from '../../sourcing/discoveryIntake.ts';
+import {seedDiscoveryCandidate} from './support/discoverySeed.ts';
 import {saveCandidate,deleteCandidate} from '../../sourcing/candidates.ts';
 import {listManualProspects,recordManualProspectFeedback} from '../../sourcing/manualProspects.ts';
 import {MANUAL_PROSPECT_ROWS_SQL,MANUAL_PROSPECT_SELECTION_ROWS_SQL,CORRELATED_PROSPECT_ROWS_SQL} from '../../sourcing/manualProspectRows.ts';
@@ -12,7 +12,7 @@ import {manualDiscoveryFixture,manualOrdinaryFixture} from './support/manualPros
 let db:TestDatabase,seeded:TwoWorkspaces,runtime:SessionQueryable;
 const context=(workspace:'alpha'|'beta'='alpha',role:'admin'|'salesperson'='admin',session=runtime)=>repositoryContext(workspaceScope(seeded[workspace].workspaceId,{kind:'user',userId:seeded[workspace][role].userId,role}),session);
 const list=(state:'all'|'new'|'kept'|'skipped'|'wrong_number'='all',offset=0)=>withTransaction(runtime,()=>listManualProspects(context(),{state,offset}));
-async function discovery(input=manualDiscoveryFixture()){const saved=await withTransaction(runtime,()=>saveDiscoveryCandidate(context(),input));if(!saved.ok)throw Error(saved.reason);return saved.value.id;}
+async function discovery(input=manualDiscoveryFixture()){return (await withTransaction(runtime,()=>seedDiscoveryCandidate(context(),input))).id;}
 const feedback=(id:string,state:'kept'|'skipped'|'wrong_number',revision=1)=>withTransaction(runtime,()=>recordManualProspectFeedback(context(),{candidateId:id,expectedRevision:revision,state}));
 beforeAll(async()=>{db=await createTestDatabase();seeded=await seedTwoWorkspaces(db.session);runtime=await db.appRuntimeSession();});
 beforeEach(async()=>{await db.session.query('DELETE FROM sourcing_candidates');});

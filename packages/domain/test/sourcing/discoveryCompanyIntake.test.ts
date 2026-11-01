@@ -12,7 +12,7 @@ import {DEFAULT_RESEARCH_SETTINGS} from '../../research/settings.ts';
 import type {DiscoveryHit} from '../../sourcing/discoveryProvider.ts';
 import type {PageFetchProvider} from '../../research/providers.ts';
 import {htmlPageFetch} from './support/discoveryPageFetch.ts';
-import {saveDiscoveryCandidate} from '../../sourcing/discoveryIntake.ts';
+import {seedDiscoveryCandidate} from './support/discoverySeed.ts';
 
 let db:TestDatabase;let workspaceId:string;let adminId:string;
 beforeAll(async()=>{
@@ -129,11 +129,11 @@ it('skips hosts held only by discovery-v1 rows, observations or origins without 
  const admin=repositoryContext(workspaceScope(workspaceId,{kind:'user',userId:adminId,role:'admin'}),db.session);
  const retained=(recordId:string,provider:'overture_places'|'first_party',sourceUrl:string,website:string|null)=>{
   const source={provider,recordId,release:'fixture-release',retrievedAt:null,sourceUrl};
-  return withTransaction(db.session,()=>saveDiscoveryCandidate(admin,{row:{source,observations:[source],firmName:`Retained ${recordId}`,website,locality:null,region:'TX',sourceConfidence:0.7,residentialFit:'unknown',websiteAssociation:'unknown',officePhoneEvidence:'observed_source',probableGroupKey:null},origins:[{source,sourceMetadata:{sourcesJson:'[{"dataset":"synthetic","license":"CDLA-Permissive-2.0"}]'},licenses:['CDLA-Permissive-2.0'],notices:[{label:'Fixture notice',url:'https://example.test/license',sha256:'a'.repeat(64)}]}]}));
+  return withTransaction(db.session,()=>seedDiscoveryCandidate(admin,{row:{source,observations:[source],firmName:`Retained ${recordId}`,website,locality:null,region:'TX',sourceConfidence:0.7,residentialFit:'unknown',websiteAssociation:'unknown',officePhoneEvidence:'observed_source',probableGroupKey:null},origins:[{source,sourceMetadata:{sourcesJson:'[{"dataset":"synthetic","license":"CDLA-Permissive-2.0"}]'},licenses:['CDLA-Permissive-2.0'],notices:[{label:'Fixture notice',url:'https://example.test/license',sha256:'a'.repeat(64)}]}]}));
  };
  // A bare row website, and a first-party origin source with no website at all.
- expect(await retained('v1-site','overture_places','https://places.example.test/v1-site','WWW.V1-Site.v1.example.test/about')).toMatchObject({ok:true});
- expect(await retained('v1-origin','first_party','https://v1-origin.v1.example.test/contact',null)).toMatchObject({ok:true});
+ await retained('v1-site','overture_places','https://places.example.test/v1-site','WWW.V1-Site.v1.example.test/about');
+ await retained('v1-origin','first_party','https://v1-origin.v1.example.test/contact',null);
  const list='https://blog.v1.example.test/top-10';
  const attempt=await search([
   {url:list,title:'Top 10 Property Management Companies',snippet:''},

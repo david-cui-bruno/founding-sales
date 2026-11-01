@@ -5,7 +5,7 @@ import {withTransaction,type SessionQueryable} from '../../db/queryable.ts';
 import {repositoryContext,workspaceScope} from '../../db/workspaceScope.ts';
 import {seedTwoWorkspaces,type TwoWorkspaces} from '../db/support/fixtures.ts';
 import {saveCandidate} from '../../sourcing/candidates.ts';
-import {saveDiscoveryCandidate} from '../../sourcing/discoveryIntake.ts';
+import {seedDiscoveryCandidate} from './support/discoverySeed.ts';
 import {manualOrdinaryFixture,manualDiscoveryFixture} from './support/manualProspectFixture.ts';
 import {saveManualProspectActivity,listManualProspectActivity,readManualProspectActivity} from '../../sourcing/manualProspectActivity.ts';
 import type {ManualProspectActivitySaveInput} from '@fss/contracts';
@@ -13,7 +13,7 @@ let db:TestDatabase,seed:TwoWorkspaces,runtime:SessionQueryable;
 const ctx=()=>repositoryContext(workspaceScope(seed.alpha.workspaceId,{kind:'user',userId:seed.alpha.admin.userId,role:'admin'}),runtime);
 const authority=async()=>true;
 const content={performedByUser:true as const,channel:'manual_phone' as const,occurrence:{kind:'unknown' as const},result:'unknown' as const,note:'Synthetic report only',callback:null};
-async function parent(discovery=false){const saved=discovery?await withTransaction(runtime,()=>saveDiscoveryCandidate(ctx(),manualDiscoveryFixture(randomUUID()))):await withTransaction(runtime,()=>saveCandidate(ctx(),manualOrdinaryFixture(Math.floor(Math.random()*1e8))));if(!saved.ok)throw Error(saved.reason);return saved.value.id;}
+async function parent(discovery=false){const saved=discovery?{ok:true as const,value:await withTransaction(runtime,()=>seedDiscoveryCandidate(ctx(),manualDiscoveryFixture(randomUUID())))}:await withTransaction(runtime,()=>saveCandidate(ctx(),manualOrdinaryFixture(Math.floor(Math.random()*1e8))));if(!saved.ok)throw Error(saved.reason);return saved.value.id;}
 const save=(input:ManualProspectActivitySaveInput)=>withTransaction(runtime,()=>saveManualProspectActivity(ctx(),input,authority));
 beforeAll(async()=>{db=await createTestDatabase();seed=await seedTwoWorkspaces(db.session);runtime=await db.appRuntimeSession();});
 afterAll(async()=>db?.drop());

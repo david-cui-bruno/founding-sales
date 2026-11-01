@@ -5,7 +5,7 @@ import {withTransaction,type SessionQueryable} from '../../db/queryable.ts';
 import {repositoryContext,workspaceScope} from '../../db/workspaceScope.ts';
 import {seedTwoWorkspaces,type TwoWorkspaces} from '../db/support/fixtures.ts';
 import {saveCandidate} from '../../sourcing/candidates.ts';
-import {saveDiscoveryCandidate} from '../../sourcing/discoveryIntake.ts';
+import {seedDiscoveryCandidate} from './support/discoverySeed.ts';
 import {manualOrdinaryFixture,manualDiscoveryFixture} from './support/manualProspectFixture.ts';
 import {manualPhoneFixture,seedManualPhoneRun} from './support/manualPhoneFixture.ts';
 import {saveManualProspectActivity,readManualProspectActivity} from '../../sourcing/manualProspectActivity.ts';
@@ -21,7 +21,7 @@ beforeAll(async()=>{db=await createTestDatabase();seed=await seedTwoWorkspaces(d
 afterAll(async()=>db?.drop());
 async function fixture(association:'ordinary'|'lastSuccess'|'discovery'='ordinary',workspace:'alpha'|'beta'='alpha'){
  const input=manualOrdinaryFixture(++index),raw=manualDiscoveryFixture(randomUUID());
- const saved=association==='discovery'?await tx(()=>saveDiscoveryCandidate(ctx(runtime,workspace),raw)):await tx(()=>saveCandidate(ctx(runtime,workspace),input));if(!saved.ok)throw Error(saved.reason);
+ const saved=association==='discovery'?{ok:true as const,value:await tx(()=>seedDiscoveryCandidate(ctx(runtime,workspace),raw))}:await tx(()=>saveCandidate(ctx(runtime,workspace),input));if(!saved.ok)throw Error(saved.reason);
  const candidateId=saved.value.id,attemptId=randomUUID(),source=association==='discovery'?raw.row.source.sourceUrl:input.sourceUrl;
  const evidenceSource=association==='lastSuccess'?`https://source.example.test/check-${randomUUID()}`:source;
  if(association==='lastSuccess')await runtime.query(`UPDATE sourcing_candidates SET source_check=jsonb_build_object('state','idle','lastSuccess',jsonb_build_object('url',$2::text)) WHERE id=$1`,[candidateId,evidenceSource]);
