@@ -168,3 +168,19 @@ it('still retains an explicit serve-area statement alongside a serve-as role',()
  const text='We serve as a point of contact for tenants. We serve Boston and the surrounding communities.';
  expect(classifyPreparedPassage(text,'').kinds).toEqual(['location']);
 });
+
+// Step1.6.5: Nov 1 Brickleys and Edgerow briefs had no business context although their own pages say so.
+it.each([
+ 'Franchise-owner-operated residential property management offices in New Mexico, Colorado, and Arizona.',
+ 'If we manage your real estate investment, sign in to view your statements and account notes.',
+])('recognizes a residential self-description or own real-estate management as business: %s',text=>{
+ expect(classifyPreparedPassage(text,'')).toMatchObject({usefulBusiness:true,contrary:false,kinds:expect.arrayContaining(['business'])});
+});
+it.each([
+ 'Software for residential property management companies that helps landlords collect rent online every month.',
+ 'We do not provide residential property management services for homes or apartments in this area.',
+ 'Greater Grand Rapids Property Management Specialists.',
+ 'Our team manages real estate investment funds and securities portfolios for accredited investors nationwide.',
+])('still refuses vendor, denial, short or investment-fund text: %s',text=>{
+ expect(classifyPreparedPassage(text,'').usefulBusiness).toBe(false);
+});
