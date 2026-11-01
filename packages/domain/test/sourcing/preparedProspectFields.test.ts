@@ -168,3 +168,32 @@ it('still retains an explicit serve-area statement alongside a serve-as role',()
  const text='We serve as a point of contact for tenants. We serve Boston and the surrounding communities.';
  expect(classifyPreparedPassage(text,'').kinds).toEqual(['location']);
 });
+
+// Step1.6.5: Nov 1 Brickleys and Edgerow briefs had no business context although their own pages say so.
+it.each([
+ 'Franchise-owner-operated residential property management offices in New Mexico, Colorado, and Arizona.',
+ 'If we manage your real estate investment, sign in to view your statements and account notes.',
+ 'Family-owned single-family rental management services throughout Grand Rapids, Kentwood & Wyoming.',
+ 'Residential Property Management Services in Spokane, Liberty Lake and the Spokane Valley.',
+ 'Family-owned residential property management service throughout Boston and Cambridge.',
+ 'A locally-owned & award-winning residential property management company serving Spokane, WA.',
+ 'We manage rental homes for institutional investors across the Boston metropolitan area.',
+])('recognizes a residential self-description or own real-estate management as business: %s',text=>{
+ expect(classifyPreparedPassage(text,'')).toMatchObject({usefulBusiness:true,contrary:false,kinds:expect.arrayContaining(['business'])});
+});
+it.each([
+ 'Software for residential property management companies that helps landlords collect rent online every month.',
+ 'We do not provide residential property management services for homes or apartments in this area.',
+ 'Greater Grand Rapids Property Management Specialists.',
+ 'Our team manages real estate investment funds and securities portfolios for accredited investors nationwide.',
+ 'The complete accounting software for a residential property management company with offices across the country.',
+ 'Built for any residential property management company that wants faster owner statements and reports.',
+ 'We manage real estate funds for institutional investors across the United States.',
+ 'Residential property management offices love our app for faster owner statements.',
+ 'Directory of residential property management services in Boston and Cambridge.',
+ 'Jobs at a residential property management company in Boston and Cambridge.',
+ 'Residential property management offices in Boston use our platform for owner statements.',
+ 'Our firm manages real estate assets and capital for institutional investors in core markets nationwide.',
+])('still refuses vendor, denial, short or investment-fund text: %s',text=>{
+ expect(classifyPreparedPassage(text,'').usefulBusiness).toBe(false);
+});
