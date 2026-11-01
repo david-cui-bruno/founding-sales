@@ -40,9 +40,12 @@ const question=(text:string)=>/\?\s*$/u.test(text)||/^\s*(?:why|how|what|when|wh
 // "Full-Service Property Management Company in Boston", "Property Management Grand Rapids MI". It needs a
 // service word or a place, so a bare "Property Management" menu label or "… Software" is none.
 const serviceHeading=new RegExp(`(?:(?:[Rr]esidential|[Ss]ingle.[Ff]amily|[Mm]ulti.?[Ff]amily|[Rr]ental)\\s+)?(?:[Pp]roperty|[Rr]ental)\\s+[Mm]anagement(?:\\s+([Ss]ervices?|[Cc]ompany|[Ff]irm|[Tt]eam|[Oo]ffices?))?(\\s+(?:in|across|serving|throughout)\\s+(?:the\\s+)?\\p{Lu}[\\p{L}.'’-]*(?:(?:,\\s*|\\s+|,?\\s+and\\s+|\\s+&\\s+)(?:the\\s+)?\\p{Lu}[\\p{L}.'’-]*)*|\\s+\\p{Lu}[\\p{L}.'’-]*(?:\\s+\\p{Lu}[\\p{L}.'’-]*){0,3},?\\s+(?:${US_BUSINESS_REGIONS.join('|')}))?\\.?$`,'u');
-const serviceHeadingText=(text:string)=>{const trimmed=text.trim(),match=serviceHeading.exec(trimmed);return trimmed.length<=120&&match!==null&&(match[1]!==undefined||match[2]!==undefined)&&taglineLead.test(trimmed.slice(0,match.index));};
+// Product, job, directory and review headings name no company's own service, wherever the word sits.
+const nonServiceHeading=/\b(?:software|platforms?|apps?|tools?|systems?|jobs?|careers?|hiring|directory|directories|lists?|listings?|reviews?|near me|companies)\b/iu;
+const serviceHeadingText=(text:string)=>{const trimmed=text.trim(),match=serviceHeading.exec(trimmed);return trimmed.length<=120&&!nonServiceHeading.test(trimmed)&&match!==null&&(match[1]!==undefined||match[2]!==undefined)&&taglineLead.test(trimmed.slice(0,match.index));};
 // The company placing itself in the industry: "Being in property management we're …", "As your property management company, we …".
-const industryMember=/\b(?:being in|as (?:a|an|your|the)(?:\s+[\p{L}-]+){0,3})\s+(?:(?:residential|rental)\s+)?property management(?:\s+(?:company|firm|team|business))?,?\s+(?:we|our)\b/iu;
+// Only allowlisted adjectives may sit between "As a" and the service, so a tenant, owner or client of one is never the company.
+const industryMember=new RegExp(`\\b(?:being in property management|as (?:a|an|your)(?:\\s+${leadToken}){0,2}\\s+(?:(?:residential|rental)\\s+)?property management\\s+(?:company|firm|team|professionals?|provider)),?\\s+(?:we|our)\\b`,'iu');
 function business(text:string):boolean {
  return (serviceHeadingText(text)||substantive(text)&&(residentialSelfTagline(text)||industryMember.test(text)||management.test(text)&&propertyManagementService.test(text)&&managementServiceAction.test(text)&&(ownManager.test(text)||namedManager.test(text))))&&(!nonServiceBusiness.test(text)||explicitManagementService.test(text))&&!question(text)&&!vendor.test(text)&&!productOffering.test(text)&&!educationalOffering.test(text)&&!attributed(text)&&!contrary.test(text)&&!businessDenial.test(text);
 }

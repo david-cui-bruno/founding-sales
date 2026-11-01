@@ -202,6 +202,7 @@ it.each([
 it.each([
  'Grand Rapids is attracting national attention as one of the fastest growing real estate markets in the country. With that growth, housing demand greatly increases. Being in property management we’re experiencing the forefront effects of that influx as new and existing residents need rental housing.',
  'As your property management company, we keep owners informed about every lease, inspection and repair.',
+ 'As a family-owned property management firm, our team answers every owner call the same business day.',
  'Property Management Services',
  'Property Management Grand Rapids MI',
  'Full-Service Property Management Company in Boston',
@@ -219,6 +220,11 @@ it.each([
  'As a property management software company, we help property managers collect rent online.',
  'Testimonial: As your property management company, we were thrilled with their service.',
  'As a property management firm, we do not manage residential homes or apartments.',
+ 'Property Management Software Boston MA',
+ 'Property Management Jobs Austin TX',
+ 'Property Management Directory Phoenix AZ',
+ 'As a tenant of a property management company, we were never told about hidden fees until move-out.',
+ 'As an owner with a property management company, we expected far better communication.',
 ])('still refuses labels, products, jobs, directories, testimonials and denials: %s',text=>{
  expect(classifyPreparedPassage(text,'').usefulBusiness).toBe(false);
 });
