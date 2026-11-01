@@ -6,59 +6,75 @@ import {manualProspectSubjectPermitted,type ManualProspectRow,type ManualProspec
  * Known terms/source loss hides a row even if another retained observation survives.
  * No qualification horizon is invented for these raw retained records.
  */
-const preparedLossSources=`prepared_lost_source_urls AS MATERIALIZED (
+/** Workspace-wide denial sets ($1 = workspace). Each is read once per statement; callers compare per-row
+ * values against these small CTEs instead of scanning evidence, audits and candidates again per row. */
+export const DENIED_SOURCE_CTES=`denied_evidence_urls AS MATERIALIZED (
+ SELECT DISTINCT rtrim(e.source_reference,'/') AS url FROM evidence_items e WHERE e.workspace_id=$1
+ AND (e.retention_expires_at<=clock_timestamp() OR (NOT e.terms_allow_retention AND e.retention_expires_at IS NULL))
+), lost_source_urls AS MATERIALIZED (
  SELECT DISTINCT rtrim(url,'/') AS url FROM sourcing_candidates lost
  CROSS JOIN LATERAL unnest(ARRAY[lost.payload->>'sourceUrl',lost.source_check->'lastSuccess'->>'url'] ||
  ARRAY(SELECT o.source->>'sourceUrl' FROM sourcing_candidate_discovery_origins o WHERE o.workspace_id=lost.workspace_id AND o.candidate_id=lost.id)) refs(url)
  WHERE lost.workspace_id=$1 AND lost.source_check->>'state'='unavailable'
  AND lost.source_check->>'reason' IN ('source_unavailable','source_not_permitted','no_readable_text') AND url IS NOT NULL
-), prepared_lost_source_hashes AS MATERIALIZED (
+), lost_source_hashes AS MATERIALIZED (
  SELECT DISTINCT loss.subject_id AS hash FROM audit_events loss WHERE loss.workspace_id=$1
  AND loss.action='${MANUAL_SOURCE_LOSS_ACTION}' AND loss.subject_kind='sourcing_source_hash'
-), `;
-function permittedManualProspectsSql(exactSubject:boolean,prepared=false):string {return `WITH ${prepared?preparedLossSources:''}raw AS (
+)`;
+/** Duplicate identity: a record without a website is its own group, else its normalized name, website and place. */
+const duplicateKeySql=(observed:string,id:string)=>`CASE WHEN NULLIF(trim(${observed}->>'website'),'') IS NULL THEN ${id}::text
+ ELSE jsonb_build_array(lower(trim(${observed}->>'firmName')),${observed}->>'website',lower(trim(${observed}->>'locality')),${observed}->>'region')::text END`;
+const observedSql=(candidate:string)=>`(CASE WHEN ${candidate}.payload->>'kind'='discovery-v1' THEN ${candidate}.payload->'row' ELSE ${candidate}.payload END)`;
+/** `narrowed` ($3 = candidate ids) reads only records that share a duplicate group with those ids, so the
+ * permission checks and window dedup of an exact or bounded selection do not touch the whole workspace. */
+function permittedManualProspectsSql(exactSubject:boolean,materialized=false,narrowed=false):string {return `WITH ${materialized?DENIED_SOURCE_CTES+', ':''}${narrowed?`narrow_keys AS MATERIALIZED (
+ SELECT ${duplicateKeySql(observedSql('t'),'t.id')} AS key FROM sourcing_candidates t WHERE t.workspace_id=$1 AND t.id=ANY($3::uuid[])
+), `:''}raw AS (
  SELECT c.id,c.workspace_id,c.payload,c.revision,c.created_at,c.status,c.source_check,
  COALESCE(s.state,'new') AS manual_state,
  CASE WHEN c.payload->>'kind'='discovery-v1' THEN c.payload->'row' ELSE c.payload END AS observed,
  (SELECT jsonb_agg(jsonb_build_object('source',o.source,'sourceMetadata',o.source_metadata,'licenses',o.licenses,'notices',o.notices) ORDER BY o.provider,o.release,o.record_id)
   FROM sourcing_candidate_discovery_origins o WHERE o.workspace_id=c.workspace_id AND o.candidate_id=c.id) AS origins
  FROM sourcing_candidates c LEFT JOIN sourcing_manual_prospect_states s ON s.workspace_id=c.workspace_id AND s.candidate_id=c.id AND s.candidate_revision=c.revision
- WHERE c.workspace_id=$1${exactSubject?' AND c.id=$2 AND c.revision=$3':''} AND c.status<>'dismissed'
+ WHERE c.workspace_id=$1${exactSubject?' AND c.id=$2 AND c.revision=$3':''}${narrowed?` AND ${duplicateKeySql(observedSql('c'),'c.id')} IN (SELECT key FROM narrow_keys)`:''} AND c.status<>'dismissed'
  AND NOT COALESCE(c.source_check->>'state'='unavailable' AND c.source_check->>'reason' IN ('source_unavailable','source_not_permitted','no_readable_text'),false)
-), referenced AS (
+), referenced AS MATERIALIZED (
  SELECT raw.*,ARRAY(SELECT DISTINCT rtrim(url,'/') FROM unnest(ARRAY[payload->>'sourceUrl',source_check->'lastSuccess'->>'url'] ||
  ARRAY(SELECT o->'source'->>'sourceUrl' FROM jsonb_array_elements(COALESCE(origins,'[]')) o)) url WHERE url IS NOT NULL ORDER BY 1) AS source_urls FROM raw
 ), permitted AS (
  SELECT raw.* FROM referenced raw WHERE length(trim(observed->>'firmName')) BETWEEN 1 AND 300
  AND (observed->>'firmName') ~ '[[:alnum:]]'
  AND (payload->>'kind' IS DISTINCT FROM 'discovery-v1' OR (origins IS NOT NULL AND jsonb_array_length(origins)=jsonb_array_length(observed->'observations')))
- AND NOT EXISTS(SELECT 1 FROM evidence_items e WHERE e.workspace_id=raw.workspace_id
+${materialized?` AND NOT EXISTS(SELECT 1 FROM denied_evidence_urls denied WHERE denied.url=ANY(raw.source_urls))`:` AND NOT EXISTS(SELECT 1 FROM evidence_items e WHERE e.workspace_id=raw.workspace_id
   AND rtrim(e.source_reference,'/')=ANY(raw.source_urls)
-  AND (e.retention_expires_at<=clock_timestamp() OR (NOT e.terms_allow_retention AND e.retention_expires_at IS NULL)))
-${prepared?` AND NOT EXISTS(SELECT 1 FROM prepared_lost_source_hashes loss
-  WHERE EXISTS(SELECT 1 FROM unnest(raw.source_urls) url WHERE loss.hash=encode(sha256(convert_to(url,'UTF8')),'hex')))`:` AND NOT EXISTS(SELECT 1 FROM audit_events loss WHERE loss.workspace_id=raw.workspace_id
+  AND (e.retention_expires_at<=clock_timestamp() OR (NOT e.terms_allow_retention AND e.retention_expires_at IS NULL)))`}
+${materialized?` AND NOT EXISTS(SELECT 1 FROM lost_source_hashes known_loss
+  WHERE EXISTS(SELECT 1 FROM unnest(raw.source_urls) url WHERE known_loss.hash=encode(sha256(convert_to(url,'UTF8')),'hex')))`:` AND NOT EXISTS(SELECT 1 FROM audit_events loss WHERE loss.workspace_id=raw.workspace_id
   AND loss.action='${MANUAL_SOURCE_LOSS_ACTION}' AND loss.subject_kind='sourcing_source_hash'
   AND EXISTS(SELECT 1 FROM unnest(raw.source_urls) url WHERE loss.subject_id=encode(sha256(convert_to(url,'UTF8')),'hex')))`}
-${prepared?` AND NOT EXISTS(SELECT 1 FROM prepared_lost_source_urls lost WHERE lost.url=ANY(raw.source_urls))`:` AND NOT EXISTS(SELECT 1 FROM sourcing_candidates lost WHERE lost.workspace_id=raw.workspace_id
+${materialized?` AND NOT EXISTS(SELECT 1 FROM lost_source_urls known_lost WHERE known_lost.url=ANY(raw.source_urls))`:` AND NOT EXISTS(SELECT 1 FROM sourcing_candidates lost WHERE lost.workspace_id=raw.workspace_id
   AND lost.source_check->>'state'='unavailable' AND lost.source_check->>'reason' IN ('source_unavailable','source_not_permitted','no_readable_text')
   AND (rtrim(lost.payload->>'sourceUrl','/')=ANY(raw.source_urls) OR rtrim(lost.source_check->'lastSuccess'->>'url','/')=ANY(raw.source_urls)
    OR EXISTS(SELECT 1 FROM sourcing_candidate_discovery_origins o WHERE o.workspace_id=lost.workspace_id AND o.candidate_id=lost.id AND rtrim(o.source->>'sourceUrl','/')=ANY(raw.source_urls))))`}
 )`;}
-const rowsSql=(prepared=false)=>`${permittedManualProspectsSql(false,prepared)}, keyed AS (
- SELECT permitted.*,CASE WHEN NULLIF(trim(observed->>'website'),'') IS NULL THEN id::text
- ELSE jsonb_build_array(lower(trim(observed->>'firmName')),observed->>'website',lower(trim(observed->>'locality')),observed->>'region')::text END AS duplicate_key FROM permitted
+const rowsSql=(materialized:boolean,narrowed=false)=>`${permittedManualProspectsSql(false,materialized,narrowed)}, keyed AS (
+ SELECT permitted.*,${duplicateKeySql('observed','id')} AS duplicate_key FROM permitted
 ), ranked AS (
  SELECT keyed.*,row_number() OVER(PARTITION BY duplicate_key ORDER BY created_at DESC,id DESC) AS duplicate_rank,
  (count(*) OVER(PARTITION BY duplicate_key)-1)::integer AS duplicate_count FROM keyed
 ) SELECT * FROM ranked WHERE duplicate_rank=1 AND ($2='all' OR manual_state=$2) ORDER BY created_at DESC,id DESC`;
 
-export const MANUAL_PROSPECT_ROWS_SQL=rowsSql();
-/** Same prepared permissions/dedup, with workspace-wide source-loss URL/hash sets
- * materialized once per statement instead of scanning candidates/audits per row. */
-export const PREPARED_PROSPECT_ROWS_SQL=rowsSql(true);
+/** Workspace-wide evidence/source-loss denial sets are materialized once per
+ * statement instead of scanning evidence, audits and candidates for every row. */
+export const MANUAL_PROSPECT_ROWS_SQL=rowsSql(true);
+/** Same rows for a bounded selection ($3 = candidate ids). Callers still filter `id=ANY($3)`. */
+export const MANUAL_PROSPECT_SELECTION_ROWS_SQL=rowsSql(true,true);
+/** Semantic reference: the same permissions and dedup with a correlated scan per
+ * row. Production never runs it; tests prove the materialized statements equal. */
+export const CORRELATED_PROSPECT_ROWS_SQL=rowsSql(false);
 
 export async function manualProspectRows(ctx:RepositoryContext,state:string,offset:number,exact?:{candidateId:string;expectedRevision:number}):Promise<ManualProspectRow[]> {
- if(exact)return (await ctx.db.query<ManualProspectRow>(`SELECT * FROM (${MANUAL_PROSPECT_ROWS_SQL}) current_rows WHERE id=$3 AND revision=$4`,[ctx.scope.workspaceId,state,exact.candidateId,exact.expectedRevision])).rows;
+ if(exact)return (await ctx.db.query<ManualProspectRow>(`SELECT * FROM (${MANUAL_PROSPECT_SELECTION_ROWS_SQL}) current_rows WHERE id=ANY($3::uuid[]) AND revision=$4`,[ctx.scope.workspaceId,state,[exact.candidateId],exact.expectedRevision])).rows;
  return (await ctx.db.query<ManualProspectRow>(`${MANUAL_PROSPECT_ROWS_SQL} LIMIT 51 OFFSET $3`,[ctx.scope.workspaceId,state,offset])).rows;
 }
 

@@ -1,17 +1,14 @@
-import {createHash} from 'node:crypto';
-import {sourceObservationSchema,type PreparedProspectCallable,type PreparedProspectCurrentBrief,type PreparedProspectTarget} from '@fss/contracts';
+import type {PreparedProspectCallable,PreparedProspectCurrentBrief,PreparedProspectTarget} from '@fss/contracts';
 import {projectManualProspect,type ManualProspectRow} from './manualProspectProjection.ts';
 import type {ManualPhoneSnapshot} from './manualProspectPhone.ts';
-import {originalAuthorities,originalLineage} from './manualProspectOriginalAuthority.ts';
-import {preparedCaptureAuthority} from './preparedCapture.ts';
+import {originalLineage} from './manualProspectOriginalAuthority.ts';
+import {admitPreparedPages,type PreparedSourceExpirations} from './preparedPageAdmission.ts';
 import {classifyPreparedPassage,type PreparedPassageClassification} from './preparedProspectFields.ts';
 import {blockPhoneLabels} from './manualProspectLiteralPhone.ts';
 import {classifyDiscoveryPage,companyHost} from './discoveryIdentity.ts';
 
 export interface PreparedRunIdentity {id:string;candidate_revision:number}
-export type PreparedSourceExpirations=ReadonlyMap<string,number>;
 type Passage=PreparedProspectCurrentBrief['passages'][number];
-const host=(value:string|null)=>{try{const url=new URL(value??'');return ['http:','https:'].includes(url.protocol)&&!url.username&&!url.password?url.hostname.toLowerCase().replace(/^www\./u,''):null;}catch{return null;}};
 /** Dated original passages only. A preparation assessment never changes a stored
  * qualification, resolves a canonical identity, or grants a channel/endpoint. */
 export function projectPreparedProspect(row:ManualProspectRow,snapshot:ManualPhoneSnapshot|undefined,latest:PreparedRunIdentity|undefined,now:number,expirations:PreparedSourceExpirations=new Map()):PreparedProspectCurrentBrief|null {
@@ -20,22 +17,11 @@ export function projectPreparedProspect(row:ManualProspectRow,snapshot:ManualPho
  const passages:Passage[]=[],all:{passage:Passage;classification:PreparedPassageClassification;phone:string|null}[]=[],usedSourceDeadlines:number[]=[];
  let usablePages=0,partialPages=0,unshown=false,contraryBeyondBound=false;
  if(snapshot&&!snapshot.dependency_changed&&snapshot.id===latest?.id&&snapshot.candidate_revision===row.revision&&originalLineage(snapshot)){
-  const raw=Array.isArray(snapshot.observations)&&snapshot.observations.length<=8&&Buffer.byteLength(JSON.stringify(snapshot.observations))<=100_000?snapshot.observations:[];
-  // Source grants are indexed by observation ID. A duplicate could otherwise
-  // borrow a different URL's grant; refuse the collection without trusting old facts.
-  const ids=raw.flatMap(value=>{const parsed=sourceObservationSchema.safeParse(value);return parsed.success?[parsed.data.id]:[];});
-  const unique=new Set(ids).size===ids.length;
-  if(!unique)unshown=true;
-  const grants=originalAuthorities(snapshot),capture=preparedCaptureAuthority(snapshot),expectedHost=host(grants.website);
-  const captureDeadline=capture.validUntil===null?null:Date.parse(capture.validUntil);
-  const captured=captureDeadline===null||Number.isFinite(captureDeadline)&&captureDeadline>now?capture.observationIds:new Set<string>();
-  for(const value of unique?raw:[]){
-   const parsed=sourceObservationSchema.safeParse(value);
-   if(!parsed.success){unshown=true;continue;}
-   const source=parsed.data,expires=expirations.get(source.url);
-   if((!snapshot.permitted_urls.includes(source.url)&&!captured.has(source.id))||new Set(source.blocks.map(block=>block.id)).size!==source.blocks.length||(!grants.authorities[source.id]&&!captured.has(source.id))||!expectedHost||host(source.url)!==expectedHost||!source.firstParty||Date.parse(source.retrievedAt)>now||expires!==undefined&&expires<=now||createHash('sha256').update(JSON.stringify(source.blocks)).digest('hex')!==source.relevantTextHash){unshown=true;continue;}
+  const admitted=admitPreparedPages(snapshot,now,expirations);
+  unshown=admitted.unshown;
+  for(const {source,captured,expires} of admitted.pages){
    usablePages++;if(source.truncated)partialPages++;
-   if(captured.has(source.id)&&captureDeadline!==null)usedSourceDeadlines.push(captureDeadline);
+   if(captured&&admitted.captureDeadline!==null)usedSourceDeadlines.push(admitted.captureDeadline);
    if(expires!==undefined)usedSourceDeadlines.push(expires);
    for(const block of source.blocks){
     const classification=classifyPreparedPassage(block.text,observed.locality??'');

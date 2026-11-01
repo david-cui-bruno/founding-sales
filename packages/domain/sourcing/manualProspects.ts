@@ -3,15 +3,18 @@ import {manualProspectListInputSchema,manualProspectListSchema,manualProspectFee
 import type {z} from 'zod';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {activeIdentityActor} from '../crm/identityAccess.ts';
-import {manualProspectRows,MANUAL_PROSPECT_ROWS_SQL} from './manualProspectRows.ts';
+import {manualProspectRows,MANUAL_PROSPECT_SELECTION_ROWS_SQL} from './manualProspectRows.ts';
 import {lockDiscoveryReviewSources} from './discoveryReviewVisibility.ts';
-import {manualPhoneSnapshots,recheckManualPhoneSnapshots,projectManualPhone,changedManualPhone} from './manualProspectPhone.ts';
+import {manualPhoneSnapshots,recheckManualPhoneSnapshots,projectManualPhone,changedManualPhone,type ManualPhoneSnapshot} from './manualProspectPhone.ts';
 import {projectManualProspect,type ManualProspectRow} from './manualProspectProjection.ts';
 import {phoneDiscoverySnapshots} from './prospectPhoneDiscoveryStore.ts';
 import {composeProspectPhoneDiscovery,projectProspectPhoneDiscovery} from './prospectPhoneDiscoveryProjection.ts';
 import {readProspectPhoneDiscoverySnapshot} from './prospectPhoneDiscovery.ts';
-import {currentManualPhoneChoice,projectManualPhoneChoice} from './manualProspectPhoneChoice.ts';
+import {currentManualPhoneChoice,projectManualPhoneChoice,projectPreparedPhoneChoice} from './manualProspectPhoneChoice.ts';
+import {readPreparedPhoneChoice,withPreparedPhoneSnapshots} from './manualProspectPreparedPhone.ts';
+import {lockPreparedCaptureDependencies} from './preparedCaptureDependencies.ts';
 import {lockLivePreparationCleanup} from '../calling/preparationLifecycle.ts';
+import {readManualProspectSubject} from './manualProspectRows.ts';
 
 type Result<T>={ok:true;value:T}|{ok:false;reason:string};
 const refuse=(reason:string):{ok:false;reason:string}=>({ok:false,reason});
@@ -27,7 +30,7 @@ export async function listManualProspects(ctx:RepositoryContext,input:z.infer<ty
 export async function listManualProspectSelection(ctx:RepositoryContext,input:z.infer<typeof manualProspectListInputSchema>,selection:readonly {id:string;revision:number}[],authority:()=>Promise<boolean>,onFinalClock?:(now:number)=>void){
  if(selection.length>50)return refuse('invalid_input');
  const read=async():Promise<ManualProspectRow[]>=>{
-  const found=(await ctx.db.query<ManualProspectRow>(`SELECT * FROM (${MANUAL_PROSPECT_ROWS_SQL}) current_rows WHERE id=ANY($3::uuid[])`,[ctx.scope.workspaceId,input.state,selection.map(r=>r.id)])).rows;
+  const found=(await ctx.db.query<ManualProspectRow>(`SELECT * FROM (${MANUAL_PROSPECT_SELECTION_ROWS_SQL}) current_rows WHERE id=ANY($3::uuid[])`,[ctx.scope.workspaceId,input.state,selection.map(r=>r.id)])).rows;
   return selection.flatMap(subject=>{const row=found.find(r=>r.id===subject.id&&r.revision===subject.revision);return row?[row]:[];});
  };
  return projectManualProspectPage(ctx,input,authority,read,onFinalClock);
@@ -44,13 +47,17 @@ async function projectManualProspectPage(ctx:RepositoryContext,input:z.infer<typ
  const choices=input.includeManualPhone&&page.length?(await ctx.db.query<{candidate_id:string;candidate_revision:number;manual_phone_choice:unknown}>(
   'SELECT candidate_id,candidate_revision,manual_phone_choice FROM sourcing_manual_prospect_states WHERE workspace_id=$1 AND candidate_id=ANY($2::uuid[]) ORDER BY candidate_id FOR SHARE',
   [ctx.scope.workspaceId,page.map(row=>row.id)])).rows:[];
- const phones=await manualPhoneSnapshots(ctx,page);
+ // Calling's exact read (includeManualPhone) also reads a current prepared source association (ADR0034);
+ // the default queue list is unchanged. Lock order matches the prepared reads: dependencies before exact evidence.
+ const withPrepared=(snapshots:ManualPhoneSnapshot[])=>input.includeManualPhone?withPreparedPhoneSnapshots(ctx,page,snapshots):Promise.resolve(snapshots);
+ if(input.includeManualPhone&&page.length)await lockPreparedCaptureDependencies(ctx,page);
+ const phones=await withPrepared(await manualPhoneSnapshots(ctx,page));
  const discoveries=await phoneDiscoverySnapshots(ctx,page);
  if(ctx.scope.actor.kind==='user')await ctx.db.query('SELECT user_id FROM workspace_memberships WHERE workspace_id=$1 AND user_id=$2 FOR SHARE',[ctx.scope.workspaceId,ctx.scope.actor.userId]);
  if(!await authority()||!await admin(ctx))return refuse('authority_changed');
- const checked=await recheckManualPhoneSnapshots(ctx,page,phones);
+ const checked=await withPrepared(await recheckManualPhoneSnapshots(ctx,page,phones));
  if(!await authority()||!await admin(ctx))return refuse('authority_changed');
- const currentRows=await readRows(),currentPhones=await recheckManualPhoneSnapshots(ctx,page,phones);
+ const currentRows=await readRows(),currentPhones=await withPrepared(await recheckManualPhoneSnapshots(ctx,page,phones));
  const currentDiscoveries=await phoneDiscoverySnapshots(ctx,page);
  if(!isDeepStrictEqual(rows,currentRows))return refuse('authority_changed');
  // Authority owns session/device/membership SHARE locks through this transaction.
@@ -69,7 +76,10 @@ async function projectManualProspectPage(ctx:RepositoryContext,input:z.infer<typ
   const p=projectManualProspect(row,composeProspectPhoneDiscovery(evidence,discoveryEvidence));
   if(!p)return [];
   const choice=choices.find(value=>value.candidate_id===row.id&&value.candidate_revision===row.revision);
-  const manualPhone=input.includeManualPhone&&row.manual_state==='kept'&&isDeepStrictEqual(discovered,currentDiscovery)?projectManualPhoneChoice(currentDiscovery,choice?.manual_phone_choice,wall):null;
+  const stable=isDeepStrictEqual(before,middle)&&isDeepStrictEqual(before,after);
+  const stored=input.includeManualPhone&&row.manual_state==='kept'?choice?.manual_phone_choice:undefined;
+  // A choice names either its phone-discovery run or the candidate's latest qualification run (prepared pages, ADR0034).
+  const manualPhone=stored===undefined?null:isDeepStrictEqual(discovered,currentDiscovery)?projectManualPhoneChoice(currentDiscovery,stored,wall)??(stable?projectPreparedPhoneChoice(after,stored,wall):null):null;
   return [manualPhone?{...p,manualPhone}:p];
  });
  return {ok:true,value:manualProspectListSchema.parse({prospects,hasMore:rows.length>50})};
@@ -88,15 +98,23 @@ export async function recordManualProspectFeedback(ctx:RepositoryContext,input:z
  if(candidate.revision!==input.expectedRevision)return refuse('candidate_changed');
  await ctx.db.query('SELECT user_id FROM workspace_memberships WHERE workspace_id=$1 AND user_id=$2 FOR SHARE',[w,ctx.scope.actor.userId]);
  if(!await authority()||!await admin(ctx))return refuse('authority_changed');
- const row=(await ctx.db.query<ManualProspectRow>(`SELECT * FROM (${MANUAL_PROSPECT_ROWS_SQL}) visible WHERE id=$3`,[w,'all',input.candidateId])).rows[0];
+ const row=(await ctx.db.query<ManualProspectRow>(`SELECT * FROM (${MANUAL_PROSPECT_SELECTION_ROWS_SQL}) visible WHERE id=ANY($3::uuid[])`,[w,'all',[input.candidateId]])).rows[0];
  if(!row||!projectManualProspect(row))return refuse('candidate_unavailable');
  const choiceProvided=Object.hasOwn(input,'phoneChoice');
  let phoneChoice:ManualPhoneChoice|null=null;
  if(input.phoneChoice){
-  const snapshot=await readProspectPhoneDiscoverySnapshot(ctx,{candidateId:input.candidateId,expectedRevision:input.expectedRevision},authority);
-  if(!snapshot.ok)return snapshot;
-  phoneChoice=currentManualPhoneChoice(snapshot.value?.run,input.phoneChoice,snapshot.value?.now??NaN);
-  if(!phoneChoice)return refuse('phone_source_changed');
+  // A choice from this candidate's prepared pages (its latest qualification run) is read before any discovery run.
+  const prepared=await readPreparedPhoneChoice(ctx,row,input.phoneChoice,authority);
+  if(!prepared.ok)return refuse(prepared.reason);
+  if(prepared.matched){
+   if(!prepared.phone)return refuse('phone_source_changed');
+   phoneChoice=prepared.phone.choice;
+  }else{
+   const snapshot=await readProspectPhoneDiscoverySnapshot(ctx,{candidateId:input.candidateId,expectedRevision:input.expectedRevision},authority);
+   if(!snapshot.ok)return snapshot;
+   phoneChoice=currentManualPhoneChoice(snapshot.value?.run,input.phoneChoice,snapshot.value?.now??NaN);
+   if(!phoneChoice)return refuse('phone_source_changed');
+  }
  }
  await ctx.db.query(`INSERT INTO sourcing_manual_prospect_states(workspace_id,candidate_id,candidate_revision,state,manual_phone_choice) VALUES($1,$2,$3,$4,$6::jsonb)
  ON CONFLICT(workspace_id,candidate_id) DO UPDATE SET candidate_revision=EXCLUDED.candidate_revision,state=EXCLUDED.state,updated_at=clock_timestamp(),
@@ -110,6 +128,10 @@ export class ManualPhoneChoiceChanged extends Error{constructor(readonly reason:
 /** Receipt/audit insertion can wait after the annotation write. Throw to roll the
  * choice and receipt back together if current source or principal rights expired. */
 export async function currentManualPhoneChoiceAuthority(ctx:RepositoryContext,input:{candidateId:string;expectedRevision:number;phoneChoice:ManualPhoneChoice},authority:()=>Promise<boolean>):Promise<void>{
+ const subject=await readManualProspectSubject(ctx,{candidateId:input.candidateId,expectedRevision:input.expectedRevision});
+ const prepared=subject?await readPreparedPhoneChoice(ctx,{...subject,duplicate_count:0},input.phoneChoice,authority):null;
+ if(prepared&&!prepared.ok)throw new ManualPhoneChoiceChanged(prepared.reason);
+ if(prepared?.matched){if(!prepared.phone)throw new ManualPhoneChoiceChanged('phone_source_changed');return;}
  const snapshot=await readProspectPhoneDiscoverySnapshot(ctx,{candidateId:input.candidateId,expectedRevision:input.expectedRevision},authority);
  if(!snapshot.ok)throw new ManualPhoneChoiceChanged(snapshot.reason);
  if(!currentManualPhoneChoice(snapshot.value?.run,input.phoneChoice,snapshot.value?.now??NaN))throw new ManualPhoneChoiceChanged('phone_source_changed');

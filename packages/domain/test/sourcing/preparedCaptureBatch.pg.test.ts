@@ -11,7 +11,7 @@ import {withPreparedCaptureSnapshots} from '../../sourcing/preparedCaptureStore.
 import {preparedCaptureAuthority,preparedCaptureManifest,type PreparedCapturePolicy} from '../../sourcing/preparedCapture.ts';
 import {phoneDiscoverySourceLimit} from '../../sourcing/prospectPhoneDiscoveryAuthority.ts';
 import {lockDiscoveryReviewSources} from '../../sourcing/discoveryReviewVisibility.ts';
-import {MANUAL_PROSPECT_ROWS_SQL,PREPARED_PROSPECT_ROWS_SQL} from '../../sourcing/manualProspectRows.ts';
+import {MANUAL_PROSPECT_ROWS_SQL,CORRELATED_PROSPECT_ROWS_SQL} from '../../sourcing/manualProspectRows.ts';
 import {MANUAL_SOURCE_LOSS_ACTION,rememberExpiredManualSources} from '../../sourcing/manualProspectSourceLoss.ts';
 import {listPreparedProspects} from '../../sourcing/preparedProspects.ts';
 import {seedPreparedProspect,preparedProspectsBusinessSnapshot} from './preparedProspectsPgFixture.ts';
@@ -76,7 +76,7 @@ it.each(['source','lastSuccess','origin'] as const)('keeps prepared permission/d
  const target=await input('prepared-source-association-v2'),payload=candidateInputSchema.parse(target.payload);
  const compare=async()=>{
   const shared=(await runtime.query(MANUAL_PROSPECT_ROWS_SQL,[seed.alpha.workspaceId,'all'])).rows;
-  const prepared=(await runtime.query(PREPARED_PROSPECT_ROWS_SQL,[seed.alpha.workspaceId,'all'])).rows;
+  const prepared=(await runtime.query(CORRELATED_PROSPECT_ROWS_SQL,[seed.alpha.workspaceId,'all'])).rows;
   expect(prepared).toEqual(shared);return prepared;
  };
  expect((await compare()).some(row=>row['id']===target.candidate_id)).toBe(true);
@@ -109,7 +109,7 @@ it('keeps audit-loss scope identical and invalidates global prepared continuatio
   await runtime.query(`INSERT INTO audit_events(workspace_id,actor_kind,action,subject_kind,subject_id,detail) VALUES($1,'system',$2,$3,encode(sha256(convert_to(rtrim($4::text,'/'),'UTF8')),'hex'),'{}')`,[workspace,action,kind,url]);
  const compare=async()=>{
   const shared=(await runtime.query(MANUAL_PROSPECT_ROWS_SQL,[seed.alpha.workspaceId,'all'])).rows;
-  const prepared=(await runtime.query(PREPARED_PROSPECT_ROWS_SQL,[seed.alpha.workspaceId,'all'])).rows;
+  const prepared=(await runtime.query(CORRELATED_PROSPECT_ROWS_SQL,[seed.alpha.workspaceId,'all'])).rows;
   expect(prepared).toEqual(shared);return prepared;
  };
  expect((await compare()).some(row=>row['id']===target.candidateId)).toBe(true);

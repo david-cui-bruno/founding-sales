@@ -40,6 +40,20 @@ it.each([false,true])('saves and current-reads chosen source metadata, with same
  expect(writes).toHaveLength(unknown?2:1);if(unknown)expect(writes[1]).toEqual(writes[0]);
  expect(JSON.stringify(writes)).not.toMatch(/214|Office phone|capacity\.example/u);expect(JSON.stringify({...sessionStorage,...localStorage})).not.toMatch(/214|Office phone|capacity\.example/u);
 });
+it('keeps a prepared-page number as a manual annotation with an honest note, and offers company saving only for a discovery-run number',async()=>{
+ const f=fixture(),source=f.p.phoneEvidence?.state==='observed'?f.p.phoneEvidence.sources[0]!:null;if(!source||!('method' in source))throw Error('Expected literal');
+ const text='(214) 555-0123',preparedSource={...source,parser:'manual-literal-phone-v2',literal:text,start:0,end:text.length,label:text,labelStart:0,labelEnd:text.length,authority:{kind:'prepared_capture',sourceUrl:source.url,expiresAt:new Date(Date.now()+60000).toISOString()}};
+ const preparedChoice={...f.choice,labelStart:0,labelEnd:text.length,start:0,end:text.length};
+ const prepared=manualProspectSchema.parse({...f.p,phoneEvidence:{state:'observed',value:'+12145550123',sources:[preparedSource],coverage:{parser:'manual-literal-phone-v2',state:'partial',observations:1,blocks:2}},state:'kept'});
+ const answer=(p:unknown)=>client(async url=>{if(String(url).endsWith('/prospects/list'))return Response.json({prospects:[p],hasMore:false});throw Error('No other route allowed');});
+ const open=async(p:typeof prepared,phone:typeof f.phone)=>{const c=answer({...p,manualPhone:phone});await c.refresh();render(<CallingContext client={c} entry={{subject:{kind:'candidate',candidateId:id,expectedCandidateRevision:1},label:p.observedName}} onReady={()=>undefined} onOpenPreparedFirm={()=>undefined}/>);await screen.findByLabelText('Chosen manual number');};
+ await open(prepared,{...f.phone,choice:preparedChoice});
+ expect(screen.getByText(/comes from the company's own retained pages\. It is a manual annotation only/u)).toBeTruthy();
+ expect(screen.queryByLabelText('Save company for Calling')).toBeNull();expect(screen.queryByRole('button',{name:'Review company details'})).toBeNull();
+ cleanup();
+ await open(manualProspectSchema.parse({...f.p,state:'kept'}),f.phone);
+ expect(screen.getByLabelText('Save company for Calling')).toBeTruthy();expect(screen.queryByText(/manual annotation only/u)).toBeNull();
+});
 it('defaults admin to kept, resets paging for retained, and never requests retained for salesperson',async()=>{
  const reads:unknown[]=[],c=client(async(url,init)=>{if(!String(url).endsWith('/prospects/priority/list'))throw Error('Unexpected');reads.push(JSON.parse(String(init?.body)));return Response.json(priorityFixturePage({prospects:[],hasMore:true}));});await c.refresh();
  const view=render(<CallingQueue client={c} onSelect={()=>undefined} disabled={false}/>);

@@ -7,7 +7,7 @@ export type LiteralSource=Extract<Extract<Evidence,{state:'observed'}>['sources'
 export type LiteralAuthority=LiteralSource['authority'];
 export type LiteralLineage=LiteralSource['lineage'];
 export type LiteralDiagnostics=NonNullable<Extract<Evidence,{state:'conflicting'}>['diagnostics']>;
-export interface LiteralInput {runId:string;observations:unknown;website:string|null;authorities:Record<string,LiteralAuthority>;lineage:LiteralLineage;now:number}
+export interface LiteralInput {runId:string;observations:unknown;website:string|null;authorities:Record<string,LiteralAuthority>;lineage:LiteralLineage;now:number;partial?:boolean}
 export interface LiteralScan {sources:LiteralSource[];coverage:NonNullable<Evidence['coverage']>;unresolved:boolean;diagnostics?:LiteralDiagnostics;reason?:'original_not_usable'|'bounded_scan_incomplete'}
 /** v2 extends v1 (ADR0034) with verb attachment before prose and standalone published
  * numbers; every v1-accepted span is unchanged. Evidence is recomputed per read, never stored. */
@@ -91,6 +91,12 @@ function standaloneNumber(text:string):BlockPhoneLabel[]{
  const emoji=/(?:📞|☎)\uFE0F?/u.exec(prefix),label=emoji?{label:emoji[0],labelStart:emoji.index,labelEnd:emoji.index+emoji[0].length}:{label:literal,labelStart:start,labelEnd:end};
  return [{...label,complete:true,unattached:false,literals:[{literal,start,value:normalized.handle.value,reason:null}]}];
 }
+/** The exact span is the one literal of a standalone published number, whose permitted email tail is not part of it.
+ * Extension and vanity suffixes never reach here: they are not supported NANP literals, so no standalone block exists. */
+export function isStandalonePublishedLiteral(text:string,start:number,end:number):boolean{
+ const literal=phoneBlockAllowsV2(text)?standaloneNumber(text)[0]?.literals[0]:undefined;
+ return literal!==undefined&&literal.start===start&&literal.start+literal.literal.length===end;
+}
 export function scanManualLiteralPhones(input:LiteralInput):LiteralScan {
  const coverage:LiteralScan['coverage']={parser,state:'complete',observations:0,blocks:0};
  const result:LiteralScan={sources:[],coverage,unresolved:false};
@@ -110,8 +116,11 @@ export function scanManualLiteralPhones(input:LiteralInput):LiteralScan {
  if(new Set(sources.map(source=>source.id)).size!==sources.length)return unusable();
  const website=host(input.website);
  for(const source of sources){
-  // A lost/unusable original is incomplete coverage, never a selected survivor.
-  if(!input.authorities[source.id]||!website||host(source.url)!==website||!source.firstParty||source.truncated||Date.parse(source.retrievedAt)>input.now||
+  // A lost/unusable original is incomplete coverage, never a selected survivor. Only the prepared
+  // authority (ADR0034) reads an incomplete page, and only until its own bound.
+  const authority=input.authorities[source.id],prepared=authority?.kind==='prepared_capture';
+  if(!authority||!website||host(source.url)!==website||!source.firstParty||source.truncated&&!prepared||Date.parse(source.retrievedAt)>input.now||
+   prepared&&!(Date.parse(authority.expiresAt)>input.now)||
    createHash('sha256').update(JSON.stringify(source.blocks)).digest('hex')!==source.relevantTextHash)return unusable();
   coverage.observations++;coverage.blocks+=source.blocks.length;
   for(const block of source.blocks){
@@ -126,8 +135,7 @@ export function scanManualLiteralPhones(input:LiteralInput):LiteralScan {
     if(found.unattached){result.unresolved=true;reasons.add('unattached_label_content');}
     for(const reason of reasons){
      const diagnostics=result.diagnostics??={entries:[],truncated:false};
-     const authority=input.authorities[source.id]!;
-     if(authority.kind==='phone_discovery'&&(!diagnostics.expiresAt||Date.parse(authority.expiresAt)<Date.parse(diagnostics.expiresAt)))diagnostics.expiresAt=authority.expiresAt;
+     if((authority.kind==='phone_discovery'||authority.kind==='prepared_capture')&&(!diagnostics.expiresAt||Date.parse(authority.expiresAt)<Date.parse(diagnostics.expiresAt)))diagnostics.expiresAt=authority.expiresAt;
      if(found.label.length>200||diagnostics.entries.length>=16){diagnostics.truncated=true;continue;}
      diagnostics.entries.push({reason,runId:input.runId,observationId:source.id,blockId:block.id,url:source.url,retrievedAt:source.retrievedAt,
       contentHash:source.contentHash,relevantTextHash:source.relevantTextHash,parser,label:found.label,labelStart:found.labelStart,labelEnd:found.labelEnd,
@@ -137,6 +145,8 @@ export function scanManualLiteralPhones(input:LiteralInput):LiteralScan {
   }
  }
  if(!sources.length)return unusable();
+ // Intact blocks of incomplete or partly skipped prepared pages support a published number, never absence or completeness.
+ if(input.partial||sources.some(source=>source.truncated))coverage.state='partial';
  return result;
 }
 function literalSource(input:LiteralInput,source:SourceObservation,blockId:string,label:string,labelStart:number,literal:string,start:number,value:string|null):LiteralSource{

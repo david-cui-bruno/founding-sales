@@ -1,6 +1,6 @@
-// Root's reusable operator for one same-schema protected application release. It never
-// dispatches, approves, migrates, stops tasks or replays; schema changes use the reviewed
-// migration release path. Usage: node infra/scripts/application-release-operator.mjs
+// Root's reusable operator for one protected application release: same schema, or exactly one
+// contiguous N→N+1 migration that the native application job applies. It never dispatches,
+// approves, migrates, stops tasks or replays. Usage: node infra/scripts/application-release-operator.mjs
 // <preflight|observe-off|verify-off|verify-application> --dir <absolute private run directory>
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
@@ -24,7 +24,11 @@ const READS = { sts: ['get-caller-identity'], ecs: ['describe-services', 'descri
 const OFF_READS = { sts: READS.sts, ecs: READS.ecs, logs: ['get-log-events'] }, OFF_WRITES = ['register-task-definition', 'run-task', 'deregister-task-definition'];
 const UPGRADE_GUARDS = ['Does this branch change the schema or a migration?', 'Resolve what production runs, from production', 'What production runs, and what this branch would move it to', 'The grants baseline may not move in the same pull request as a migration'];
 const UPGRADE_WORK = ['Install', 'No durability for the throwaway database', 'Upgrade test', 'Bind the upgrade evidence to observed source builds', 'Upload the evidence'];
-
+const SCHEMA_RANGE = 'packages/domain/db/schemaRange.ts', MIGRATIONS = 'packages/domain/db/migrations';
+// The repository classifier's result (tools/upgrade/classify.ts) printed in the bound upgrade evidence.
+// `additive` migrates automatically; `touches-existing` needs an explicit matching `migrationReview`
+// binding; privilege, destructive, replaced-routine and unclassified work refuses here (reviewed path).
+const MIGRATION_REVIEW_KEYS = ['classification', 'report', 'reviewer'];
 const must = (value, reason) => { if (!value) throw new Error(reason); };
 const sha = value => typeof value === 'string' && /^[a-f0-9]{40}$/u.test(value);
 const digestOf = value => typeof value === 'string' && /^sha256:[a-f0-9]{64}$/u.test(value);
@@ -47,22 +51,36 @@ export function parseArguments(argv) {
   return { command: argv[0], directory };
 }
 
-// All eight keys are always present. Application run/job identities stay null until dispatch.
+// The eight keys are always present. Application run/job identities stay null until dispatch. An optional
+// `migrationReview` {reviewer, report, classification} records the separate review a touches-existing
+// migration needs; it authorizes only the classification the repository classifier actually printed.
 export function validateBindings(value, application = false) {
-  must(value && typeof value === 'object' && !Array.isArray(value) && equal(Object.keys(value).sort(), BINDING_KEYS), 'release_bindings_shape_invalid');
+  const keys = value && typeof value === 'object' && !Array.isArray(value) ? Object.keys(value).filter(k => k !== 'migrationReview').sort() : null;
+  must(equal(keys, BINDING_KEYS), 'release_bindings_shape_invalid');
   for (const key of ['prNumber', 'gateId', 'imagesId', 'upgradeJobId']) must(positive(value[key]), 'release_source_ci_unbound');
   must(sha(value.candidate) && sha(value.prHead), 'release_source_commit_unbound');
   must(value.gateId !== value.imagesId, 'release_ci_identity_alias');
   for (const key of ['runId', 'jobId']) must(application ? positive(value[key]) : value[key] === null || positive(value[key]), 'release_application_unbound');
   if (application) must(new Set([value.runId, value.gateId, value.imagesId]).size === 3, 'candidate_invalid');
+  const review = value.migrationReview;
+  if (Object.hasOwn(value, 'migrationReview')) must(review && typeof review === 'object' && !Array.isArray(review) && equal(Object.keys(review).sort(), MIGRATION_REVIEW_KEYS) && MIGRATION_REVIEW_KEYS.every(k => typeof review[k] === 'string' && review[k].trim().length > 0 && review[k].length <= 500) && review.classification === 'touches-existing', 'migration_review_invalid');
   return value;
+}
+
+export function authorizeMigration(cls, review) {
+  if (review) must(review.classification === cls, 'migration_review_mismatch');
+  must(cls === 'additive' || cls === 'touches-existing', 'migration_classification_refused');
+  must(cls === 'additive' || review, 'migration_review_required');
+  return cls;
 }
 
 // The current baseline is the saved live preflight observation, never a constant or a re-derivation.
 export function baselineFromPreflight(p) {
   must(p && typeof p === 'object' && sha(p.production) && positive(p.schema) && p.cloudWrites === 0 && p.nonterminalOneoffs === 0 && Number.isFinite(Date.parse(p.at)) && Array.isArray(p.services) && Array.isArray(p.runtime), 'baseline_preflight_invalid');
   must(p.bindings && equal(Object.keys(p.bindings).sort(), SOURCE_KEYS), 'baseline_preflight_unbound');
-  const baseline = { production: p.production, schema: p.schema, at: p.at };
+  const m = p.migration, migration = p.targetSchema === p.schema + 1 && m && equal(Object.keys(m).sort(), ['class', 'file', 'review', 'sha']) && typeof m.file === 'string' && m.file.startsWith(String(p.targetSchema).padStart(4, '0') + '_') && /^[a-f0-9]{40}$/u.test(m.sha) && (m.review === null || validateBindings({ ...p.bindings, runId: null, jobId: null, migrationReview: m.review })) && authorizeMigration(m.class, m.review);
+  must(p.targetSchema === p.schema && m === null || migration, 'baseline_preflight_target_invalid');
+  const baseline = { production: p.production, schema: p.schema, targetSchema: p.targetSchema, schemaMigration: m, at: p.at };
   for (const name of ['api', 'worker']) {
     const matches = p.services.filter(s => s.name === `fss-prod-${name}`), service = matches[0];
     must(matches.length === 1 && revisionOf(service.definition, name) && positive(service.count), 'baseline_service_invalid');
@@ -122,13 +140,28 @@ function releaseControls(gh) {
   must(protection.can_admins_bypass === false && protection.deployment_branch_policy?.custom_branch_policies === true && protection.protection_rules?.some(r => r.type === 'required_reviewers' && r.reviewers?.length > 0) && branches.total_count === 1 && branches.branch_policies?.length === 1 && branches.branch_policies[0].name === 'main', 'protected_environment_changed');
   return holds;
 }
-// Same-schema only: bounded production...candidate history touching no schema/migration path.
-function sameSchemaSource(gh, base, candidate) {
+// Bounded production...candidate history. Same schema touches no schema/migration path; a migration
+// release adds exactly the next contiguous file, raises REQUIRED_SCHEMA by one and keeps every
+// deployed migration blob byte-identical. Anything else uses the reviewed migration path.
+export function releaseSource(gh, base, candidate, schema) {
   const c = gh(`compare/${base}...${candidate}?per_page=100&page=1`);
-  must(c.base_commit?.sha === base && c.merge_base_commit?.sha === base && c.status === 'ahead' && c.behind_by === 0 && positive(c.total_commits) && c.total_commits <= 100 && c.ahead_by === c.total_commits && c.commits?.length === c.total_commits && c.commits.at(-1)?.sha === candidate, 'same_schema_comparison_incomplete');
-  must(Array.isArray(c.files) && c.files.length > 0 && c.files.length < 300 && new Set(c.files.map(f => f.filename)).size === c.files.length, 'same_schema_file_inventory_incomplete');
-  const schemaPath = p => p === '.gitattributes' || p.endsWith('/.gitattributes') || p === 'packages/domain/db/schemaRange.ts' || p === 'packages/domain/db/migrations' || p.startsWith('packages/domain/db/migrations/');
-  must(c.files.every(f => typeof f.filename === 'string' && !schemaPath(f.filename) && (!Object.hasOwn(f, 'previous_filename') || (typeof f.previous_filename === 'string' && !schemaPath(f.previous_filename)))), 'schema_change_refused');
+  must(c.base_commit?.sha === base && c.merge_base_commit?.sha === base && c.status === 'ahead' && c.behind_by === 0 && positive(c.total_commits) && c.total_commits <= 100 && c.ahead_by === c.total_commits && c.commits?.length === c.total_commits && c.commits.at(-1)?.sha === candidate, 'source_comparison_incomplete');
+  must(Array.isArray(c.files) && c.files.length > 0 && c.files.length < 300 && c.files.every(f => typeof f.filename === 'string' && (!Object.hasOwn(f, 'previous_filename') || typeof f.previous_filename === 'string')) && new Set(c.files.map(f => f.filename)).size === c.files.length, 'source_file_inventory_incomplete');
+  const schemaPath = p => p === '.gitattributes' || p.endsWith('/.gitattributes') || p === SCHEMA_RANGE || p === MIGRATIONS || p.startsWith(MIGRATIONS + '/');
+  const touched = c.files.filter(f => schemaPath(f.filename) || (Object.hasOwn(f, 'previous_filename') && schemaPath(f.previous_filename)));
+  const required = ref => { const s = gh(`contents/${SCHEMA_RANGE}?ref=${ref}`), match = s.encoding === 'base64' && typeof s.content === 'string' && /^export const REQUIRED_SCHEMA = ([1-9][0-9]*);$/mu.exec(Buffer.from(s.content, 'base64').toString('utf8')); must(match, 'schema_source_missing'); return Number(match[1]); };
+  must(required(base) === schema, 'baseline_schema_source_changed');
+  const target = required(candidate);
+  if (target === schema) { must(touched.length === 0, 'same_schema_source_changed'); return { targetSchema: schema, migration: null }; }
+  must(target > schema, 'schema_regression_refused');
+  must(target === schema + 1, 'multiple_migrations_refused');
+  const listing = ref => { const entries = gh(`contents/${MIGRATIONS}?ref=${ref}`); must(Array.isArray(entries) && entries.every(e => e.type === 'file' && typeof e.name === 'string' && /^[a-f0-9]{40}$/u.test(e.sha)), 'migration_inventory_incomplete'); return [...entries].sort((a, b) => a.name.localeCompare(b.name)); };
+  const before = listing(base), after = listing(candidate), name = after[schema]?.name;
+  must(before.length === schema && before.every((e, i) => e.name.startsWith(String(i + 1).padStart(4, '0') + '_') && e.name.endsWith('.sql')), 'migration_inventory_incomplete');
+  must(before.every((e, i) => after[i]?.name === e.name && after[i].sha === e.sha), 'migration_blob_changed');
+  must(after.length === target && new RegExp(`^${String(target).padStart(4, '0')}_[a-z0-9_]+\\.sql$`, 'u').test(name), 'migration_source_changed');
+  must(touched.length === 2 && touched.every(f => !Object.hasOwn(f, 'previous_filename')) && touched.some(f => f.filename === SCHEMA_RANGE && f.status === 'modified') && touched.some(f => f.filename === `${MIGRATIONS}/${name}` && f.status === 'added'), 'migration_source_changed');
+  return { targetSchema: target, migration: { file: name, sha: after[schema].sha } };
 }
 
 export function createOperator({ directory, run = execute, fetchJson = fetchPublic, sleep = ms => new Promise(r => setTimeout(r, ms)), now = Date.now, repositoryRoot = ROOT }) {
@@ -141,9 +174,25 @@ export function createOperator({ directory, run = execute, fetchJson = fetchPubl
   // Later steps bind to the saved preflight and its source identities instead of re-deriving.
   function bound(application) {
     const bindings = validateBindings(read('bindings'), application), preflight = read('preflight'), baseline = baselineFromPreflight(preflight);
-    must(equal(preflight.bindings, Object.fromEntries(SOURCE_KEYS.map(k => [k, bindings[k]]))), 'bindings_changed_since_preflight');
+    must(equal(preflight.bindings, Object.fromEntries(SOURCE_KEYS.map(k => [k, bindings[k]]))) && equal(bindings.migrationReview ?? null, baseline.schemaMigration?.review ?? null), 'bindings_changed_since_preflight');
     must(bindings.candidate !== baseline.production, 'candidate_already_production');
     return { bindings, preflight, baseline };
+  }
+  // The main upgrade job's actual disposable-PostgreSQL N→N+1 upgrade evidence saved under main-upgrade/,
+  // byte-equal to its CI artifact. Returns the repository classifier's class for the one new migration.
+  function upgradeEvidence(production, schema, candidate, gateId, file) {
+    const evidenceName = `upgrade-evidence-${candidate}.txt`, local = name => resolve(directory, 'main-upgrade', name), arrow = `${schema} → ${schema + 1}`;
+    must(existsSync(local('upgrade-binding.json')) && existsSync(local(evidenceName)), 'upgrade_evidence_missing');
+    const binding = JSON.parse(readFileSync(local('upgrade-binding.json'), 'utf8')), evidence = readFileSync(local(evidenceName), 'utf8');
+    const artifacts = gh(`actions/runs/${gateId}/artifacts?per_page=100`); must(artifacts.total_count <= 100 && artifacts.artifacts?.length === artifacts.total_count, 'artifact_inventory_incomplete');
+    const exact = artifacts.artifacts.filter(v => v.name === 'upgrade-evidence-' + candidate); must(exact.length === 1 && exact[0].expired === false && exact[0].workflow_run?.id === gateId && exact[0].workflow_run?.head_sha === candidate, 'upgrade_evidence_missing');
+    const archive = artifactContents(exact[0].id, ['upgrade-binding.json', evidenceName]);
+    must(equal(JSON.parse(archive['upgrade-binding.json']), binding) && archive[evidenceName] === evidence && equal(binding, { from: production, to: candidate }), 'upgrade_evidence_changed');
+    must(evidence.startsWith(`upgrade test: schema ${arrow}\n`) && evidence.trimEnd().endsWith(`PASS  schema ${arrow}`) && !evidence.includes('FAIL ') && new RegExp(`^ +migrations +1\\.\\.${schema} from the base checkout, ${schema + 1}\\.\\.${schema + 1} from head$`, 'mu').test(evidence) && new RegExp(`^ +deployed +${schema} file\\(s\\) byte-identical in both checkouts$`, 'mu').test(evidence), 'upgrade_evidence_not_passing');
+    must(/^ +database +fss_upgrade_[0-9a-f]{32}$/mu.test(evidence) && /^step +1 +fresh database, fss_migrator owns it /mu.test(evidence) && new RegExp(`^step +2 +migrations 1\\.\\.${schema} from the base checkout, as fss_migrator .* ${schema} applied;`, 'mu').test(evidence) && new RegExp(`^step +5 +migrations ${schema + 1}\\.\\.${schema + 1} from head, as fss_migrator .* 1 applied$`, 'mu').test(evidence), 'upgrade_evidence_not_disposable_upgrade');
+    const classes = [...evidence.matchAll(/^ {2}([0-9]{4}_[a-z0-9_]+\.sql) +([a-z-]+) /gmu)];
+    must(classes.length === 1 && classes[0][1] === file, 'upgrade_evidence_migration_changed');
+    return classes[0][2];
   }
   // Exact live services/tasks against a bound baseline (observe-off, verify-off).
   function runtimeBound(aws, baseline, reason) {
@@ -163,7 +212,10 @@ export function createOperator({ directory, run = execute, fetchJson = fetchPubl
     must(h?.status === 'serving' && sha(h.build?.commit) && positive(h.schema?.databaseVersion) && h.schema.accepted === true, 'baseline_changed');
     const production = h.build.commit, schema = h.schema.databaseVersion;
     must(bindings.candidate !== production, 'candidate_already_production');
-    sameSchemaSource(gh, production, bindings.candidate);
+    const { targetSchema, migration } = releaseSource(gh, production, bindings.candidate, schema);
+    const review = bindings.migrationReview ?? null;
+    if (migration) Object.assign(migration, { class: authorizeMigration(upgradeEvidence(production, schema, bindings.candidate, bindings.gateId, migration.file), review), review });
+    else must(review === null, 'migration_review_unexpected');
     const services = aws('ecs', 'describe-services', ['--cluster', CLUSTER, '--services', 'fss-prod-api', 'fss-prod-worker']), observed = {};
     must(!services.failures?.length && services.services?.length === 2, 'services_unavailable');
     for (const s of services.services) { const name = s.serviceName?.replace(/^fss-prod-/u, ''); must(['api', 'worker'].includes(name) && !observed[name] && s.clusterArn === CLUSTER && revisionOf(s.taskDefinition, name) && positive(s.runningCount) && s.desiredCount === s.runningCount && s.pendingCount === 0 && s.deployments?.length === 1 && s.deployments[0].rolloutState === 'COMPLETED', 'runtime_not_stable'); observed[name] = s; }
@@ -185,9 +237,9 @@ export function createOperator({ directory, run = execute, fetchJson = fetchPubl
     must(db?.length === 1 && db[0].DBInstanceArn === DATABASE && db[0].DBInstanceStatus === 'available' && db[0].BackupRetentionPeriod === 35, 'recovery_unavailable');
     const backup = aws('rds', 'describe-db-instance-automated-backups', ['--dbi-resource-id', db[0].DbiResourceId]);
     must(!backup.Marker && backup.DBInstanceAutomatedBackups?.length === 1, 'recovery_inventory_incomplete');
-    const document = { at: new Date(now()).toISOString(), production, schema, bindings: Object.fromEntries(SOURCE_KEYS.map(k => [k, bindings[k]])), normal, normalDigests, nonterminalOneoffs: 0, services: services.services.map(s => ({ name: s.serviceName, definition: s.taskDefinition, count: s.runningCount })), runtime: running.map(t => ({ arn: t.taskArn, definition: t.taskDefinitionArn, digest: t.containers[0].imageDigest })), sharedHolds, protectedEnvironment: { requiredReviewer: true, mainOnly: true, administratorBypass: false }, recovery: { databaseArn: db[0].DBInstanceArn, resourceId: db[0].DbiResourceId, retentionDays: 35, restoreWindow: backup.DBInstanceAutomatedBackups[0].RestoreWindow, restoreTested: false }, historical40522197864: 'UNKNOWN', cloudWrites: 0 };
+    const document = { at: new Date(now()).toISOString(), production, schema, targetSchema, migration, bindings: Object.fromEntries(SOURCE_KEYS.map(k => [k, bindings[k]])), normal, normalDigests, nonterminalOneoffs: 0, services: services.services.map(s => ({ name: s.serviceName, definition: s.taskDefinition, count: s.runningCount })), runtime: running.map(t => ({ arn: t.taskArn, definition: t.taskDefinitionArn, digest: t.containers[0].imageDigest })), sharedHolds, protectedEnvironment: { requiredReviewer: true, mainOnly: true, administratorBypass: false }, recovery: { databaseArn: db[0].DBInstanceArn, resourceId: db[0].DbiResourceId, retentionDays: 35, restoreWindow: backup.DBInstanceAutomatedBackups[0].RestoreWindow, restoreTested: false }, historical40522197864: 'UNKNOWN', cloudWrites: 0 };
     baselineFromPreflight(document); write('preflight', document);
-    return `Read-only baseline/runtime/protection/recovery preflight PASS for ${production}/schema${schema}; stored OFF requires a new root observation before approval.`;
+    return `Read-only baseline/runtime/protection/recovery preflight PASS for ${production}/schema${schema}→${targetSchema}${migration ? ` (${migration.file}, ${migration.class})` : ''}; stored OFF requires a new root observation before approval.`;
   }
 
   async function observeOff() {
@@ -245,11 +297,11 @@ export function createOperator({ directory, run = execute, fetchJson = fetchPubl
 
   async function verifyApplication() {
     const { bindings, preflight, baseline } = bound(true); absent('verify-application');
-    const { runId, jobId, gateId, imagesId, candidate, prNumber, prHead, upgradeJobId } = bindings, schema = baseline.schema, kinds = ['api', 'worker', 'operations', 'migration'];
+    const { runId, jobId, gateId, imagesId, candidate, prNumber, prHead, upgradeJobId } = bindings, fromSchema = baseline.schema, schema = baseline.targetSchema, migrating = schema !== fromSchema, kinds = ['api', 'worker', 'operations', 'migration'];
     const input = read('native'), native = input.nativeFinalStatus;
     must(input.applicationRunId === runId && input.applicationJobId === jobId && input.renderedSummaryUrl === `https://github.com/${REPOSITORY}/actions/runs/${runId}`, 'native_identity_missing');
     must(native?.phase === 'completed' && native.outcome === 'completed' && native.writesStarted === true && native.reason == null && native.rollback == null && native.readerRecovery == null && native.offObservation == null, 'native_completion_missing');
-    must(native.fromSchema === schema && native.targetSchema === schema && native.observedSchema === schema && native.migrationStarted === false, 'schema_change_refused');
+    must(native.fromSchema === fromSchema && native.targetSchema === schema && native.observedSchema === schema && native.migrationStarted === migrating, 'native_schema_binding_changed');
     must(native.currentTaskArn === null && native.temporaryReaderDefinition === null && native.lastTaskExitCode === 0 && taskArn(native.lastStoppedTaskArn), 'native_custody_not_closed');
     const off = native.off; must(off?.releaseOff === true && off.storedOff === true && off.effectiveOff === true && off.finishing === 0 && off.schema === schema && equal(off.versions, OFF_VERSIONS), 'native_off_changed'); instant(off.observedAt);
     const previous = native.previousDefinitions, normal = native.candidateDefinitions;
@@ -265,14 +317,16 @@ export function createOperator({ directory, run = execute, fetchJson = fetchPubl
     must(gh('git/ref/heads/main').object?.sha === candidate, 'main_changed');
     const sourceBytes = (path, ref) => { const s = gh(`contents/${path}?ref=${ref}`); must(s.encoding === 'base64' && typeof s.content === 'string', 'audited_source_missing'); return Buffer.from(s.content, 'base64').toString('utf8'); };
     for (const path of ['infra/scripts/application-release.mjs', 'infra/scripts/release-safety.mjs']) must(sourceBytes(path, candidate) === readFileSync(resolve(repositoryRoot, path), 'utf8'), 'audited_release_source_changed');
-    // No schema change: the upgrade job proves its guarded same-schema path and intentionally uploads no evidence.
-    sameSchemaSource(gh, baseline.production, candidate);
+    // Same schema: the upgrade job proves its guarded path and uploads no evidence. One migration: its
+    // actual from→to evidence is re-bound, and the source must still be exactly what preflight classified.
+    const source = releaseSource(gh, baseline.production, candidate, fromSchema);
+    must(source.targetSchema === schema && (migrating ? source.migration.file === baseline.schemaMigration.file && source.migration.sha === baseline.schemaMigration.sha && upgradeEvidence(baseline.production, fromSchema, candidate, gateId, source.migration.file) === baseline.schemaMigration.class : source.migration === null), 'release_source_changed_since_preflight');
     const gateWorkflow = sourceBytes('.github/workflows/greenfield.yml', candidate); must(gateWorkflow === sourceBytes('.github/workflows/greenfield.yml', baseline.production) && gateWorkflow === readFileSync(resolve(repositoryRoot, '.github/workflows/greenfield.yml'), 'utf8'), 'audited_gate_source_changed');
     const gateJobs = gh(`actions/runs/${gateId}/jobs?filter=latest&per_page=100&page=1`); must(Number.isSafeInteger(gateJobs.total_count) && gateJobs.total_count <= 100 && gateJobs.jobs?.length === gateJobs.total_count, 'gate_job_inventory_incomplete');
-    const upgradeJobs = gateJobs.jobs.filter(j => j.name === 'upgrade'); must(upgradeJobs.length === 1, 'same_schema_upgrade_job_ambiguous'); const upgradeJob = upgradeJobs[0];
-    must(positive(upgradeJob.id) && upgradeJob.id === upgradeJobId && upgradeJob.run_id === gateId && upgradeJob.run_attempt === 1 && upgradeJob.head_sha === candidate && upgradeJob.status === 'completed' && upgradeJob.conclusion === 'success', 'same_schema_upgrade_job_changed');
-    must(Array.isArray(upgradeJob.steps) && new Set(upgradeJob.steps.map(s => s.name)).size === upgradeJob.steps.length, 'same_schema_upgrade_steps_incomplete');
-    for (const [names, conclusion] of [[UPGRADE_GUARDS, 'success'], [UPGRADE_WORK, 'skipped']]) for (const name of names) { const matches = upgradeJob.steps.filter(s => s.name === name); must(matches.length === 1 && matches[0].status === 'completed' && matches[0].conclusion === conclusion, 'same_schema_upgrade_step_changed'); }
+    const upgradeJobs = gateJobs.jobs.filter(j => j.name === 'upgrade'); must(upgradeJobs.length === 1, 'upgrade_job_ambiguous'); const upgradeJob = upgradeJobs[0];
+    must(positive(upgradeJob.id) && upgradeJob.id === upgradeJobId && upgradeJob.run_id === gateId && upgradeJob.run_attempt === 1 && upgradeJob.head_sha === candidate && upgradeJob.status === 'completed' && upgradeJob.conclusion === 'success', 'upgrade_job_changed');
+    must(Array.isArray(upgradeJob.steps) && new Set(upgradeJob.steps.map(s => s.name)).size === upgradeJob.steps.length, 'upgrade_steps_incomplete');
+    for (const [names, conclusion] of [[UPGRADE_GUARDS, 'success'], [UPGRADE_WORK, migrating ? 'success' : 'skipped']]) for (const name of names) { const matches = upgradeJob.steps.filter(s => s.name === name); must(matches.length === 1 && matches[0].status === 'completed' && matches[0].conclusion === conclusion, 'upgrade_step_changed'); }
     const artifacts = gh(`actions/runs/${imagesId}/artifacts?per_page=100`); must(artifacts.total_count <= 100 && artifacts.artifacts?.length === artifacts.total_count, 'artifact_inventory_incomplete');
     const exactImages = artifacts.artifacts.filter(v => v.name === 'fss-image-digests'); must(exactImages.length === 1 && exactImages[0].expired === false && exactImages[0].workflow_run?.id === imagesId && exactImages[0].workflow_run?.head_sha === candidate, 'artifact_identity_missing');
     must(equal(JSON.parse(artifactContents(exactImages[0].id, ['image-digests.json'])['image-digests.json']), images), 'saved_image_artifact_changed');
@@ -292,7 +346,7 @@ export function createOperator({ directory, run = execute, fetchJson = fetchPubl
       must(before.taskDefinition.status === 'ACTIVE' && before.taskDefinition.containerDefinitions?.length === 1 && before.taskDefinition.containerDefinitions[0].image === image(kind, baseline[name].digest), 'baseline_definition_changed');
       must(d.status === 'ACTIVE' && d.family === 'fss-prod-' + name && d.containerDefinitions?.length === 1 && d.containerDefinitions[0].name === name && d.containerDefinitions[0].image === image(kind, images.images[kind].digest) && d.registeredBy === session && instant(d.registeredAt) >= start && instant(d.registeredAt) <= end, 'candidate_definition_changed');
       const keys = name === 'migration' ? ['FSS_TARGET_SCHEMA_MIN', 'FSS_TARGET_SCHEMA_MAX'] : ['FSS_SCHEMA_MIN', 'FSS_SCHEMA_MAX'];
-      must(keys.every(k => environment(d)[k] === String(schema) && environment(before.taskDefinition)[k] === String(schema)), 'definition_schema_changed');
+      must(keys.every(k => environment(d)[k] === String(schema) && environment(before.taskDefinition)[k] === String(fromSchema)), 'definition_schema_changed');
       const want = normalizeTaskDefinition(before.taskDefinition); want.containerDefinitions[0].image = image(kind, images.images[kind].digest);
       for (const key of keys) { must(want.containerDefinitions[0].environment?.filter(e => e.name === key).length === 1, 'schema_environment_invalid'); want.containerDefinitions[0].environment.find(e => e.name === key).value = String(schema); }
       must(equal(normalizeTaskDefinition(d), want) && tags(after.tags) === tags(before.tags), 'candidate_transformation_changed');
@@ -304,42 +358,50 @@ export function createOperator({ directory, run = execute, fetchJson = fetchPubl
     must(running.length === baseline.api.count + baseline.worker.count && running.every(t => t.lastStatus === 'RUNNING' && t.desiredStatus === 'RUNNING') && stopped.every(t => t.lastStatus === 'STOPPED'), 'nonterminal_oneoff');
     const runtime = [];
     for (const name of ['api', 'worker']) { const group = running.filter(t => t.group === 'service:fss-prod-' + name); must(group.length === baseline[name].count, 'runtime_group_changed'); for (const t of group) { must(t.taskDefinitionArn === normal[name] && t.containers?.length === 1 && t.containers[0].name === name && t.containers[0].image === image(name, images.images[name].digest) && t.containers[0].imageDigest === images.images[name].digest, 'runtime_digest_changed'); runtime.push({ service: name, definition: t.taskDefinitionArn, digest: t.containers[0].imageDigest }); } }
-    const owned = stopped.filter(t => t.startedBy?.startsWith(`fss-app-${runId}-`)), readers = [], readerTasks = [];
-    must(owned.length === 6, 'native_tasks_incomplete');
-    for (let n = 1; n <= 3; n++) {
+    // Same schema: one old-image OFF reader, then two candidate readers. A migration: three old-image readers
+    // around the drain, then two candidate readers after the schema change.
+    const owned = stopped.filter(t => t.startedBy?.startsWith(`fss-app-${runId}-`)), readers = [], readerTasks = [], readerCount = migrating ? 5 : 3, oldReaders = migrating ? 3 : 1;
+    must(migrating || owned.length === 6, 'native_tasks_incomplete');
+    for (let n = 1; n <= readerCount; n++) {
       const owner = `fss-app-${runId}-off-${n}`, matches = owned.filter(t => t.startedBy === owner); must(matches.length === 1, 'native_reader_missing_or_ambiguous');
-      const t = matches[0], source = definition(n === 1 ? previous.operations : normal.operations), want = readerTaskDocument({ definition: source.taskDefinition, tags: source.tags ?? [] }), got = definition(t.taskDefinitionArn);
+      const t = matches[0], source = definition(n <= oldReaders ? previous.operations : normal.operations), want = readerTaskDocument({ definition: source.taskDefinition, tags: source.tags ?? [] }), got = definition(t.taskDefinitionArn);
       must(got.taskDefinition.status === 'INACTIVE' && got.taskDefinition.registeredBy === session && instant(got.taskDefinition.registeredAt) >= start && instant(got.taskDefinition.registeredAt) <= instant(t.createdAt) && equal(normalizeTaskDefinition(got.taskDefinition), normalizeTaskDefinition(want)) && tags(got.tags) === tags(want.tags), 'native_reader_recipe_changed');
       terminal(t, got, 'operations', owner, []); must(instant(t.startedAt) >= start && instant(t.stoppedAt) <= end, 'native_reader_time_changed');
-      readerTasks.push(t); readers.push({ task: t.taskArn, definition: t.taskDefinitionArn, startedBy: owner, status: 'STOPPED0/INACTIVE', basis: 'direct-live-task-metadata', schema });
+      readerTasks.push(t); readers.push({ task: t.taskArn, definition: t.taskDefinitionArn, startedBy: owner, status: 'STOPPED0/INACTIVE', basis: 'direct-live-task-metadata', schema: n <= oldReaders ? fromSchema : schema });
     }
-    must(new Set(readerTasks.map(t => t.taskDefinitionArn)).size === 3, 'native_reader_definition_reused');
+    must(new Set(readerTasks.map(t => t.taskDefinitionArn)).size === readerCount, 'native_reader_definition_reused');
     const numeric = owned.filter(t => new RegExp(`^fss-app-${runId}-[1-9][0-9]*$`, 'u').test(t.startedBy)).sort((a, b) => Number(a.startedBy.split('-').at(-1)) - Number(b.startedBy.split('-').at(-1)));
-    must(numeric.length === 3 && owned.length === numeric.length + 3, 'native_task_sequence_incomplete');
+    must((migrating ? numeric.length >= 10 && numeric.length <= 39 : numeric.length === 3) && owned.length === numeric.length + readerCount, 'native_task_sequence_incomplete');
     const database = aws('rds', 'describe-db-instances', ['--db-instance-identifier', 'fss-prod-pg']).DBInstances;
     must(database?.length === 1 && database[0].DBInstanceArn === preflight.recovery?.databaseArn && database[0].DbiResourceId === preflight.recovery.resourceId && database[0].DBInstanceStatus === 'available' && database[0].BackupRetentionPeriod === 35, 'recovery_database_changed');
     const db = database[0];
     const record = { schema: 'fss.release-record.v1', source: 'ci-gate', releaseGateReference: `ci-gate-${gateId}-${candidate.slice(0, 12)}`, recordedAt: gate.updated_at, suite: 'pass', commit: candidate, gateRunId: String(gateId), gateRunUrl: `https://github.com/${REPOSITORY}/actions/runs/${gateId}`, imagesRunId: String(imagesId), artifacts: { api: images.images.api.digest, worker: images.images.worker.digest, desktopCommitStamp: candidate }, enablesSending: false }; instant(record.recordedAt);
-    const put = ['admin', 'release-record', 'put', '--json-base64', Buffer.from(JSON.stringify(record)).toString('base64')];
-    const recipes = [{ source: previous.operations, command: put }, { source: normal.operations, command: ['verify'] }, { source: normal.operations, command: put }], oneoffs = [];
-    for (let i = 0; i < 3; i++) {
-      const t = numeric[i], owner = `fss-app-${runId}-${i + 1}`; terminal(t, definition(recipes[i].source), 'operations', owner, recipes[i].command);
+    const put = ['admin', 'release-record', 'put', '--json-base64', Buffer.from(JSON.stringify(record)).toString('base64')], idle = numeric.length - 9;
+    const old = command => ({ name: 'operations', source: previous.operations, command }), next = command => ({ name: 'operations', source: normal.operations, command }), oneoffs = [];
+    // A migration also proves migration authority, drains to idle, prepares the schema and turns its own drain off.
+    if (migrating) must(typeof db.DBName === 'string' && typeof db.Endpoint?.Address === 'string', 'database_binding_missing');
+    const auth = migrating && { name: 'migration', source: normal.migration, command: ['migration-auth-check', '--expected-database', db.DBName, '--expected-user', 'fss_admin', '--expected-host', db.Endpoint.Address] };
+    const recipes = migrating ? [old(put), auth, old(['admin', 'release', 'drain', 'on', '--minutes', '60']), ...Array.from({ length: idle }, () => old(['admin', 'release', 'idle-check'])), auth, auth, { name: 'migration', source: normal.migration, command: ['release-prepare'] }, next(['verify']), next(put), next(['admin', 'release', 'drain', 'off'])] : [old(put), next(['verify']), next(put)];
+    for (let i = 0; i < numeric.length; i++) {
+      const t = numeric[i], owner = `fss-app-${runId}-${i + 1}`; terminal(t, definition(recipes[i].source), recipes[i].name, owner, recipes[i].command);
       must(instant(t.startedAt) >= start && instant(t.stoppedAt) <= end && (!i || instant(numeric[i - 1].stoppedAt) <= instant(t.startedAt)), 'native_oneoff_order_changed');
       oneoffs.push({ task: t.taskArn, definition: t.taskDefinitionArn, startedBy: owner, status: 'STOPPED0', command: recipes[i].command });
     }
-    const precedes = (a, b) => must(instant(a.stoppedAt) <= instant(b.startedAt), 'native_interleaving_changed');
-    precedes(readerTasks[0], numeric[0]); precedes(numeric[0], numeric[1]); precedes(numeric[1], readerTasks[1]); precedes(readerTasks[1], readerTasks[2]); precedes(readerTasks[2], numeric[2]);
-    must(numeric[2].taskArn === native.lastStoppedTaskArn && numeric[2].startedBy === native.currentTaskOwner && native.currentTaskOwner === `fss-app-${runId}-3` && instant(readerTasks[2].startedAt) <= instant(off.observedAt) && instant(readerTasks[2].stoppedAt) >= instant(off.observedAt), 'native_final_custody_changed');
+    const order = migrating ? [[readerTasks[0], numeric[0]], [numeric[idle + 3], readerTasks[1]], [readerTasks[1], readerTasks[2]], [readerTasks[2], numeric[idle + 4]], [numeric[idle + 6], readerTasks[3]], [readerTasks[3], readerTasks[4]], [readerTasks[4], numeric[idle + 7]]] : [[readerTasks[0], numeric[0]], [numeric[0], numeric[1]], [numeric[1], readerTasks[1]], [readerTasks[1], readerTasks[2]], [readerTasks[2], numeric[2]]];
+    for (const [a, b] of order) must(instant(a.stoppedAt) <= instant(b.startedAt), 'native_interleaving_changed');
+    const final = numeric.at(-1), lastReader = readerTasks.at(-1);
+    must(final.taskArn === native.lastStoppedTaskArn && final.startedBy === native.currentTaskOwner && native.currentTaskOwner === `fss-app-${runId}-${numeric.length}` && instant(lastReader.startedAt) <= instant(off.observedAt) && instant(lastReader.stoppedAt) >= instant(off.observedAt), 'native_final_custody_changed');
+    // PITR is pinned after the drained old-image reader and before the next reader and the DDL (release-prepare).
     const point = native.recoveryPoint, pinned = instant(point?.timestamp);
-    must(point.databaseArn === db.DBInstanceArn && point.resourceId === db.DbiResourceId && point.restoreTested === false && instant(point.earliest) <= pinned && instant(point.latest) >= pinned && pinned >= start - 60000 && pinned <= instant(readerTasks[1].createdAt) && pinned <= instant(off.observedAt), 'same_schema_recovery_point_missing');
+    must(point.databaseArn === db.DBInstanceArn && point.resourceId === db.DbiResourceId && point.restoreTested === false && instant(point.earliest) <= pinned && instant(point.latest) >= pinned && (migrating ? instant(readerTasks[1].stoppedAt) <= pinned && pinned <= instant(readerTasks[2].createdAt) && pinned <= instant(numeric[idle + 5].createdAt) : pinned >= start - 60000 && pinned <= instant(readerTasks[1].createdAt) && pinned <= instant(off.observedAt)), migrating ? 'migration_recovery_point_missing' : 'same_schema_recovery_point_missing');
     const backups = aws('rds', 'describe-db-instance-automated-backups', ['--dbi-resource-id', point.resourceId]); must(!backups.Marker && backups.DBInstanceAutomatedBackups?.length === 1, 'recovery_inventory_incomplete');
     const backup = backups.DBInstanceAutomatedBackups[0];
     must(backup.DBInstanceArn === point.databaseArn && backup.DbiResourceId === point.resourceId && backup.Status === 'active' && instant(backup.RestoreWindow?.EarliestTime) <= pinned && instant(backup.RestoreWindow?.LatestTime) >= pinned, 'recovery_no_longer_covered');
     // Explicit dated independent basis for the root reader; MISSING never proves historical STOPPED0.
     const preapproval = read('result'), custody = read('custody'), saved = read('independent'), rootState = preapproval.state;
     must(equal(rootState, custody) || equal({ ...rootState, savedAt: undefined }, { ...custody, savedAt: undefined }), 'root_custody_conflict');
-    must(rootState.production === baseline.production && rootState.schema === schema && rootState.outcome === 'complete' && rootState.lastTaskExitCode === 0 && rootState.currentTaskArn === null && rootState.temporaryReaderDefinition === null && rootState.sourceOperationsDefinition === previous.operations && rootState.owner === readerOwner(bindings), 'root_reader_custody_incomplete');
-    const rootOff = preapproval.read; must(rootOff?.releaseOff === true && rootOff.storedOff === true && rootOff.effectiveOff === true && rootOff.finishing === 0 && rootOff.schema === schema && equal(rootOff.versions, OFF_VERSIONS) && equal(rootState.off, rootOff) && saved.outcome === 'PASS' && saved.cloudWrites === 0 && equal(saved.rootOff, rootOff), 'root_off_snapshot_changed');
+    must(rootState.production === baseline.production && rootState.schema === fromSchema && rootState.outcome === 'complete' && rootState.lastTaskExitCode === 0 && rootState.currentTaskArn === null && rootState.temporaryReaderDefinition === null && rootState.sourceOperationsDefinition === previous.operations && rootState.owner === readerOwner(bindings), 'root_reader_custody_incomplete');
+    const rootOff = preapproval.read; must(rootOff?.releaseOff === true && rootOff.storedOff === true && rootOff.effectiveOff === true && rootOff.finishing === 0 && rootOff.schema === fromSchema && equal(rootOff.versions, OFF_VERSIONS) && equal(rootState.off, rootOff) && saved.outcome === 'PASS' && saved.cloudWrites === 0 && equal(saved.rootOff, rootOff), 'root_off_snapshot_changed');
     must(saved.normalOperations === baseline.operations.revision && saved.migration === baseline.migration.revision && saved.nonterminalOneoffs === 0, 'root_snapshot_baseline_changed');
     const at = instant(saved.observedAt); must(instant(preflight.at) <= instant(rootOff.observedAt) && instant(rootOff.observedAt) <= instant(preapproval.completedAt) && instant(preapproval.completedAt) <= at && at <= instant(readerTasks[0].createdAt) && at <= now(), 'root_off_snapshot_order_changed');
     must(saved.task?.tasks?.length === 1 && !saved.task.failures?.length, 'root_task_snapshot_incomplete');
@@ -354,8 +416,9 @@ export function createOperator({ directory, run = execute, fetchJson = fetchPubl
     readers.push({ task: rootTask.taskArn, definition: rootTask.taskDefinitionArn, startedBy: rootTask.startedBy, status: 'STOPPED0/INACTIVE', basis: 'independent-dated-cloud-observation', taskObservedAt: saved.observedAt, currentTaskObserved: currentRoot.tasks.length === 1, currentDefinitionRetirementObserved: true });
     const h = await health('/health'), ready = await health('/readyz');
     must(h?.status === 'serving' && h.build?.commit === candidate && h.schema?.databaseVersion === schema && h.schema.accepted === true && ready?.ready === true && ready.schema?.databaseVersion === schema && ready.schema.accepted === true, 'public_runtime_changed');
-    write('acceptance', { outcome: 'PASS', observedAt: new Date(now()).toISOString(), production: candidate, baselineProduction: baseline.production, schema, run: runId, job: jobId, gate: gateId, images: imagesId, releasedAt: job.completed_at, renderedSummaryUrl: input.renderedSummaryUrl, normalDefinitions: normal, runtimeBindings: runtime, retiredReaders: readers, nativeOneoffs: oneoffs, nonterminalOneoffs: 0, off, recoveryPoint: point, restoreTested: false, cloudWrites: 0, fromSchema: schema, migrationStarted: false, limits: ['Native smokes and exact release-record readback accepted from actual authenticated rendered final status and exact successful native source/job; none replayed.', 'Three native OFF readers and all three normal oneoffs require directly available exact terminal task metadata; no historical fallback for native tasks.', 'Root preapproval terminal task uses an explicitly dated independent cloud snapshot plus current exact INACTIVE definition; current task metadata is crosschecked when available, MISSING never proves historical execution.', 'Stored OFF is dated native evidence, not a fresh database observation by this verifier.', 'Same-schema native PITR point remains covered; no migration or restore test occurred.', 'Complete bounded RUNNING/STOPPED inventories at most 100 each; exclusive two-service production ownership assumption retained.', `Same-schema ${schema} protected application replacement; no migration, Terraform or sending activation.`, 'Historical 40522197864 effects remain UNKNOWN.'] });
-    return `Application independent acceptance PASS: exact schema${schema} runtime API${baseline.api.count}/worker${baseline.worker.count}, three native readers retired, three normal operations terminal, no migration or drain, no nonterminal oneoffs.`;
+    const migrationLimits = migrating ? [`Five native OFF readers and all ${numeric.length} contiguous normal oneoffs require directly available exact terminal task metadata; no historical fallback for native tasks.`, `Exact main image and actual disposable-PostgreSQL schema ${fromSchema}→${schema} upgrade artifact contents compared with their bound successful CI artifacts; ${baseline.schemaMigration.file} classified ${baseline.schemaMigration.class}${baseline.schemaMigration.review ? ` under review ${baseline.schemaMigration.review.report}` : ''}; no upgrade replay.`, 'PITR coverage observed and pinned before the third old-image OFF reader and the migration; no restore tested.', `Schema ${fromSchema} to ${schema} protected application migration; no Terraform or sending activation.`] : ['Three native OFF readers and all three normal oneoffs require directly available exact terminal task metadata; no historical fallback for native tasks.', 'Same-schema native PITR point remains covered; no migration or restore test occurred.', `Same-schema ${schema} protected application replacement; no migration, Terraform or sending activation.`];
+    write('acceptance', { outcome: 'PASS', observedAt: new Date(now()).toISOString(), production: candidate, baselineProduction: baseline.production, schema, run: runId, job: jobId, gate: gateId, images: imagesId, releasedAt: job.completed_at, renderedSummaryUrl: input.renderedSummaryUrl, normalDefinitions: normal, runtimeBindings: runtime, retiredReaders: readers, nativeOneoffs: oneoffs, nonterminalOneoffs: 0, off, recoveryPoint: point, restoreTested: false, cloudWrites: 0, fromSchema, migrationStarted: migrating, migration: baseline.schemaMigration, limits: [`Native smokes${migrating ? ', migration result' : ''} and exact release-record readback accepted from actual authenticated rendered final status and exact successful native source/job; none replayed.`, 'Root preapproval terminal task uses an explicitly dated independent cloud snapshot plus current exact INACTIVE definition; current task metadata is crosschecked when available, MISSING never proves historical execution.', 'Stored OFF is dated native evidence, not a fresh database observation by this verifier.', 'Complete bounded RUNNING/STOPPED inventories at most 100 each; exclusive two-service production ownership assumption retained.', ...migrationLimits, 'Historical 40522197864 effects remain UNKNOWN.'] });
+    return `Application independent acceptance PASS: exact schema${schema} runtime API${baseline.api.count}/worker${baseline.worker.count}, ${readerCount} native readers retired, ${numeric.length} normal operations terminal, ${migrating ? `migration ${fromSchema}→${schema} with final drain off` : 'no migration or drain'}, no nonterminal oneoffs.`;
   }
 
   // Read the exact immutable artifact archive in memory without extracting files.
