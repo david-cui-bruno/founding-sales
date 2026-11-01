@@ -177,7 +177,7 @@ export interface HandlerComposition extends CaptureReadComposition {
   /**
    * Prepared-prospect qualification through Google Vertex AI (`FSS_VERTEX_*`, keyless AWS->GCP
    * federation). Absent, no qualification run is scheduled or started: there is no fallback to
-   * Bedrock. `FSS_CLASSIFIER=off` still stops it.
+   * Bedrock. `FSS_CLASSIFIER=off` composes none (`readQualificationComposition`), with or without a classifier.
    */
   readonly qualification?: QualificationExtractionProvider | undefined;
 }
@@ -299,7 +299,7 @@ export function registerHandlers(
   const search=composition.discovery&&composition.research?{provider:composition.discovery,pageFetch:composition.research.pageFetch}:undefined;
   if(search||composition.apolloDiscovery)registry.register(sourcingDiscoveryHandler(search,composition.apolloDiscovery));
   if(composition.research){
-    registry.register(sourcingQualificationHandler({pageFetch:composition.research.pageFetch,extraction:composition.classifier?.processEnabled===false?null:composition.qualification??null}));
+    registry.register(sourcingQualificationHandler({pageFetch:composition.research.pageFetch,extraction:composition.qualification??null}));
     registry.register(prospectPhoneDiscoveryHandler({pageFetch:composition.research.pageFetch,...log?{log}:{}}));
     registry.register(sourcingCheckHandler(composition.research.pageFetch));
     registry.register(sourcingMonitorHandler());
@@ -504,7 +504,7 @@ export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom'
   return {
     ...composition.crmExtraction?.mailEvidence===undefined?{}:{crmMailProcessing:composition.crmExtraction.mailEvidence},
     socialDraft: composition.classifier?.processEnabled===true, crmCaptureRead:composition.crmCaptureRead!==undefined,
-    qualification: composition.research !== undefined && composition.qualification !== undefined && composition.classifier?.processEnabled !== false,
+    qualification: composition.research !== undefined && composition.qualification !== undefined,
     discovery: composition.discovery !== undefined && composition.research !== undefined,
     ...composition.apolloDiscovery?{apolloDiscovery:{accountRef:composition.apolloDiscovery.accountRef,keyRef:composition.apolloDiscovery.keyRef}}:{},
     sourcing: composition.research !== undefined,

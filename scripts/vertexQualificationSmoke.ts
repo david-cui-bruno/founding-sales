@@ -10,7 +10,7 @@ import {createHash,randomUUID} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 import {parsePageText} from '@fss/domain/research/pageText.ts';
 import {QUALIFICATION_OUTPUT_TOKENS,QUALIFICATION_SCHEMA_TOKEN_ALLOWANCE,type QualificationExtractionRequest} from '@fss/domain/sourcing/qualificationPrompt.ts';
-import {QUALIFICATION_MODEL_NAME,qualificationCents} from '@fss/domain/sourcing/qualificationModel.ts';
+import {QUALIFICATION_MODEL_NAME,qualificationReservationCents} from '@fss/domain/sourcing/qualificationModel.ts';
 import {qualificationExtraction} from '../apps/worker/src/sourcing/qualificationExtraction.ts';
 import {vertexGeminiSurface,type GeminiResponse,type GeminiSurface} from '../apps/worker/src/sourcing/vertexGemini.ts';
 
@@ -40,7 +40,7 @@ for (const argument of process.argv.slice(2)) {
     firm: firmName, pages: observations.length, truncatedPages: observations.filter(observation => observation.truncated).length, blocks: observations.reduce((total, observation) => total + observation.blocks.length, 0),
     countedInputTokens: counted, countedMinusActual: counted - (actual?.promptTokenCount ?? 0), allowance: QUALIFICATION_SCHEMA_TOKEN_ALLOWANCE,
     usage: actual, finishReason: last?.candidates?.[0]?.finishReason, secondsForOneCall: (Date.now() - started) / 1000,
-    reservedCents: qualificationCents(QUALIFICATION_MODEL_NAME, {inputTokens: counted, outputTokens: QUALIFICATION_OUTPUT_TOKENS}, new Date().toISOString()),
+    reservedCents: qualificationReservationCents(QUALIFICATION_MODEL_NAME, {inputTokens: counted, outputTokens: QUALIFICATION_OUTPUT_TOKENS}, new Date().toISOString()),
     settledCents: outcome.costCents, ok: outcome.ok,
     selections: outcome.ok ? outcome.value.facts.map(fact => ({kind: fact.kind, blockId: 'blockId' in fact ? fact.blockId : undefined, value: String(fact.value).slice(0, 90)})) : outcome,
     modelSelections: (JSON.parse(last?.candidates?.[0]?.content?.parts?.find(part => part.text !== undefined && part.thought !== true)?.text ?? '{}') as {selections?: {kind: string; blockId: string}[]}).selections?.map(selection => selection.kind + ':' + selection.blockId),

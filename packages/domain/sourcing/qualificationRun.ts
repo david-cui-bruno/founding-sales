@@ -10,7 +10,7 @@ import {readResearchSettings} from '../research/settings.ts';
 import {lockResearchBudget} from '../research/ceilings.ts';
 import {readCreditSpend,workspaceBusinessZone} from '../research/ledger.ts';
 import {reserveAttempt,markCalling,settleAttempt} from '../research/reservations.ts';
-import {QUALIFICATION_PROVIDER_KEY,isPricedQualificationModel,qualificationCents} from './qualificationModel.ts';
+import {QUALIFICATION_PROVIDER_KEY,isPricedQualificationModel,qualificationReservationCents} from './qualificationModel.ts';
 import {parsePageText} from '../research/pageText.ts';
 import {isPublicResearchUrl,withoutFragment} from '../research/sourcePolicy.ts';
 import type {PageFetchProvider,FetchedPage} from '../research/providers.ts';
@@ -145,7 +145,7 @@ export async function runQualification(ctx:RepositoryContext,input:{runId:string
  try{tokens=await extraction.countInputTokens(request);}catch{await finish('token_count_unavailable');return;}
  if(!Number.isSafeInteger(tokens)||tokens<1||tokens>100000){await finish('input_over_budget');return;}
  request.maxInputTokens=tokens;
- const cents=qualificationCents(run.model_name,{inputTokens:tokens,outputTokens:QUALIFICATION_OUTPUT_TOKENS},await databaseNow(ctx));
+ const cents=qualificationReservationCents(run.model_name,{inputTokens:tokens,outputTokens:QUALIFICATION_OUTPUT_TOKENS},await databaseNow(ctx));
  const reservation=await withTransaction(db,async()=>{
   await lockResearchBudget(ctx);
   if(!await allowed(ctx,run.id))return null;

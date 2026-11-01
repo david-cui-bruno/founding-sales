@@ -1,5 +1,5 @@
 import {expect,it} from 'vitest';
-import {GEMINI_STANDARD_PRICE_FROM,QUALIFICATION_MODEL_NAME,QUALIFICATION_PROVIDER_KEY,UnpricedQualificationModelError,isPricedQualificationModel,qualificationCents} from '../../sourcing/qualificationModel.ts';
+import {GEMINI_STANDARD_PRICE_FROM,QUALIFICATION_MODEL_NAME,QUALIFICATION_PROVIDER_KEY,UnpricedQualificationModelError,isPricedQualificationModel,qualificationCents,qualificationReservationCents} from '../../sourcing/qualificationModel.ts';
 import {CREDIT_FUNDED_PROVIDER_KINDS,providerFunding} from '../../settings/funding.ts';
 import {isCreditModelProvider} from '../../research/modelBudget.ts';
 import {PRICE_CENTS_PER_MILLION,isPricedModel} from '../../research/pricing.ts';
@@ -37,4 +37,14 @@ it('truncates fractions, floors negatives at zero and refuses a count that is no
  expect(qualificationCents(QUALIFICATION_MODEL_NAME,{inputTokens:-5,outputTokens:0},intro)).toBe(0);
  expect(()=>qualificationCents(QUALIFICATION_MODEL_NAME,{inputTokens:1,outputTokens:Number.NaN},intro)).toThrow(RangeError);
  expect(qualificationCents(QUALIFICATION_MODEL_NAME,{inputTokens:0.9,outputTokens:1_000_000},intro)).toBe(375);
+});
+it('reserves a call that can settle after 1 January 2027 at the doubled price, and settles at the actual instant',()=>{
+ const usage={inputTokens:1_000_000,outputTokens:100_000},boundary=Date.parse(GEMINI_STANDARD_PRICE_FROM);
+ const at=(offset:number)=>new Date(boundary+offset).toISOString();
+ expect(qualificationReservationCents(QUALIFICATION_MODEL_NAME,usage,at(-120_000))).toBe(225);
+ expect(qualificationCents(QUALIFICATION_MODEL_NAME,usage,at(-120_000))).toBe(113);
+ expect(qualificationCents(QUALIFICATION_MODEL_NAME,usage,at(60_000))).toBe(225);
+ expect(qualificationReservationCents(QUALIFICATION_MODEL_NAME,usage,at(-2*3_600_000))).toBe(113);
+ expect(qualificationReservationCents(QUALIFICATION_MODEL_NAME,usage,at(0))).toBe(225);
+ expect(()=>qualificationReservationCents('claude-haiku-4-5',usage,at(0))).toThrow(UnpricedQualificationModelError);
 });

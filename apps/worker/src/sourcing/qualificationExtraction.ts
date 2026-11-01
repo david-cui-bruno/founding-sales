@@ -3,6 +3,7 @@ import {preparedIdentityCitationRoles} from '@fss/domain/sourcing/preparedIdenti
 import {QUALIFICATION_PROVIDER_KEY,isPricedQualificationModel,qualificationCents} from '@fss/domain/sourcing/qualificationModel.ts';
 import {qualificationRequest,qualificationSelectionSchema,QUALIFICATION_SCHEMA_TOKEN_ALLOWANCE,type QualificationExtractionProvider} from '@fss/domain/sourcing/qualificationPrompt.ts';
 import {normalizeQualificationExtractionDiagnostic,type QualificationExtractionDiagnostic} from '@fss/domain/sourcing/qualificationDiagnostics.ts';
+import {modelProcessEnabled} from '../handlers/classify.ts';
 import {loadVertexGeminiSurface,readVertexConfig,type GeminiResponse,type GeminiSurface} from './vertexGemini.ts';
 
 /** Map known schema positions only. Neither Zod messages nor unknown path/key names survive. */
@@ -84,9 +85,11 @@ export function qualificationExtraction(surface:GeminiSurface):QualificationExtr
 /**
  * Qualification's model route for this deployment: Vertex only, from `FSS_VERTEX_*`. Absent
  * configuration is `extraction: null` (the worker then composes no qualification, and a run that
- * does start finishes `credit_route_unavailable`), never Bedrock. `problem` names a variable.
+ * does start finishes `credit_route_unavailable`), never Bedrock. `FSS_CLASSIFIER=off` composes none
+ * either, before any Vertex load, with or without a classifier transport. `problem` names a variable.
  */
 export async function readQualificationComposition(environment:Readonly<Record<string,string|undefined>>,load:typeof loadVertexGeminiSurface=loadVertexGeminiSurface):Promise<{extraction:QualificationExtractionProvider|null;problem:string|null}> {
+ if(!modelProcessEnabled(environment))return {extraction:null,problem:'FSS_CLASSIFIER'};
  const {config,problem}=readVertexConfig(environment);
  if(config===null)return {extraction:null,problem};
  try{return {extraction:qualificationExtraction(await load(config)),problem:null};}catch{return {extraction:null,problem:'vertex_load_failed'};}

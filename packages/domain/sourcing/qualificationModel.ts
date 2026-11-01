@@ -78,3 +78,20 @@ export function qualificationCents(modelName: string, usage: QualificationUsage,
   const exact = (nonNegative(usage.inputTokens) * price.input + nonNegative(usage.outputTokens) * price.output) / 1_000_000;
   return exact === 0 ? 0 : Math.max(1, Math.ceil(exact));
 }
+
+/**
+ * How far past the reservation instant a call's settlement can be priced. The reservation reads
+ * the database clock; the adapter prices the answer at the worker's wall clock after count,
+ * generate (20 s + 75 s timeouts) and the job lease (180 s), so an hour also absorbs clock skew.
+ */
+export const QUALIFICATION_CALL_WINDOW_MILLISECONDS = 3_600_000;
+
+/**
+ * What to reserve for a call starting at `at`: the highest price in force at any instant its
+ * settlement can be priced, so a call crossing the 1 January 2027 price change is never
+ * under-reserved. Settlement stays `qualificationCents` at the actual instant.
+ */
+export function qualificationReservationCents(modelName: string, usage: QualificationUsage, at: string): number {
+  const latest = new Date(Date.parse(at) + QUALIFICATION_CALL_WINDOW_MILLISECONDS).toISOString();
+  return Math.max(qualificationCents(modelName, usage, at), qualificationCents(modelName, usage, latest));
+}

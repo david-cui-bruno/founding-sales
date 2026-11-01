@@ -158,9 +158,18 @@ export async function classifyWorkerOptions(
   if (composed.transport === null) return undefined;
   return {
     transport: composed.transport,
-    processEnabled: (environment['FSS_CLASSIFIER'] ?? 'on').trim().toLowerCase() !== 'off',
+    processEnabled: modelProcessEnabled(environment),
     ...(log === undefined ? {} : { log }),
   };
+}
+
+/**
+ * `FSS_CLASSIFIER=off`: the operator has decided no model spends, whichever transport or provider
+ * (Anthropic/Bedrock or Vertex qualification) this worker could reach. Read on its own, never only
+ * when a classifier transport exists.
+ */
+export function modelProcessEnabled(environment: Readonly<Record<string, string | undefined>>): boolean {
+  return (environment['FSS_CLASSIFIER'] ?? 'on').trim().toLowerCase() !== 'off';
 }
 
 /** The startup line. Says whether the classifier is configured, never with what. */

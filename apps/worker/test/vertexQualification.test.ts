@@ -87,6 +87,16 @@ describe('the worker composition',()=>{
   expect(workerSourceFlags(composed as never).qualification).toBe(true);
   expect(workerSourceFlags({...composed,research:undefined} as never).qualification).toBe(false);
  });
+ it.each([['off',false],['OFF ',false],['on',true],[undefined,true]] as const)('reads FSS_CLASSIFIER=%s on its own, before any Vertex load, so neither scheduling nor the handler gets an extraction, with or without a classifier transport',async(value,enabled)=>{
+  let loads=0;
+  const composed=await readQualificationComposition({...environment,...value===undefined?{}:{FSS_CLASSIFIER:value}},async()=>{loads++;return surface;});
+  expect(composed).toMatchObject(enabled?{problem:null}:{extraction:null,problem:'FSS_CLASSIFIER'});expect(loads).toBe(enabled?1:0);
+  const transport={kind:'bedrock' as const,countTokens:async()=>1,create:async()=>{throw Error('unused');}};
+  for(const classifier of [undefined,{transport,processEnabled:true},{transport,processEnabled:false}]){
+   const composition={...base,classifier,...composed.extraction===null?{}:{qualification:composed.extraction}};
+   expect(workerSourceFlags(composition as never).qualification).toBe(enabled);
+  }
+ });
  it('registers the qualification handler whenever research is composed, so an unconfigured run is refused rather than lost',()=>{
   expect(registerHandlers(new HandlerRegistry(),base as never).get('sourcing.qualify')).toBeDefined();
  });

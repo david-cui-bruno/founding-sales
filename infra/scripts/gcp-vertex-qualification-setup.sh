@@ -145,4 +145,4 @@ else
   cat "$config_file"
 fi
 say
-say 'Next: terraform apply of infra/roots/production (worker task environment), then deploy. See docs/operations/vertex-qualification.md.'
+say 'Next: the reviewed infrastructure release (review_prepare, then one protected reviewed run) adds the worker task environment with the image. See docs/operations/vertex-qualification.md.'
