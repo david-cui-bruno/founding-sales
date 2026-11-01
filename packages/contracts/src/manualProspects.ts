@@ -12,7 +12,8 @@ export const manualPhoneChoiceSchema = z.strictObject({
   labelStart: z.number().int().min(0).max(16000), labelEnd: z.number().int().min(1).max(16000),
   start: z.number().int().min(0).max(16000), end: z.number().int().min(1).max(16000),
   contentHash: z.string().regex(/^[a-f0-9]{64}$/u), relevantTextHash: z.string().regex(/^[a-f0-9]{64}$/u),
-}).refine(v=>v.end>v.start&&v.end-v.start<=200&&v.labelEnd>v.labelStart&&v.labelEnd-v.labelStart<=200&&v.start>=v.labelEnd);
+// A standalone published number (ADR0034) has no separate label: its own span is the label.
+}).refine(v=>v.end>v.start&&v.end-v.start<=200&&v.labelEnd>v.labelStart&&v.labelEnd-v.labelStart<=200&&(v.start>=v.labelEnd||(v.labelStart===v.start&&v.labelEnd===v.end)));
 export const manualPhoneSchema = z.strictObject({
   value: z.string().regex(/^\+[1-9]\d{7,14}$/u), choice: manualPhoneChoiceSchema,
   sourceUrl: z.string().min(1).max(2000), retrievedAt: instant, expiresAt: instant,
@@ -52,12 +53,15 @@ export const manualProspectPhoneEvidenceSchema = z.discriminatedUnion('state', [
     sources: z.array(manualPhoneSourceSchema).min(1).max(16), coverage}),
 ]).superRefine((value, ctx) => {
   if(value.state !== 'observed') return;
+  // Partial coverage is only ever produced for prepared own-site pages (ADR0034); it never selects another authority's literal.
+  const prepared = value.sources.every(source => !('method' in source) || source.authority.kind === 'prepared_capture');
+  const usable = (state: string | undefined) => state === 'complete' || (state === 'partial' && prepared);
   for(const source of value.sources) {
-    if('method' in source && (source.normalizedValue !== value.value || value.coverage?.state !== 'complete'
-      || value.coverage.observations < 1 || value.coverage.blocks < 1))
+    if('method' in source && (source.normalizedValue !== value.value || !usable(value.coverage?.state)
+      || value.coverage!.observations < 1 || value.coverage!.blocks < 1))
       ctx.addIssue({code:'custom', message:'A selected literal needs matching endpoint and complete authorized coverage.'});
   }
-  if(value.coverage && value.coverage.state !== 'complete')
+  if(value.coverage && !usable(value.coverage.state))
     ctx.addIssue({code:'custom', message:'Incomplete or changed evidence cannot select a phone.'});
 });
 export const manualProspectSchema = z.strictObject({

@@ -8,7 +8,7 @@ function discoveryExpiry(evidence:PhoneEvidence):number{
  const authorities=[...sources.flatMap(source=>'method' in source?[source.authority]:[]),...diagnostics.map(entry=>entry.authority)];
  const aggregate=evidence?.state==='conflicting'?evidence.diagnostics?.expiresAt:undefined;
  return Math.min(...(aggregate?[Date.parse(aggregate)]:[]),...authorities.flatMap(authority=>{
-  if(authority.kind!=='phone_discovery')return [];
+  if(authority.kind!=='phone_discovery'&&authority.kind!=='prepared_capture')return [];
   const expiry=Date.parse(authority.expiresAt);return Number.isFinite(expiry)?[expiry]:[0];
  }));
 }

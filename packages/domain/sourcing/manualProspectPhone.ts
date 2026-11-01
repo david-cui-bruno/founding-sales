@@ -2,10 +2,11 @@ import {qualificationEvidenceSchema,type ManualProspect} from '@fss/contracts';
 import {isDeepStrictEqual} from 'node:util';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {canonicalizePhone} from '../src/rules/suppressionCanonicalization.ts';
-import {MANUAL_SOURCE_LOSS_ACTION} from './manualProspectSourceLoss.ts';
+import {DENIED_SOURCE_CTES} from './manualProspectRows.ts';
 import {safeManualReference,type ManualProspectRow} from './manualProspectProjection.ts';
 import {MANUAL_LITERAL_PHONE_PARSER,scanManualLiteralPhones} from './manualProspectLiteralPhone.ts';
 import {originalAuthorities,originalLineage,type ManualOriginalSnapshot} from './manualProspectOriginalAuthority.ts';
+import {preparedPhoneSource} from './preparedPhoneSource.ts';
 
 type PhoneEvidence=NonNullable<ManualProspect['phoneEvidence']>;
 export interface ManualPhoneSnapshot extends Record<string,unknown>,ManualOriginalSnapshot{
@@ -44,7 +45,13 @@ export async function recheckManualPhoneSnapshots(ctx:RepositoryContext,rows:rea
  return readPhoneSnapshots(ctx,rows,locked.flatMap(snapshot=>snapshot.evidence_authorities?.map(item=>item.id)??[]));
 }
 async function readPhoneSnapshots(ctx:RepositoryContext,rows:readonly ManualProspectRow[],evidenceIds:readonly string[]|null):Promise<ManualPhoneSnapshot[]>{
- return (await ctx.db.query<ManualPhoneSnapshot>(`SELECT r.id,r.candidate_id,r.candidate_revision,r.observations,r.facts,c.payload,
+ return (await ctx.db.query<ManualPhoneSnapshot>(`WITH ${DENIED_SOURCE_CTES}, page_evidence AS MATERIALIZED (
+ SELECT e.id,e.source_reference,e.content_hash,e.retrieved_at,e.terms_allow_retention,e.retention_expires_at FROM evidence_items e WHERE e.workspace_id=$1
+ AND e.source_reference IN (SELECT page->>'url' FROM sourcing_candidates c
+  JOIN LATERAL(SELECT q.observations FROM sourcing_qualification_runs q WHERE q.workspace_id=c.workspace_id AND q.candidate_id=c.id ORDER BY q.requested_at DESC,q.id DESC LIMIT 1) latest ON true
+  CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(latest.observations)='array' THEN latest.observations ELSE '[]'::jsonb END) page
+  WHERE c.workspace_id=$1 AND c.id=ANY($2::uuid[]))
+ ) SELECT r.id,r.candidate_id,r.candidate_revision,r.observations,r.facts,c.payload,
  r.retained_identity_decision_id,d.original_run_id,d.original_revision,d.result_revision,d.candidate_id AS decision_candidate_id,
  original.candidate_id AS original_candidate_id,original.candidate_revision AS ancestor_revision,original.observations AS original_observations,
  original.reason AS original_reason,d.observation_id AS decision_observation_id,d.block_id AS decision_block_id,d.content_hash AS decision_content_hash,d.relevant_text_hash AS decision_text_hash,
@@ -52,7 +59,7 @@ async function readPhoneSnapshots(ctx:RepositoryContext,rows:readonly ManualPros
   FROM sourcing_candidate_discovery_origins o WHERE o.workspace_id=c.workspace_id AND o.candidate_id=c.id) AS origins,
  COALESCE((SELECT jsonb_agg(jsonb_build_object('id',e.id,'url',e.source_reference,'contentHash',e.content_hash,
   'retrievedAt',to_char(e.retrieved_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')) ORDER BY e.id)
-  FROM evidence_items e WHERE e.workspace_id=c.workspace_id AND ($3::uuid[] IS NULL OR e.id=ANY($3::uuid[]))
+  FROM page_evidence e WHERE ($3::uuid[] IS NULL OR e.id=ANY($3::uuid[]))
   AND (e.terms_allow_retention OR e.retention_expires_at>clock_timestamp())
   AND EXISTS(SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(r.observations)='array' THEN r.observations ELSE '[]'::jsonb END) page WHERE e.source_reference=page->>'url' AND e.content_hash=page->>'contentHash'
    AND to_char(e.retrieved_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')=page->>'retrievedAt')),'[]') AS evidence_authorities,
@@ -61,18 +68,13 @@ async function readPhoneSnapshots(ctx:RepositoryContext,rows:readonly ManualPros
     AND rtrim(retained.payload->>'sourceUrl','/')=rtrim(page->>'url','/'))
    OR EXISTS(SELECT 1 FROM sourcing_candidate_discovery_origins o WHERE o.workspace_id=r.workspace_id AND o.candidate_id=r.candidate_id
     AND rtrim(o.source->>'sourceUrl','/')=rtrim(page->>'url','/'))
-   OR EXISTS(SELECT 1 FROM evidence_items e WHERE e.workspace_id=r.workspace_id AND ($3::uuid[] IS NULL OR e.id=ANY($3::uuid[])) AND e.source_reference=page->>'url'
+   OR EXISTS(SELECT 1 FROM page_evidence e WHERE ($3::uuid[] IS NULL OR e.id=ANY($3::uuid[])) AND e.source_reference=page->>'url'
     AND e.content_hash=page->>'contentHash'
     AND to_char(e.retrieved_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')=page->>'retrievedAt'
     AND (e.terms_allow_retention OR e.retention_expires_at>clock_timestamp())))
-  AND NOT EXISTS(SELECT 1 FROM evidence_items e WHERE e.workspace_id=r.workspace_id AND rtrim(e.source_reference,'/')=rtrim(page->>'url','/')
-    AND (e.retention_expires_at<=clock_timestamp() OR (NOT e.terms_allow_retention AND e.retention_expires_at IS NULL)))
-  AND NOT EXISTS(SELECT 1 FROM audit_events loss WHERE loss.workspace_id=r.workspace_id AND loss.action='${MANUAL_SOURCE_LOSS_ACTION}'
-    AND loss.subject_kind='sourcing_source_hash' AND loss.subject_id=encode(sha256(convert_to(rtrim(page->>'url','/'),'UTF8')),'hex'))
-  AND NOT EXISTS(SELECT 1 FROM sourcing_candidates lost WHERE lost.workspace_id=r.workspace_id
-    AND lost.source_check->>'state'='unavailable' AND lost.source_check->>'reason' IN ('source_unavailable','source_not_permitted','no_readable_text')
-    AND (rtrim(lost.payload->>'sourceUrl','/')=rtrim(page->>'url','/') OR rtrim(lost.source_check->'lastSuccess'->>'url','/')=rtrim(page->>'url','/')
-      OR EXISTS(SELECT 1 FROM sourcing_candidate_discovery_origins o WHERE o.workspace_id=lost.workspace_id AND o.candidate_id=lost.id AND rtrim(o.source->>'sourceUrl','/')=rtrim(page->>'url','/'))))
+  AND NOT EXISTS(SELECT 1 FROM denied_evidence_urls denied WHERE denied.url=rtrim(page->>'url','/'))
+  AND NOT EXISTS(SELECT 1 FROM lost_source_hashes loss WHERE loss.hash=encode(sha256(convert_to(rtrim(page->>'url','/'),'UTF8')),'hex'))
+  AND NOT EXISTS(SELECT 1 FROM lost_source_urls lost WHERE lost.url=rtrim(page->>'url','/'))
  ORDER BY 1) AS permitted_urls
  FROM sourcing_candidates c JOIN LATERAL(SELECT * FROM sourcing_qualification_runs q WHERE q.workspace_id=c.workspace_id AND q.candidate_id=c.id ORDER BY q.requested_at DESC,q.id DESC LIMIT 1) r ON r.candidate_revision=c.revision
  LEFT JOIN sourcing_retained_identity_decisions d ON d.workspace_id=r.workspace_id AND d.candidate_id=r.candidate_id AND d.id=r.retained_identity_decision_id
@@ -94,7 +96,10 @@ export function projectManualPhone(snapshot:ManualPhoneSnapshot|undefined,now=Da
  // however, are parsed independently even when model facts were malformed.
  const hasOriginal=Array.isArray(snapshot.observations)&&snapshot.observations.some(value=>value&&typeof value==='object'&&'firstParty' in value&&value.firstParty===true);
  if(!hasOriginal)return factEvidence;
- const scan=scanManualLiteralPhones({runId:snapshot.id,observations:snapshot.observations,...originalAuthorities(snapshot),lineage,now});
+ // ADR0034: a candidate with a current prepared source association is read through the pages its brief cites.
+ const prepared=preparedPhoneSource(snapshot,now);
+ const scan=scanManualLiteralPhones({runId:snapshot.id,observations:prepared?.observations??snapshot.observations,
+  ...(prepared?{website:prepared.website,authorities:prepared.authorities,partial:prepared.partial}:originalAuthorities(snapshot)),lineage,now});
  if(scan.reason)return {state:'not_extracted',reason:scan.reason,coverage:scan.coverage};
  const factSources=factEvidence.state==='observed'||factEvidence.state==='conflicting'?factEvidence.sources:[];
  const sources=[...factSources,...scan.sources];

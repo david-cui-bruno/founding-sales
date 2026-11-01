@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { manualProspectFeedbackInputSchema, manualProspectListInputSchema, manualProspectSchema } from '../src/manualProspects.ts';
+import { manualPhoneChoiceSchema, manualProspectFeedbackInputSchema, manualProspectListInputSchema, manualProspectSchema } from '../src/manualProspects.ts';
 
 const prospect = {
   candidateId: 'b385612c-cac8-43a3-a72d-fc2dd7d8553d', revision: 1,
@@ -57,5 +57,27 @@ describe('manual retained prospect boundary', () => {
       expect(manualProspectFeedbackInputSchema.safeParse({ candidateId: prospect.candidateId, expectedRevision: 1, state }).success).toBe(true);
     }
     expect(manualProspectFeedbackInputSchema.safeParse({ candidateId: prospect.candidateId, expectedRevision: 1, state: 'admitted' }).success).toBe(false);
+  });
+  it('lets a standalone number be its own label but no other overlapping span form', () => {
+    const choice = {runId: prospect.candidateId, observationId: prospect.candidateId, blockId: 'b1', contentHash: 'a'.repeat(64), relevantTextHash: 'b'.repeat(64)};
+    expect(manualPhoneChoiceSchema.safeParse({...choice, labelStart: 0, labelEnd: 7, start: 9, end: 21}).success).toBe(true);
+    expect(manualPhoneChoiceSchema.safeParse({...choice, labelStart: 2, labelEnd: 14, start: 2, end: 14}).success).toBe(true);
+    for (const span of [{labelStart: 2, labelEnd: 13, start: 2, end: 14}, {labelStart: 3, labelEnd: 14, start: 2, end: 14}, {labelStart: 0, labelEnd: 10, start: 5, end: 14}])
+      expect(manualPhoneChoiceSchema.safeParse({...choice, ...span}).success).toBe(false);
+  });
+  it('allows partial coverage to select a phone only for prepared own-site pages', () => {
+    const literal = (authority: unknown) => ({method: 'retained_original_literal', runId: prospect.candidateId, observationId: prospect.candidateId, blockId: 'b1',
+      url: 'https://example.test/contact', retrievedAt: prospect.retainedAt, contentHash: 'a'.repeat(64), relevantTextHash: 'b'.repeat(64), parser: 'manual-literal-phone-v2',
+      literal: '212-555-0123', start: 7, end: 19, label: 'Phone:', labelStart: 0, labelEnd: 6, normalizedValue: '+12125550123',
+      normalization: 'existing-canonicalize-phone-v1', normalizationBasis: 'default_us', authority, lineage: {kind: 'provider_original'}});
+    const evidence = (authority: unknown, state: string) => ({state: 'observed', value: '+12125550123', sources: [literal(authority)],
+      coverage: {parser: 'manual-literal-phone-v2', state, observations: 1, blocks: 2}});
+    const observed = (phoneEvidence: unknown) => ({...prospect, observedPhone: '+12125550123', phoneBasis: 'retained_observation', phoneEvidence});
+    const prepared = {kind: 'prepared_capture', sourceUrl: 'https://example.test/contact', expiresAt: '2026-11-07T01:00:00.000Z'};
+    expect(manualProspectSchema.safeParse(observed(evidence(prepared, 'partial'))).success).toBe(true);
+    expect(manualProspectSchema.safeParse(observed(evidence(prepared, 'complete'))).success).toBe(true);
+    expect(manualProspectSchema.safeParse(observed(evidence({kind: 'candidate_source', sourceUrl: 'https://example.test/contact'}, 'partial'))).success).toBe(false);
+    expect(manualProspectSchema.safeParse(observed(evidence(prepared, 'bounded'))).success).toBe(false);
+    expect(manualProspectSchema.safeParse(observed(evidence({...prepared, extra: true}, 'partial'))).success).toBe(false);
   });
 });

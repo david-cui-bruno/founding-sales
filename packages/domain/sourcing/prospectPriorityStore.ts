@@ -1,4 +1,4 @@
-import {MANUAL_PROSPECT_ROWS_SQL,PREPARED_PROSPECT_ROWS_SQL} from './manualProspectRows.ts';
+import {MANUAL_PROSPECT_ROWS_SQL} from './manualProspectRows.ts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 export interface PriorityRow extends Record<string,unknown>{candidate_id:string;candidate_revision:number;revision:number;fit:'positive'|'unknown'|'negative';value:'positive'|'unknown';timing:'positive'|'unknown';source_url:string;source_key:string;roles:unknown;decided_at:Date;expires_at:Date}
 export interface PriorityOrderRow{ id:string;revision:number;assessment_revision:number;fit:'positive'|'unknown'|'negative';value:'positive'|'unknown';timing:'positive'|'unknown';source_url:string|null;roles:unknown;decided_at:string|null;expires_at:string|null;last_considered_at:string|null;considered_count:number}
@@ -31,7 +31,7 @@ const priorityPool=(rowsSql:string)=>`WITH permitted AS (${rowsSql}), facts AS (
 ), context AS (
  SELECT encode(sha256(convert_to(COALESCE(string_agg(jsonb_build_array(id,revision,source_key,assessment_revision,fit,value,timing,source_url,roles,decided_at,expires_at,last_considered_at,considered_count,lane)::text,'' ORDER BY id),''),'UTF8')),'hex') AS view_revision FROM ordered
 )`;
-const pool=priorityPool(MANUAL_PROSPECT_ROWS_SQL),preparedPool=priorityPool(PREPARED_PROSPECT_ROWS_SQL);
+const pool=priorityPool(MANUAL_PROSPECT_ROWS_SQL);
 export async function priorityOrder(ctx:RepositoryContext,state:string,offset:number):Promise<{rows:PriorityOrderRow[];viewRevision:string}>{
  const answer=(await ctx.db.query<{rows:PriorityOrderRow[];view_revision:string}>(`${pool} SELECT context.view_revision,
  COALESCE((SELECT jsonb_agg(jsonb_build_object('id',id,'revision',revision,'assessment_revision',assessment_revision,'fit',fit,'value',value,'timing',timing,'source_url',source_url,'roles',COALESCE(roles,'[]'),'decided_at',decided_at,'expires_at',expires_at,'last_considered_at',last_considered_at,'considered_count',considered_count) ORDER BY slot,id)
@@ -46,7 +46,7 @@ export async function priorityOrder(ctx:RepositoryContext,state:string,offset:nu
  * is bound into the view revision so a continuation never crosses orders. */
 export async function preparedPriorityOrder(ctx:RepositoryContext,offset:number,order:'priority'|'newest'='priority'):Promise<{rows:PriorityOrderRow[];viewRevision:string}>{
  const sort=order==='newest'?'created_at DESC,id DESC':'context_lane,slot,id';
- const answer=(await ctx.db.query<{rows:PriorityOrderRow[];view_revision:string}>(`${preparedPool}, preparation AS (
+ const answer=(await ctx.db.query<{rows:PriorityOrderRow[];view_revision:string}>(`${pool}, preparation AS (
  SELECT ordered.*,r.id AS latest_run_id,r.preparation_key,
  CASE WHEN r.candidate_revision=ordered.revision AND COALESCE(r.reason,'') NOT IN ('source_unavailable','source_not_permitted','no_readable_text')
  AND EXISTS(SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(r.observations)='array' THEN r.observations ELSE '[]'::jsonb END) page WHERE page->'firstParty'='true'::jsonb) THEN 0 ELSE 1 END AS context_lane

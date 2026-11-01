@@ -10,7 +10,8 @@ const offset = z.number().int().min(0).max(PROSPECT_PHONE_CAPTURE_LIMITS.maxBloc
 const parser = z.enum(['manual-literal-phone-v1', 'manual-literal-phone-v2']);
 export const manualLiteralPhoneCoverageSchema = z.strictObject({
   parser,
-  state: z.enum(['complete', 'unavailable', 'changed', 'bounded']),
+  // `partial`: intact blocks of prepared own-site pages only; other pages/blocks are not covered (ADR0034).
+  state: z.enum(['complete', 'unavailable', 'changed', 'bounded', 'partial']),
   observations: z.number().int().min(0).max(8),
   blocks: z.number().int().min(0).max(1024),
 });
@@ -21,6 +22,8 @@ const authority = z.discriminatedUnion('kind', [
     recordId: z.string().min(1).max(500), retrievedAt: instant.nullable()}),
   z.strictObject({kind: z.literal('retained_evidence'), evidenceId: uuid}),
   z.strictObject({kind: z.literal('phone_discovery'), runId: uuid, expiresAt: instant}),
+  // Current prepared source association (ADR0033) for the exact candidate; expiry is the earliest source/horizon bound.
+  z.strictObject({kind: z.literal('prepared_capture'), sourceUrl: url, expiresAt: instant}),
 ]);
 const lineage = z.discriminatedUnion('kind', [
   z.strictObject({kind: z.literal('provider_original')}),

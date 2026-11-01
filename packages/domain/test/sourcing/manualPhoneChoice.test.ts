@@ -43,9 +43,17 @@ it.each([
 ])('v2 verb and emoji labels are choosable for Calling: %s',(text,literal,label)=>{
  const {run,choice}=fixture(text,literal,label);expect(projectManualPhoneChoice(run,choice,now)?.value).toMatch(/^\+1\d{10}$/u);
 });
-it('a standalone self-labelled number cannot form a Calling choice without a label before it',()=>{
- const {choice}=fixture('(412) 685-3970','(412) 685-3970','(412) 685-3970');
- expect(manualPhoneChoiceSchema.safeParse(choice).success).toBe(false);
+it('a standalone self-labelled number is its own label and is choosable; partial self-labels are not',()=>{
+ const {run,choice}=fixture('(412) 685-3970','(412) 685-3970','(412) 685-3970');
+ expect(manualPhoneChoiceSchema.safeParse(choice).success).toBe(true);
+ expect(projectManualPhoneChoice(run,choice,now)).toMatchObject({value:'+14126853970',choice});
+ for(const patch of [{labelEnd:choice.end-1},{labelStart:choice.start+1},{start:choice.start+1,labelStart:choice.start,labelEnd:choice.end}])
+  expect(projectManualPhoneChoice(run,{...choice,...patch},now)).toBeNull();
+ expect(manualPhoneChoiceSchema.safeParse({...choice,labelEnd:choice.end-1}).success).toBe(false);
+});
+it.each([['412-685-3970 (cell)'],['412-685-3970 ext 5'],['412-685-3970 text me']])('a standalone self-label never attaches beside another line or an unsupported suffix: %s',text=>{
+ const {run,choice}=fixture(text,'412-685-3970','412-685-3970');
+ expect(projectManualPhoneChoice(run,choice,now)).toBeNull();
 });
 it.each([
  ['Please call 202.337.5080 or text us for SMS updates.','202.337.5080','Please call'],

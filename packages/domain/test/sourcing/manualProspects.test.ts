@@ -6,6 +6,7 @@ import {seedTwoWorkspaces,type TwoWorkspaces} from '../db/support/fixtures.ts';
 import {saveDiscoveryCandidate} from '../../sourcing/discoveryIntake.ts';
 import {saveCandidate,deleteCandidate} from '../../sourcing/candidates.ts';
 import {listManualProspects,recordManualProspectFeedback} from '../../sourcing/manualProspects.ts';
+import {MANUAL_PROSPECT_ROWS_SQL,MANUAL_PROSPECT_SELECTION_ROWS_SQL,CORRELATED_PROSPECT_ROWS_SQL} from '../../sourcing/manualProspectRows.ts';
 import {TABLE_RETENTION_COVERAGE} from '../../retention/coverage.ts';
 import {manualDiscoveryFixture,manualOrdinaryFixture} from './support/manualProspectFixture.ts';
 let db:TestDatabase,seeded:TwoWorkspaces,runtime:SessionQueryable;
@@ -63,4 +64,26 @@ it('missing origins, junk and known restricted source refuse projection and feed
 it('does not apply old revision manual state to changed observations',async()=>{
  const id=await discovery();await feedback(id,'wrong_number');await runtime.query('UPDATE sourcing_candidates SET revision=2 WHERE id=$1',[id]);
  expect(await list()).toMatchObject({ok:true,value:{prospects:[{candidateId:id,revision:2,state:'new'}]}});expect(await feedback(id,'kept')).toMatchObject({ok:false,reason:'candidate_changed'});
+});
+it('reads an exact candidate, a bounded selection and the correlated reference as the same rows and page as the full inventory',async()=>{
+ const named=(recordId:string,name:string,website:string|null)=>{const input=manualDiscoveryFixture(recordId);input.row.firmName=name;input.row.website=website;return input;};
+ const older=await discovery(named('twin-old','Twin Property','https://twin.example.test/')),newer=await discovery(named('twin-new','Twin Property','https://twin.example.test/'));
+ const lone=await discovery(named('lone','Lone Property','https://lone.example.test/')),noSite=await discovery(named('no-site-a','Shared Label',null)),noSiteToo=await discovery(named('no-site-b','Shared Label',null));
+ const ordinary=await withTransaction(runtime,()=>saveCandidate(context(),manualOrdinaryFixture()));if(!ordinary.ok)throw Error(ordinary.reason);
+ await feedback(lone,'kept');await runtime.query("UPDATE sourcing_candidates SET created_at=created_at-interval '1 hour' WHERE id=$1",[older]);
+ const ids=[older,newer,lone,noSite,noSiteToo,ordinary.value.id],workspace=seeded.alpha.workspaceId;
+ const full=(await runtime.query(`SELECT * FROM (${MANUAL_PROSPECT_ROWS_SQL}) inventory WHERE id=ANY($3::uuid[])`,[workspace,'all',ids])).rows;
+ const selection=(await runtime.query(`SELECT * FROM (${MANUAL_PROSPECT_SELECTION_ROWS_SQL}) inventory WHERE id=ANY($3::uuid[])`,[workspace,'all',ids])).rows;
+ const reference=(await runtime.query(`SELECT * FROM (${CORRELATED_PROSPECT_ROWS_SQL}) inventory WHERE id=ANY($3::uuid[])`,[workspace,'all',ids])).rows;
+ expect(full.map(row=>row['id']).sort()).toEqual([newer,lone,noSite,noSiteToo,ordinary.value.id].sort());
+ expect(selection).toEqual(full);expect(reference).toEqual(full);
+ const page=await list();if(!page.ok)throw Error(page.reason);
+ for(const id of ids){
+  const exact=await withTransaction(runtime,()=>listManualProspects(context(),{state:'all',offset:0,candidateId:id,expectedRevision:1}));if(!exact.ok)throw Error(exact.reason);
+  expect(exact.value).toEqual({prospects:page.value.prospects.filter(p=>p.candidateId===id),hasMore:false});
+  const kept=await withTransaction(runtime,()=>listManualProspects(context(),{state:'kept',offset:0,candidateId:id,expectedRevision:1}));
+  expect(kept).toEqual({ok:true,value:{prospects:page.value.prospects.filter(p=>p.candidateId===id&&p.state==='kept'),hasMore:false}});
+ }
+ expect(page.value.prospects.find(p=>p.candidateId===newer)?.possibleDuplicateCount).toBe(1);
+ expect(page.value.prospects.filter(p=>[noSite,noSiteToo].includes(p.candidateId)).map(p=>p.possibleDuplicateCount)).toEqual([0,0]);
 });
