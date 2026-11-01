@@ -173,6 +173,8 @@ it('still retains an explicit serve-area statement alongside a serve-as role',()
 it.each([
  'Franchise-owner-operated residential property management offices in New Mexico, Colorado, and Arizona.',
  'If we manage your real estate investment, sign in to view your statements and account notes.',
+ 'Harbor Homes is a residential property management company serving owners across Grand Rapids.',
+ 'We are a family-owned residential property management company in Spokane and the surrounding area.',
 ])('recognizes a residential self-description or own real-estate management as business: %s',text=>{
  expect(classifyPreparedPassage(text,'')).toMatchObject({usefulBusiness:true,contrary:false,kinds:expect.arrayContaining(['business'])});
 });
@@ -181,6 +183,10 @@ it.each([
  'We do not provide residential property management services for homes or apartments in this area.',
  'Greater Grand Rapids Property Management Specialists.',
  'Our team manages real estate investment funds and securities portfolios for accredited investors nationwide.',
+ 'The complete accounting software for a residential property management company with offices across the country.',
+ 'Built for any residential property management company that wants faster owner statements and reports.',
+ 'We manage real estate funds for institutional investors across the United States.',
+ 'Our firm manages real estate assets and capital for institutional investors in core markets nationwide.',
 ])('still refuses vendor, denial, short or investment-fund text: %s',text=>{
  expect(classifyPreparedPassage(text,'').usefulBusiness).toBe(false);
 });

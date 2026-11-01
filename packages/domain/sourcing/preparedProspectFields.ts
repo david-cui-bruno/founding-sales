@@ -23,14 +23,23 @@ const productOffering=/\b(?:we|our (?:company|team|firm))\b[^.!?\n]{0,60}\b(?:se
 const educationalOffering=/\b(?:we|our (?:company|firm|team))\b[^.!?\n]{0,60}\b(?:provides?|offers?|sells?|teach(?:es)?)\s+(?:(?:a|an|the|our|online|professional|property|management|investment|tenant|screening)\s+){0,5}(?:education|training|courses?|tutorials?|guides?|advice)\b|\b(?:we|our (?:company|firm|team))\s+teach(?:es)?\s+(?:landlords?|property managers?|investors?)\b/iu;
 const managementServiceAction=/\b(?:manag(?:e|es|ed|ing)|provid(?:e|es|ed|ing)|offer(?:s|ed|ing)?|serv(?:e|es|ed|ing)|speciali[sz](?:e|es|ed|ing)|oversee(?:s|ing)?|support(?:s|ed|ing)?|deliver(?:s|ed|ing)?)\b/iu;
 const explicitManagementService=/\b(?:property|rental|real estate|community|association|residential)\s+management\s+(?:services?|company|firm|team)\b/iu;
-const nonServiceBusiness=/\b(?:investment portfolios?|investment funds?|financial returns|securities|wealth management|investment education|management training)\b/iu;
+const nonServiceBusiness=/\b(?:investment portfolios?|investment funds?|financial returns|securities|wealth management|investment education|management training|real estate (?:investment )?(?:funds?|portfolios?|assets|capital|investment trusts?)|REITs?|institutional investors?|(?:accredited|institutional) capital)\b|\b(?:investments?|assets|funds?) for (?:institutional |accredited )?investors\b/iu;
 // A company's own residential self-description names its service and scope without a verb:
 // "Franchise-owner-operated residential property management offices in New Mexico, Colorado, and Arizona."
+// The phrase describes the publisher only as a title-like lead ("<Name|adjectives> residential …"),
+// "<We|Our|Name> is/are a …", or after "we"/"our"; never after for/to/serving or a product word, which
+// make it the publisher's customers ("accounting software for a residential property management company").
 const residentialManagementService=/\b(?:residential|single.family|multi.?family)\s+(?:property|rental)\s+management\s+(?:services?|company|firm|offices?|team)\b/iu;
 const substantive=(text:string)=>text.length>=50&&text.trim().split(/\s+/u).length>=8;
 const question=(text:string)=>/\?\s*$/u.test(text)||/^\s*(?:why|how|what|when|where|who|which|do|does|did|can|could|should|would|is|are)\b[^.!?\n]*$/iu.test(text);
+function selfDescribedResidentialService(text:string):boolean {
+ const match=residentialManagementService.exec(text);if(!match)return false;
+ const prefix=text.slice(0,match.index);
+ return !/\b(?:for|to|serving|with|software|platforms?|tools?|apps?|solutions?|systems?|products?)\b/iu.test(prefix)
+  &&(/^\s*(?:[\p{L}\d&'’.-]+[\s-]+){0,5}$/u.test(prefix)||/\b(?:is|are|we're)\s+(?:a|an|the)\s+(?:[\p{L}\d&'’-]+\s+){0,3}$/iu.test(prefix)||/^\s*(?:we|our)\b/iu.test(prefix));
+}
 function business(text:string):boolean {
- return substantive(text)&&(residentialManagementService.test(text)||management.test(text)&&propertyManagementService.test(text)&&managementServiceAction.test(text)&&(ownManager.test(text)||namedManager.test(text)))&&(!nonServiceBusiness.test(text)||explicitManagementService.test(text))&&!question(text)&&!vendor.test(text)&&!productOffering.test(text)&&!educationalOffering.test(text)&&!attributed(text)&&!contrary.test(text)&&!businessDenial.test(text);
+ return substantive(text)&&(selfDescribedResidentialService(text)||management.test(text)&&propertyManagementService.test(text)&&managementServiceAction.test(text)&&(ownManager.test(text)||namedManager.test(text)))&&(!nonServiceBusiness.test(text)||explicitManagementService.test(text))&&!question(text)&&!vendor.test(text)&&!productOffering.test(text)&&!educationalOffering.test(text)&&!attributed(text)&&!contrary.test(text)&&!businessDenial.test(text);
 }
 const workflowTopic=/\b(?:maintenance|repair|vendors?|tenants?|requests?|dispatch|rent collection|screening|leasing|after.hours|market(?:s|ed|ing)?|qualif(?:y|ies|ied|ying)|payments?|portal)\b/iu;
 const propertyOperationsDomain=/\b(?:propert(?:y|ies)|tenants?|residents?|landlords?|rent(?:al)?|leasing|homes|houses|apartments|buildings?|condominiums)\b/iu;
