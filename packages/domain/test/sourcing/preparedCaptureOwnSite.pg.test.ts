@@ -22,7 +22,7 @@ afterAll(async()=>db?.drop());
 
 /** A landing page (the exact candidate source) that links to its own contact, about,
  * team and service pages, a second contact page and another company's site. */
-async function capture(options:{maxPages?:number;extra?:(site:string)=>Record<string,string>}={}){
+async function capture(options:{maxPages?:number;extra?:(site:string)=>Record<string,string>;redirects?:(site:string)=>Record<string,string>}={}){
  const host=`ownsite-${randomUUID()}.example.test`,site=`https://${host}`,landing=`${site}/`;
  const saved=await tx(()=>saveCandidate(ctx(),{firmName:'Fictional Harbor Property Management',website:landing,sourceUrl:landing,locality:'Boston',region:'MA',signal:'fit_only',evidence:'Fictional search label only',observedOn:new Date().toISOString().slice(0,10),preparedBy:'Tavily Basic search · not verified'}));
  if(!saved.ok)throw Error(saved.reason);
@@ -38,7 +38,7 @@ async function capture(options:{maxPages?:number;extra?:(site:string)=>Record<st
   ...options.extra?.(site),
  };
  const requests:string[]=[];
- const provider=researchPageFetch({lookup:async()=>['93.184.216.34'],request:async input=>{requests.push(input.url);if(input.url.endsWith('/robots.txt'))return {statusCode:404,headers:{},body:null,abortedOverCap:false};const body=pages[input.url];return body===undefined?{statusCode:404,headers:{},body:null,abortedOverCap:false}:html(body);}});
+ const provider=researchPageFetch({lookup:async()=>['93.184.216.34'],request:async input=>{requests.push(input.url);if(input.url.endsWith('/robots.txt'))return {statusCode:404,headers:{},body:null,abortedOverCap:false};const moved=options.redirects?.(site)[input.url];if(moved)return {statusCode:301,headers:{location:moved},body:null,abortedOverCap:false};const body=pages[input.url];return body===undefined?{statusCode:404,headers:{},body:null,abortedOverCap:false}:html(body);}});
  await runQualification(ctx(true),{runId:requested.value.runId},{pageFetch:provider,extraction:{providerKey:'aws_bedrock.sourcing_qualification',countInputTokens:async()=>100,extract:async()=>({ok:false,failureCode:'invalid_evidence',costCents:1})}});
  const stored=async()=>(await runtime.query<{prepared_capture:{pages:{url:string;redirectUrls:string[]}[]}|null;observations:{url:string}[]}>('SELECT prepared_capture,observations FROM sourcing_qualification_runs WHERE id=$1',[requested.value.runId])).rows[0]!;
  return {site,landing,requests,stored,target:{candidateId:saved.value.id,candidateRevision:1,runId:requested.value.runId}};
@@ -88,4 +88,18 @@ it('uses a landing page with only navigation and images as lineage, so its conta
  const brief=await tx(()=>readPreparedProspect(ctx(),f.target));if(!brief.ok)throw Error(brief.reason);
  expect(brief.value.callable).toMatchObject({state:'callable',phone:'(617) 555-0100'});
  expect(brief.value.passages.some(p=>p.url===`${f.site}/contact-us`&&p.kind==='contact')).toBe(true);
+});
+
+
+it('cites the linked contact page even when the landing page already fills the brief\'s contact passages (production Tucson shape)',async()=>{
+ // Absolute same-host link with a trailing slash; the normalized /contact answers 301 to /contact/.
+ const f=await capture({maxPages:4,extra:site=>({[`${site}/`]:`<nav><a href="${site}">Home</a><a href="${site}/contact/">Contact</a></nav><main><p>Our property management company manages residential homes for owners in Boston.</p><p>(617) 555-0101</p><p>(617) 555-0102</p></main>`,
+  [`${site}/contact/`]:'<main><p>(617) 555-0101</p><p>Main phone number: (617) 555-0101</p><p>Tenant contact number: (617) 555-0103</p></main>'}),redirects:site=>({[`${site}/contact`]:`${site}/contact/`})});
+ const stored=await f.stored();
+ expect(stored.observations.map(o=>o.url)).toEqual([f.landing,`${f.site}/contact/`]);
+ expect(stored.prepared_capture?.pages.map(p=>[p.url,p.redirectUrls])).toEqual([[`${f.site}/contact/`,[f.landing,`${f.site}/contact`,`${f.site}/contact/`]]]);
+ const brief=await tx(()=>readPreparedProspect(ctx(),f.target));if(!brief.ok)throw Error(brief.reason);
+ // Phone-bearing blocks still lead; among them the linked contact page's comes first.
+ expect(brief.value.passages.filter(p=>p.kind==='contact').map(p=>[p.url,p.quote])).toEqual([[`${f.site}/contact/`,'(617) 555-0101'],[f.landing,'(617) 555-0102']]);
+ expect(brief.value.callable).toMatchObject({state:'callable',phone:'(617) 555-0101'});
 });

@@ -6,9 +6,11 @@ import {admitPreparedPages,type PreparedSourceExpirations} from './preparedPageA
 import {classifyPreparedPassage,type PreparedPassageClassification} from './preparedProspectFields.ts';
 import {blockPhoneLabels} from './manualProspectLiteralPhone.ts';
 import {classifyDiscoveryPage,companyHost} from './discoveryIdentity.ts';
+import {ownSitePageKind,type OwnSitePageKind} from '../research/sourcePolicy.ts';
 
 export interface PreparedRunIdentity {id:string;candidate_revision:number}
 type Passage=PreparedProspectCurrentBrief['passages'][number];
+const OWN_SITE_SECTION:Partial<Record<Passage['kind'],OwnSitePageKind>>={contact:'contact',business:'about',person:'team'};
 /** Dated original passages only. A preparation assessment never changes a stored
  * qualification, resolves a canonical identity, or grants a channel/endpoint. */
 export function projectPreparedProspect(row:ManualProspectRow,snapshot:ManualPhoneSnapshot|undefined,latest:PreparedRunIdentity|undefined,now:number,expirations:PreparedSourceExpirations=new Map()):PreparedProspectCurrentBrief|null {
@@ -37,9 +39,13 @@ export function projectPreparedProspect(row:ManualProspectRow,snapshot:ManualPho
  // concatenating blocks. A category is presentation, not a replacement fact.
  // Identical quote text from another block is shown once: the first is kept whole.
  for(const [kind,limit]of [['contrary',2],['business',4],['contact',2],['person',2],['location',3],['workflow',3]] as const){
+  // ADR0034: a linked own-site page leads the section it was fetched for, so landing-page
+  // blocks cannot fill the bound before the contact, about or team page is cited.
+  const page=OWN_SITE_SECTION[kind],own=(entry:typeof all[number])=>page!==undefined&&ownSitePageKind(entry.passage.url)===page;
+  const ordered=page===undefined?all:[...all].sort((a,b)=>Number(own(b))-Number(own(a)));
   // Phone- and short person-bearing blocks lead their bounded sections so callable facts stay traceable.
-  const entries=kind==='workflow'?[...all].sort((a,b)=>Number(b.classification.usefulOperations)-Number(a.classification.usefulOperations)):kind==='contact'?[...all].sort((a,b)=>Number(b.phone!==null)-Number(a.phone!==null))
-   :kind==='person'?[...all].sort((a,b)=>Number(b.passage.quote.length<=200)-Number(a.passage.quote.length<=200)):all;
+  const entries=kind==='workflow'?[...ordered].sort((a,b)=>Number(b.classification.usefulOperations)-Number(a.classification.usefulOperations)):kind==='contact'?[...ordered].sort((a,b)=>Number(b.phone!==null)-Number(a.phone!==null))
+   :kind==='person'?[...ordered].sort((a,b)=>Number(b.passage.quote.length<=200)-Number(a.passage.quote.length<=200)):ordered;
   let added=0;for(const entry of entries){
    if(added>=limit||passages.length>=16)break;
    if(!entry.classification.kinds.includes(kind)||passages.some(p=>p.observationId===entry.passage.observationId&&p.blockId===entry.passage.blockId||p.quote===entry.passage.quote))continue;
@@ -53,7 +59,8 @@ export function projectPreparedProspect(row:ManualProspectRow,snapshot:ManualPho
  const prepared=(has('business')||hasOperations)&&!hasContrary;
  // ADR0034: research readiness only. Only a company page is callable; phone and person
  // come from blocks included in this brief.
- const included=all.filter(item=>passages.some(p=>p.observationId===item.passage.observationId&&p.blockId===item.passage.blockId));
+ // In brief order, so the phone is the first one the brief shows.
+ const included=passages.flatMap(p=>all.filter(item=>p.observationId===item.passage.observationId&&p.blockId===item.passage.blockId).slice(0,1));
  const phone=included.find(item=>item.phone!==null)?.phone??null,person=included.find(item=>item.classification.kinds.includes('person')&&item.passage.quote.length<=200)?.passage.quote??null;
  const page=observed.website===null?null:classifyDiscoveryPage({url:observed.website,title:observed.observedName});
  const missing:PreparedProspectCallable['missing']=[...(!prepared?['needs_research' as const]:[]),...(hasContrary?['contrary_context' as const]:[]),
