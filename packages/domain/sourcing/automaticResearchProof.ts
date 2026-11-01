@@ -8,7 +8,7 @@ import {researchFingerprint} from './qualifiedResearchProof.ts';
 import {automaticResearchNow,automaticResearchOwner,automaticResearchSourceSnapshot} from './automaticResearchAuthority.ts';
 import {retainedCandidateOnly} from './retainedAcquisition.ts';
 import {currentUSPreparedEmailFit} from './currentPreparedEmailFit.ts';
-import {LEGACY_QUALIFICATION_PRODUCER,hasPreparedIdentity,effectivePreparedCandidate} from './preparedIdentity.ts';
+import {hasPreparedIdentity,effectivePreparedCandidate} from './preparedIdentity.ts';
 import {preparedIdentityCurrentSource} from './preparedIdentityAuthority.ts';
 
 /** Reuse the CRM alias index, but explicitly bind the sourcing owner, not a forged user scope. */
@@ -30,7 +30,7 @@ export async function automaticResearchProof(ctx:RepositoryContext,candidateId:s
  const {value:source,targetingVersion}=snapshot;
  const run=(await ctx.db.query<QualificationRunRow>('SELECT * FROM sourcing_qualification_runs WHERE workspace_id=$1 AND candidate_id=$2 ORDER BY requested_at DESC,id DESC LIMIT 1',[ctx.scope.workspaceId,candidateId])).rows[0];
  if(!run||run.candidate_revision!==row.revision||run.prompt_version!==QUALIFICATION_PROMPT_VERSION||run.policy_version!==QUALIFICATION_POLICY_VERSION||run.reason!==null||!['review','eligible','admitted'].includes(run.state))return null;
- const now=await automaticResearchNow(ctx),proofBearing=hasPreparedIdentity(run),producer=run['producer_version']===undefined?LEGACY_QUALIFICATION_PRODUCER:run['producer_version'];
+ const now=await automaticResearchNow(ctx),proofBearing=hasPreparedIdentity(run),producer=run['producer_version'];
  if(proofBearing&&!await preparedIdentityCurrentSource(ctx,candidateId,row.revision,originalCandidate))return null;
  const candidate=effectivePreparedCandidate(originalCandidate,run.facts,run.observations,producer,run['prepared_identity'],now);if(!candidate)return null;
  const native=nativeFirmCitations({candidate,facts:run.facts,observations:run.observations,now});if('status' in native)return null;

@@ -4,6 +4,8 @@
 
 Accepted October22 2026 for the existing reversible LOCAL continuation after issue743. Reuse issues741/742, existing API/domain/workers/Postgres and current browser campaign/Today controls. No acquisition, inference, provider, real business data, hosting, cloud, production enrollment, contact or sending activation. Production/main/client881/schema129/OFF remains a dated checkpoint. This closes a provenance composition gap, not a new sending engine or wider source policy.
 
+**Superseded intake (roadmap1.6.6, November 2026):** the API-only raw `discovery-v1` write intake (`/sourcing/candidates/discovery/save-v1` and `/list-v1`) is removed; [ADR0034](0034-company-first-callable-supply.md) company-first discovery is the only candidate intake. Stored `discovery-v1` rows and their review, promotion and manual-worklist readers are unchanged.
+
 ## Shared boundary
 
 `outreach/emailCampaignSource.ts` defines an internal discriminated source selection: existing discovery-research Firm or exact automatic-research target. It is a selection, never an authority token. No browser/API schema accepts new source/campaign authority, reviewed flags, owner overrides or system-actor claims. Every domain use reloads and validates current stored lineage. Existing public campaign control/opaque receipts and TodayV4 remain unchanged.

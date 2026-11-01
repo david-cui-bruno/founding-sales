@@ -12,7 +12,7 @@ import {admitCandidate} from './admission.ts';
 import {attachSourcingAttribution} from './attribution.ts';
 import {QUALIFICATION_POLICY_VERSION,QUALIFICATION_PROMPT_VERSION,type QualificationRunRow} from './qualificationStore.ts';
 import {verifiedFirmOwner,verifiedFirmEvidence,VERIFIED_FIRM_POLICY_VERSION} from './verifiedFirmPolicy.ts';
-import {isLegacyCandidatePayload} from './discoveryIntake.ts';
+import {isLegacyCandidatePayload} from './candidatePayload.ts';
 import {retainedCandidateOnly} from './retainedAcquisition.ts';
 
 /** Caller owns the transaction. No providers, contacts, enrollment or send authority. */

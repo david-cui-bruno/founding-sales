@@ -25,11 +25,9 @@ import {admitCallingCandidate,assessCallingOffice} from '@fss/domain/sourcing/ca
 import {requestSourceCheck} from '@fss/domain/sourcing/sourceCheck.ts';
 import {candidateCheckCommandSchema,candidateListInputSchema,candidateSaveCommandSchema,candidateReviewCommandSchema,candidateDeleteCommandSchema} from '@fss/contracts';
 import {saveCandidate,listCandidates,reviewCandidate,deleteCandidate} from '@fss/domain/sourcing/candidates.ts';
-import {discoveryIntakeSaveCommandSchema,discoveryIntakeListInputSchema} from '@fss/contracts';
-import {saveDiscoveryCandidate,listDiscoveryCandidates} from '@fss/domain/sourcing/discoveryIntake.ts';
 import {contextForPrincipal,requirePrincipal,runRouteCommand} from './routeSupport.ts';
 import type {ApiRequest,RouteResult,RoutingOptions} from './types.ts';
-export const SOURCING_PATHS=[...PREPARED_PROSPECT_PATHS,...PROSPECT_PRIORITY_PATHS,...MANUAL_ACTIVITY_PATHS,...MANUAL_PROSPECT_PATHS,CANDIDATE_AUTHORITY_PATH,...QUALIFIED_RESEARCH_PATHS,...DISCOVERY_REVIEW_PATHS,...DISCOVERY_PROMOTION_PATHS,'/sourcing/candidates/discovery/save-v1','/sourcing/candidates/discovery/list-v1','/sourcing/calling/admit','/sourcing/calling/assess','/sourcing/experiments','/sourcing/experiments/save','/sourcing/experiments/activate','/sourcing/experiments/stop','/sourcing/experiments/erase','/sourcing/candidates/correct-name','/sourcing/qualification/firm','/sourcing/qualification/feedback','/sourcing/qualification/read','/sourcing/qualification/request','/sourcing/qualification/admit','/sourcing/candidates/check','/sourcing/candidates/list','/sourcing/candidates/save','/sourcing/candidates/review','/sourcing/candidates/delete'] as const;
+export const SOURCING_PATHS=[...PREPARED_PROSPECT_PATHS,...PROSPECT_PRIORITY_PATHS,...MANUAL_ACTIVITY_PATHS,...MANUAL_PROSPECT_PATHS,CANDIDATE_AUTHORITY_PATH,...QUALIFIED_RESEARCH_PATHS,...DISCOVERY_REVIEW_PATHS,...DISCOVERY_PROMOTION_PATHS,'/sourcing/calling/admit','/sourcing/calling/assess','/sourcing/experiments','/sourcing/experiments/save','/sourcing/experiments/activate','/sourcing/experiments/stop','/sourcing/experiments/erase','/sourcing/candidates/correct-name','/sourcing/qualification/firm','/sourcing/qualification/feedback','/sourcing/qualification/read','/sourcing/qualification/request','/sourcing/qualification/admit','/sourcing/candidates/check','/sourcing/candidates/list','/sourcing/candidates/save','/sourcing/candidates/review','/sourcing/candidates/delete'] as const;
 export async function routeSourcing(request:ApiRequest,options:RoutingOptions):Promise<RouteResult|null> {
   if(!([...SOURCING_PATHS,...RETAINED_RECOVERY_PATHS] as readonly string[]).includes(request.path))return null;
   if(!options.auth)return {status:404,body:{error:'not_found'}};
@@ -46,16 +44,6 @@ export async function routeSourcing(request:ApiRequest,options:RoutingOptions):P
   if((QUALIFIED_RESEARCH_PATHS as readonly string[]).includes(request.path))return routeQualifiedResearch(deps);
   if((DISCOVERY_REVIEW_PATHS as readonly string[]).includes(request.path))return routeDiscoveryReview(deps);
   if((DISCOVERY_PROMOTION_PATHS as readonly string[]).includes(request.path))return routeDiscoveryPromotion(deps);
-  if(request.path==='/sourcing/candidates/discovery/save-v1')return runRouteCommand(deps,discoveryIntakeSaveCommandSchema,'sourcing.discovery_save',async(context,body)=>{
-    const {commandId:_commandId,clientVersion:_clientVersion,...input}=body;return saveDiscoveryCandidate(context,input);
-  });
-  if(request.path==='/sourcing/candidates/discovery/list-v1'){
-    const parsed=discoveryIntakeListInputSchema.safeParse(request.body);
-    if(!parsed.success)return {status:400,body:{error:'malformed_body'}};
-    const scoped=contextForPrincipal(auth,authenticated.principal);if(!scoped.ok)return scoped.result;
-    const answer=await listDiscoveryCandidates(scoped.context,parsed.data);
-    return answer.ok?{status:200,body:answer.value}:{status:answer.reason==='admin_only'?403:400,body:{error:answer.reason}};
-  }
   if(request.path==='/sourcing/calling/admit')return runRouteCommand(deps,callingAdmissionCommandSchema,'sourcing.calling_admit',(context,body)=>{
     const {commandId:_commandId,clientVersion:_clientVersion,...input}=body;return admitCallingCandidate(context,input);
   });

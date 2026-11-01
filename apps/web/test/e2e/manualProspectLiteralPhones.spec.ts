@@ -3,7 +3,7 @@ import {manualProspectListSchema} from '@fss/contracts';
 import {repositoryContext,workspaceScope} from '@fss/domain/db/workspaceScope.ts';
 import {withTransaction} from '@fss/domain/db/queryable.ts';
 import {saveCandidate} from '@fss/domain/sourcing/candidates.ts';
-import {saveDiscoveryCandidate} from '@fss/domain/sourcing/discoveryIntake.ts';
+import {seedDiscoveryCandidate} from '@fss/domain/test/sourcing/support/discoverySeed.ts';
 import {manualOrdinaryFixture,manualDiscoveryFixture} from '../../../../packages/domain/test/sourcing/support/manualProspectFixture.ts';
 import {manualLiteralPhoneFixture,seedManualPhoneRun} from '../../../../packages/domain/test/sourcing/support/manualPhoneFixture.ts';
 import {test,expect} from '../support/qualifiedResearchApp.ts';
@@ -23,7 +23,7 @@ async function seed(){
   const id=await seedManualPhoneRun(f.db,f.alpha.workspaceId,saved.value.id,manualLiteralPhoneFixture(input.sourceUrl,[...texts]));
   if(index===775){single=saved.value.id;run=id;}else if(index===776)conflict=saved.value.id;else missing=saved.value.id;
  }
- const saved=await withTransaction(runtime,()=>saveDiscoveryCandidate(ctx,manualDiscoveryFixture('literal-absent-775')));if(!saved.ok)throw Error(saved.reason);absent=saved.value.id;
+ absent=(await withTransaction(runtime,()=>seedDiscoveryCandidate(ctx,manualDiscoveryFixture('literal-absent-775')))).id;
  // Synthetic pre-existing source declaration, not a runtime intake claim or a
  // parser-invented absence. Production raw intake cannot assert this state.
  await f.db.query(`UPDATE sourcing_candidates SET payload=jsonb_set(payload,'{row,officePhoneEvidence}','"absent"') WHERE id=$1`,[absent]);

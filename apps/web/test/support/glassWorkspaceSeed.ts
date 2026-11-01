@@ -4,7 +4,7 @@ import type { QualificationFact, QualifiedResearchSelection } from '@fss/contrac
 import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
 import { withTransaction } from '@fss/domain/db/queryable.ts';
 import { saveCandidate } from '@fss/domain/sourcing/candidates.ts';
-import { saveDiscoveryCandidate } from '@fss/domain/sourcing/discoveryIntake.ts';
+import { seedDiscoveryCandidate } from '@fss/domain/test/sourcing/support/discoverySeed.ts';
 import { prepareDiscoveryCandidate, readDiscoveryPreparation } from '@fss/domain/sourcing/discoveryPromotion.ts';
 import { requestQualification, finishQualification } from '@fss/domain/sourcing/qualificationStore.ts';
 import { evaluateQualification } from '@fss/domain/sourcing/qualificationDecision.ts';
@@ -41,13 +41,12 @@ export async function seedGlassWorkspace(app: GlassWorkspaceApp) {
   const name = 'FICTIONAL Glass783 prepared research';
   const website = 'https://glass783-prepared.example.test/';
   const source = { provider: 'overture_places' as const, release: 'fictional-glass783', recordId: randomUUID(), retrievedAt: null, sourceUrl: 'https://glass783-source.example.test/record' };
-  const discovery = await tx(() => saveDiscoveryCandidate(ctx, {
+  const discovery = await tx(() => seedDiscoveryCandidate(ctx, {
     row: { source, observations: [source], firmName: name, website, locality: 'Dallas', region: 'TX', sourceConfidence: null, residentialFit: 'unknown', websiteAssociation: 'unknown', officePhoneEvidence: 'unknown', probableGroupKey: null },
     origins: [{ source, sourceMetadata: { sourcesJson: '[]' }, licenses: ['fictional-controlled-fixture'], notices: [{ label: 'Fictional fixture', url: 'https://glass783-source.example.test/license', sha256: 'a'.repeat(64) }] }],
   }));
-  assert(discovery.ok, discovery.ok ? '' : discovery.reason);
   const prepared = await tx(() => prepareDiscoveryCandidate(ctx, {
-    discoveryCandidateId: discovery.value.id, expectedRevision: discovery.value.revision,
+    discoveryCandidateId: discovery.id, expectedRevision: discovery.revision,
     source: { provider: source.provider, release: source.release, recordId: source.recordId },
     candidate: { firmName: name, website, locality: 'Dallas', region: 'TX', signal: 'fit_only', evidence: 'FICTIONAL preparation, not contact authority.', sourceUrl: website, observedOn: new Date().toISOString().slice(0, 10), preparedBy: 'FICTIONAL goal783' },
   }));
@@ -67,7 +66,7 @@ export async function seedGlassWorkspace(app: GlassWorkspaceApp) {
   const evaluated = await tx(() => evaluateQualification(ctx, { runId: requested.value.runId }));
   assert(evaluated.ok, evaluated.ok ? '' : evaluated.reason);
   await f.db.query('UPDATE research_settings SET enabled=false WHERE workspace_id=$1', [f.alpha.workspaceId]);
-  const selection: QualifiedResearchSelection = { discoveryCandidateId: discovery.value.id, discoveryRevision: discovery.value.revision, candidateId: preparation.qualificationCandidateId, candidateRevision: 1, runId: requested.value.runId };
+  const selection: QualifiedResearchSelection = { discoveryCandidateId: discovery.id, discoveryRevision: discovery.revision, candidateId: preparation.qualificationCandidateId, candidateRevision: 1, runId: requested.value.runId };
   const canonical = await tx(() => createQualifiedResearchFirm(ctx, selection));
   assert(canonical.ok, canonical.ok ? '' : canonical.reason);
   const fact = await tx(() => saveAnswerBlock(ctx, { kind: 'product', text: 'FICTIONAL goal783: a maintenance intake feature is planned, not shipped.', socialInput: { topic: 'build', status: 'planned', sanitized: true } }));

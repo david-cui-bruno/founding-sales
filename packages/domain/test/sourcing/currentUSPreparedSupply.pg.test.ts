@@ -5,7 +5,7 @@ import {createFirm} from '../../crm/firms.ts';
 import {advanceAutomaticResearchFirm,readAutomaticResearchFirm} from '../../sourcing/automaticResearch.ts';
 import {automaticResearchProof} from '../../sourcing/automaticResearchProof.ts';
 import {advanceVerifiedFirm} from '../../sourcing/verifiedFirmPipeline.ts';
-import {isCurrentPreparedCandidatePayload,isLegacyCandidatePayload} from '../../sourcing/discoveryIntake.ts';
+import {isCurrentPreparedCandidatePayload,isLegacyCandidatePayload} from '../../sourcing/candidatePayload.ts';
 import {targetingProposalSchema} from '@fss/contracts';
 import {readTargetingPolicy,saveTargetingProposal,applyTargetingProposal} from '../../sourcing/targetingProposals.ts';
 import {currentUSPreparedSupplyPgFixture} from './currentUSPreparedSupplyPgFixture.ts';

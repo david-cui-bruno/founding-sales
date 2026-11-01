@@ -5,7 +5,7 @@ import {withTransaction,type SessionQueryable} from '../../db/queryable.ts';
 import {repositoryContext,workspaceScope} from '../../db/workspaceScope.ts';
 import {seedTwoWorkspaces,type TwoWorkspaces} from '../db/support/fixtures.ts';
 import {seedCrm,type SeededCrm} from '../db/support/crmFixtures.ts';
-import {saveDiscoveryCandidate,listDiscoveryCandidates} from '../../sourcing/discoveryIntake.ts';
+import {seedDiscoveryCandidate} from './support/discoverySeed.ts';
 import {recordDiscoveryReview,listUsefulDiscoveryCandidates,readVisibleDiscoveryReview} from '../../sourcing/discoveryReview.ts';
 import {eraseDiscoveryReviewsForSources,sweepDiscoveryReviews} from '../../sourcing/discoveryReviewVisibility.ts';
 import {deleteCandidate,reviewCandidate,listCandidates,saveCandidate} from '../../sourcing/candidates.ts';
@@ -18,7 +18,7 @@ let database:TestDatabase,seeded:TwoWorkspaces,crm:SeededCrm,runtime:SessionQuer
 const context=(workspace:'alpha'|'beta'='alpha',role:'admin'|'salesperson'='admin',session=runtime)=>repositoryContext(workspaceScope(seeded[workspace].workspaceId,{kind:'user',userId:seeded[workspace][role].userId,role}),session);
 const record=(input:DiscoveryReviewInput,session=runtime)=>withTransaction(session,()=>recordDiscoveryReview(context('alpha','admin',session),input));
 const useful=async()=>{const result=await listUsefulDiscoveryCandidates(context(),{status:'needs_review',offset:0});if(!result.ok)throw Error(result.reason);return result.value;};
-async function create(index=0,suffix=''){const result=await withTransaction(runtime,()=>saveDiscoveryCandidate(context(),discoveryReviewCandidate(index,suffix)));if(!result.ok)throw Error(result.reason);return result.value.id;}
+async function create(index=0,suffix=''){return (await withTransaction(runtime,()=>seedDiscoveryCandidate(context(),discoveryReviewCandidate(index,suffix)))).id;}
 beforeAll(async()=>{database=await createTestDatabase();seeded=await seedTwoWorkspaces(database.session);crm=await seedCrm(database.session,seeded);runtime=await database.appRuntimeSession();});
 beforeEach(async()=>{await database.session.query('DELETE FROM sourcing_candidates');await database.session.query('DELETE FROM evidence_items');await database.session.query("DELETE FROM jobs WHERE kind='sourcing.check'");});
 afterAll(async()=>{await database.drop();});
@@ -40,7 +40,7 @@ it('keeps Tree and Implicity review-first with identity unknown, heading-only Cr
   const rows=(await useful()).candidates;
   expect(rows.map(row=>[row.candidate.payload.row.firmName,row.band])).toEqual([['Implicity Management','review_first'],['Tree Realty','review_first'],['Crosstown Properties','tentative']]);
   expect(rows.every(row=>!row.admissionAuthorized&&!row.runtimeCallable)).toBe(true);
-  expect(await listDiscoveryCandidates(context(),{status:'needs_review',offset:0})).toMatchObject({ok:true,value:{candidates:expect.arrayContaining([expect.objectContaining({revision:1,payload:{kind:'discovery-v1',row:expect.objectContaining({residentialFit:'unknown',websiteAssociation:'unknown'})}})])}});
+  expect(rows).toEqual(expect.arrayContaining([expect.objectContaining({candidate:expect.objectContaining({revision:1,payload:{kind:'discovery-v1',row:expect.objectContaining({residentialFit:'unknown',websiteAssociation:'unknown'})}})})]));
   expect(await listCandidates(context(),{status:'needs_review',offset:0})).toMatchObject({ok:true,value:{candidates:[]}});
   expect(await withTransaction(runtime,()=>requestQualification(context(),{candidateId:rows[0]!.candidate.id,expectedRevision:1}))).toMatchObject({ok:false,reason:'candidate_format_not_supported'});
   for(const table of ['sourcing_qualification_runs','sourcing_admissions','sequence_enrollments','jobs'])expect((await database.session.query(`SELECT count(*)::int n FROM ${table}`)).rows[0]?.['n']).toBe(0);
@@ -125,7 +125,13 @@ it('hides stale current review before sweep, never falls back, erases all copied
 });
 it('invalidates a review on new origin revision without changing retained provenance',async()=>{
   const id=await create(),input=discoveryHumanReview(id),saved=await record(input);if(!saved.ok)throw Error(saved.reason);
-  const extra=discoveryReviewCandidate(0,'-additional');extra.attachTo={candidateId:id,expectedRevision:1};expect(await withTransaction(runtime,()=>saveDiscoveryCandidate(context(),extra))).toMatchObject({ok:true,value:{revision:2}});
+  const origin=discoveryReviewCandidate(0,'-additional').origins[0]!;
+  await withTransaction(runtime,async()=>{
+    await runtime.query('SELECT id FROM sourcing_candidates WHERE id=$1 FOR UPDATE',[id]);
+    await runtime.query('INSERT INTO sourcing_candidate_discovery_origins(workspace_id,candidate_id,provider,release,record_id,source,source_metadata,licenses,notices) VALUES($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8::jsonb,$9::jsonb)',[seeded.alpha.workspaceId,id,origin.source.provider,origin.source.release,origin.source.recordId,JSON.stringify(origin.source),JSON.stringify(origin.sourceMetadata),JSON.stringify(origin.licenses),JSON.stringify(origin.notices)]);
+    await runtime.query("UPDATE sourcing_candidates SET payload=jsonb_set(payload,'{row,observations}',(payload->'row'->'observations')||$2::jsonb),revision=revision+1,updated_at=now() WHERE id=$1",[id,JSON.stringify([origin.source])]);
+  });
+  expect((await runtime.query('SELECT revision FROM sourcing_candidates WHERE id=$1',[id])).rows[0]).toMatchObject({revision:2});
   expect((await useful()).candidates[0]).toMatchObject({band:'unreviewed',review:null});expect(await readVisibleDiscoveryReview(context(),saved.value.review.id)).toBeNull();
   expect(await record(input)).toMatchObject({ok:false,reason:'candidate_changed'});
 });

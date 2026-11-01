@@ -6,7 +6,7 @@ import {recordCrmAuditEvent} from '../crm/audit.ts';
 import {databaseNow} from '../policy/clock.ts';
 import {qualifyCandidate,NEUTRAL_MAINTENANCE_QUESTION,type SourcingIdentity} from './qualificationPolicy.ts';
 import type {QualificationRunRow,SourcingResult} from './qualificationStore.ts';
-import {isCurrentPreparedCandidatePayload} from './discoveryIntake.ts';
+import {isCurrentPreparedCandidatePayload} from './candidatePayload.ts';
 import {retainedWallNow,lockRetainedAdmin} from './retainedAcquisition.ts';
 export function candidateIdentity(candidate:CandidateInput,facts:readonly QualificationFact[],sources:readonly SourceObservation[]):SourcingIdentity {
  const fold=(s:string)=>s.normalize('NFKC').replace(/\s+/gu,' ').trim().toLowerCase();

@@ -17,7 +17,7 @@ import type {PageFetchProvider,FetchedPage} from '../research/providers.ts';
 import {finishQualification,QUALIFICATION_PROMPT_VERSION,QUALIFICATION_POLICY_VERSION,type QualificationRunRow} from './qualificationStore.ts';
 import {QUALIFICATION_OUTPUT_TOKENS,type QualificationExtractionProvider,type QualificationExtractionOutcome,type QualificationExtractionRequest} from './qualificationPrompt.ts';
 import {normalizeQualificationDiagnostic,type QualificationDiagnostic,type QualificationDiagnosticPhase} from './qualificationDiagnostics.ts';
-import {isCurrentPreparedCandidatePayload} from './discoveryIntake.ts';
+import {isCurrentPreparedCandidatePayload} from './candidatePayload.ts';
 import {retainedCandidateOnly} from './retainedAcquisition.ts';
 import {LEGACY_QUALIFICATION_PRODUCER,PREPARED_IDENTITY_PRODUCER,type PreparedIdentityProof} from './preparedIdentity.ts';
 import {preparedIdentityProducerAuthority} from './preparedIdentityAuthority.ts';
@@ -33,7 +33,7 @@ async function allowed(ctx:RepositoryContext,runId:string):Promise<Run|null>{
  if(row&&!isCurrentPreparedCandidatePayload(row.payload))return null;
  if(!row||!['pending','running'].includes(row.state)||row.candidate_status==='dismissed'||row.current_revision!==row.candidate_revision||row.deadline_at.getTime()<=Date.parse(await databaseNow(ctx)))return null;
  if(!(await readResearchSettings(ctx)).enabled||(await listApplicableHolds(ctx,{actionKind:'research',channel:'research'})).length)return null;
- const producer=row['producer_version']===undefined?LEGACY_QUALIFICATION_PRODUCER:row['producer_version'];
+ const producer=row['producer_version'];
  if(producer!==LEGACY_QUALIFICATION_PRODUCER&&producer!==PREPARED_IDENTITY_PRODUCER)return null;
  if(producer===PREPARED_IDENTITY_PRODUCER&&!await preparedIdentityProducerAuthority(ctx,row.candidate_id,row.candidate_revision,row.payload))return null;
  if(isPreparedCapturePolicy(row['capture_policy_version'])&&!await preparedCaptureSourcesAvailable(ctx,[row.payload.sourceUrl]))return null;

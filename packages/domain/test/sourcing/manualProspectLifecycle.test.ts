@@ -5,7 +5,7 @@ import {withTransaction,type SessionQueryable} from '../../db/queryable.ts';
 import {repositoryContext,workspaceScope} from '../../db/workspaceScope.ts';
 import {seedTwoWorkspaces,type TwoWorkspaces} from '../db/support/fixtures.ts';
 import {seedCrm,type SeededCrm} from '../db/support/crmFixtures.ts';
-import {saveDiscoveryCandidate} from '../../sourcing/discoveryIntake.ts';
+import {seedDiscoveryCandidate} from './support/discoverySeed.ts';
 import {saveCandidate} from '../../sourcing/candidates.ts';
 import {listManualProspects,recordManualProspectFeedback} from '../../sourcing/manualProspects.ts';
 import {MANUAL_SOURCE_LOSS_ACTION} from '../../sourcing/manualProspectSourceLoss.ts';
@@ -17,7 +17,7 @@ const list=()=>withTransaction(runtime,()=>listManualProspects(ctx(),{state:'all
 const feedback=(id:string)=>withTransaction(runtime,()=>recordManualProspectFeedback(ctx(),{candidateId:id,expectedRevision:1,state:'kept'}));
 async function candidate(kind:'ordinary'|'discovery',key:string,url:string){
  const input=manualDiscoveryFixture(key);input.row.source.sourceUrl=url;input.row.observations[0]!.sourceUrl=url;input.origins[0]!.source.sourceUrl=url;
- const saved=kind==='discovery'?await withTransaction(runtime,()=>saveDiscoveryCandidate(ctx(),input)):await withTransaction(runtime,()=>saveCandidate(ctx(),{...manualOrdinaryFixture(),firmName:key,sourceUrl:url}));
+ const saved=kind==='discovery'?{ok:true as const,value:await withTransaction(runtime,()=>seedDiscoveryCandidate(ctx(),input))}:await withTransaction(runtime,()=>saveCandidate(ctx(),{...manualOrdinaryFixture(),firmName:key,sourceUrl:url}));
  if(!saved.ok)throw Error(saved.reason);return saved.value.id;
 }
 async function snapshot(){const results=[];for(const table of ['sourcing_candidates','sourcing_candidate_discovery_origins','sourcing_qualification_runs','jobs','firms','contacts','phone_routes','outbound_messages','sequence_enrollments'])results.push({table,rows:(await runtime.query(`SELECT to_jsonb(t) row FROM ${table} t ORDER BY to_jsonb(t)::text`)).rows});return results;}

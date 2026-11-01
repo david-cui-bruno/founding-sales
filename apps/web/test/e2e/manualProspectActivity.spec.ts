@@ -3,7 +3,7 @@ import type {Page} from 'playwright/test';
 import {repositoryContext,workspaceScope} from '@fss/domain/db/workspaceScope.ts';
 import {withTransaction} from '@fss/domain/db/queryable.ts';
 import {saveCandidate} from '@fss/domain/sourcing/candidates.ts';
-import {saveDiscoveryCandidate} from '@fss/domain/sourcing/discoveryIntake.ts';
+import {seedDiscoveryCandidate} from '@fss/domain/test/sourcing/support/discoverySeed.ts';
 import {manualOrdinaryFixture,manualDiscoveryFixture} from '../../../../packages/domain/test/sourcing/support/manualProspectFixture.ts';
 import {test,expect} from '../support/qualifiedResearchApp.ts';
 import {browserSession} from '../support/browser.ts';
@@ -23,7 +23,7 @@ async function last(){return (await app.fixture.db.query<{id:string;revision:num
 async function reopen(page:Page,id:string){await panel(page).getByRole('button',{name:'Refresh manual activity',exact:true}).click();await panel(page).getByRole('button',{name:`Open manual report ${id}`,exact:true}).click();}
 test.beforeAll(async()=>{
  app=await startManualProspectApp('777');const f=app.fixture,runtime=await f.database.appRuntimeSession(),ctx=repositoryContext(workspaceScope(f.alpha.workspaceId,{kind:'user',userId:f.alpha.admin.userId,role:'admin'}),runtime);
- const a=await withTransaction(runtime,()=>saveCandidate(ctx,manualOrdinaryFixture(777))),b=await withTransaction(runtime,()=>saveDiscoveryCandidate(ctx,manualDiscoveryFixture(randomUUID())));if(!a.ok||!b.ok)throw Error('Controlled candidate seed failed');ordinary=a.value.id;discovery=b.value.id;baseline=await manualProductSnapshot(app);
+ const a=await withTransaction(runtime,()=>saveCandidate(ctx,manualOrdinaryFixture(777))),b=await withTransaction(runtime,()=>seedDiscoveryCandidate(ctx,manualDiscoveryFixture(randomUUID())));if(!a.ok)throw Error('Controlled candidate seed failed');ordinary=a.value.id;discovery=b.id;baseline=await manualProductSnapshot(app);
 });
 test.afterAll(async()=>{try{if(app&&baseline)expect(await manualProductSnapshot(app)).toEqual(baseline);}finally{await app?.stop();}});
 test.beforeEach(async({researchPage:page})=>{await app.fixture.db.query('DELETE FROM sourcing_manual_prospect_attempts');await routeManualProvider(page,app);await loginManual(page,app);await expect(page.getByRole('region',{name:'Manual prospect worklist',exact:true}).getByRole('table').getByRole('row')).toHaveCount(3);});

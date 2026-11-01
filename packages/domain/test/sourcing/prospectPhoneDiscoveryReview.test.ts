@@ -8,7 +8,7 @@ import {saveCandidate} from '../../sourcing/candidates.ts';
 import {requestProspectPhoneDiscovery,readProspectPhoneDiscovery,runProspectPhoneDiscovery} from '../../sourcing/prospectPhoneDiscovery.ts';
 import {manualOrdinaryFixture,manualDiscoveryFixture} from './support/manualProspectFixture.ts';
 import {manualPhoneFixture,seedManualPhoneRun} from './support/manualPhoneFixture.ts';
-import {saveDiscoveryCandidate} from '../../sourcing/discoveryIntake.ts';
+import {seedDiscoveryCandidate} from './support/discoverySeed.ts';
 import {listManualProspects} from '../../sourcing/manualProspects.ts';
 import {MANUAL_SOURCE_LOSS_ACTION} from '../../sourcing/manualProspectSourceLoss.ts';
 import type {PageFetchProvider,PageFetchRequest} from '../../research/providers.ts';
@@ -109,11 +109,11 @@ it('STD4 explicit read and retained list both refuse competing qualification124 
 });
 it.each(['ambiguous','absent'] as const)('STD4 explicit read preserves current raw %s declaration instead of selecting discovery phone',async declaration=>{
  const f=await fixture(),raw=manualDiscoveryFixture(`std4-${++serial}`);raw.row.website=f.website;
- const saved=await withTransaction(runtime,()=>saveDiscoveryCandidate(ctx(),raw));if(!saved.ok)throw Error(saved.reason);
+ const saved=await withTransaction(runtime,()=>seedDiscoveryCandidate(ctx(),raw));
  // Intake cannot assert first-party support. Seed the already-retained declaration
  // directly to exercise current-read composition, not the intake command contract.
- await db.session.query("UPDATE sourcing_candidates SET payload=jsonb_set(payload,'{row,officePhoneEvidence}',to_jsonb($2::text)) WHERE id=$1",[saved.value.id,declaration]);
- const input={candidateId:saved.value.id,expectedRevision:1},result=await request(input);if(!result.ok)throw Error(result.reason);
+ await db.session.query("UPDATE sourcing_candidates SET payload=jsonb_set(payload,'{row,officePhoneEvidence}',to_jsonb($2::text)) WHERE id=$1",[saved.id,declaration]);
+ const input={candidateId:saved.id,expectedRevision:1},result=await request(input);if(!result.ok)throw Error(result.reason);
  await runProspectPhoneDiscovery(worker(),{runId:result.value.runId},{pageFetch:provider(f.website)});
  expect(await read(input)).toMatchObject({ok:true,value:{state:'complete',phoneEvidence:{state:'conflicting',reason:'retained_source_ambiguous'}}});
 });

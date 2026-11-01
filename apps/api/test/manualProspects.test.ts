@@ -6,7 +6,7 @@ import {createAuthFixture,CURRENT_CLIENT_VERSION,type AuthFixture} from './suppo
 import {issueSessionFor} from './support/sessionFixture.ts';
 import {repositoryContext,workspaceScope} from '@fss/domain/db/workspaceScope.ts';
 import {withTransaction} from '@fss/domain/db/queryable.ts';
-import {saveDiscoveryCandidate} from '@fss/domain/sourcing/discoveryIntake.ts';
+import {seedDiscoveryCandidate} from '@fss/domain/test/sourcing/support/discoverySeed.ts';
 import {saveCandidate} from '@fss/domain/sourcing/candidates.ts';
 import {manualProspectListSchema} from '@fss/contracts';
 import {manualDiscoveryFixture,manualOrdinaryFixture} from '../../../packages/domain/test/sourcing/support/manualProspectFixture.ts';
@@ -20,7 +20,7 @@ const command=(state='kept')=>({candidateId:id,expectedRevision:1,state,commandI
 beforeAll(async()=>{
  f=await createAuthFixture();admin=(await issueSessionFor(f,f.alpha,f.alpha.admin)).accessToken;sales=(await issueSessionFor(f,f.alpha,f.alpha.salesperson)).accessToken;beta=(await issueSessionFor(f,f.beta,f.beta.admin)).accessToken;
  const ctx=repositoryContext(workspaceScope(f.alpha.workspaceId,{kind:'user',userId:f.alpha.admin.userId,role:'admin'}),f.db);
- const saved=await withTransaction(f.db,()=>saveDiscoveryCandidate(ctx,manualDiscoveryFixture()));if(!saved.ok)throw Error(saved.reason);id=saved.value.id;
+ id=(await withTransaction(f.db,()=>seedDiscoveryCandidate(ctx,manualDiscoveryFixture()))).id;
 });
 afterAll(async()=>{await f.stop();});
 it('authenticates exact narrow raw reads and strict commands without provider or qualification prerequisites',async()=>{

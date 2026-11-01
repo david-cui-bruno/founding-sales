@@ -22,7 +22,7 @@ import type {QualificationRunRow,SourcingResult} from './qualificationStore.ts';
 import {qualifyCandidate,supportedBusinessPhone} from './qualificationPolicy.ts';
 import {candidateIdentity} from './qualificationDecision.ts';
 import {verifiedFirmOwner,verifiedFirmEvidence,verifiedWebsiteKey,VERIFIED_FIRM_POLICY_VERSION} from './verifiedFirmPolicy.ts';
-import {isLegacyCandidatePayload} from './discoveryIntake.ts';
+import {isLegacyCandidatePayload} from './candidatePayload.ts';
 import {retainedCandidateOnly,retainedWallNow,lockRetainedAdmin,fenceRetainedFirm} from './retainedAcquisition.ts';
 import type {RetainedAuthority} from './retainedRecoveryEvidence.ts';
 interface AdmissionInput {candidateId:string;expectedRevision:number;qualificationRunId:string;mode:'automatic'|'reviewed'}
