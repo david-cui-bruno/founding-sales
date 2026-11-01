@@ -145,7 +145,8 @@ it('keeps elapsed rolling ceilings and prospect-local windows distinct from New 
   if(instant==='2026-03-08T06:59:00Z')expect((await fresh('/social/linkedin-policy/save',input)).status).toBe(200);
   expect((await fresh('/social/linkedin-policy/read',{})).body).toMatchObject({revision:1,enabled:false,policy:{rules:{invitations:{clock:'elapsed_rolling',rolling24Hours:20,rolling7Days:140,window:{zone:'prospect_local',unknownTimezone:'postpone',weekends:true}},directMessages:{clock:'elapsed_rolling',window:{zone:'prospect_local',weekends:false}},spend:{zone:'America/New_York',calendarMonthUsd:25}}}});
  }
- // The original expired session cannot read retained settings at the later clock.
+ // The original session, issued at the real clock, cannot read retained settings once expired.
+ f.setNow(new Date(Date.now()+86_400_000));
  expect((await call('/social/linkedin-policy/read',{})).status).toBe(401);
  }finally{await f.stop();}
 });
