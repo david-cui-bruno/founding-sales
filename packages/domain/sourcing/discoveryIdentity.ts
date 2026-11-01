@@ -7,9 +7,11 @@ export function discoveryFirmName(title:string,url:string):string {
  return (branded.length===1?branded[0]!:original||new URL(url).hostname).slice(0,300);
 }
 
+/** Directories excluded at the search provider; their pages rarely link to company sites. */
+export const DISCOVERY_SEARCH_EXCLUDED_DOMAINS=['allpropertymanagement.com','propertymanagement.com','propertymanagementlist.com'] as const;
 /** Hosts whose pages list or review many companies. Their outbound company links are
  * discovery leads; the directory itself is never a company or a source of company facts. */
-export const DISCOVERY_DIRECTORY_DOMAINS=['allpropertymanagement.com','propertymanagement.com','propertymanagementlist.com',
+export const DISCOVERY_DIRECTORY_DOMAINS=[...DISCOVERY_SEARCH_EXCLUDED_DOMAINS,
  'managemyproperty.com','expertise.com','yelp.com','bbb.org','angi.com','homeadvisor.com','thumbtack.com','upnest.com','clutch.co','manta.com','yellowpages.com','porch.com','houzz.com'] as const;
 /** Hosts that never describe a prospect company: reference, social, jobs, listings and portals. */
 export const DISCOVERY_NONCOMPANY_DOMAINS=['wikipedia.org','merriam-webster.com','dictionary.com','britannica.com','mychart.org','facebook.com','instagram.com',
