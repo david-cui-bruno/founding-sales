@@ -32,8 +32,9 @@ const generic=(label:string,host:string)=>{
  const plain=label.toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim();
  return plain===''||NAVIGATION.test(plain)||label.toLowerCase().replace(/^[a-z][a-z0-9+.-]*:\/\//u,'').replace(/[/?#].*$/u,'').replace(/^www\./u,'').replace(/\.$/u,'')===host;
 };
-// The company named by the listing item that holds the link: its last heading or strong text.
-const ITEM_NAME=/<(h[1-6]|strong|b)\b[^>]*>([\s\S]{0,500}?)<\/\1\s*>/giu;
+// The company named by the listing item that holds the link: its last item heading or strong
+// text. An h1 is the page's own title, never an item's name.
+const ITEM_NAME=/<(h[2-6]|strong|b)\b[^>]*>([\s\S]{0,500}?)<\/\1\s*>/giu;
 
 /** Links to other company hosts, one per host, in page order. A lead is stored as
  * `https://<host><path>`: http is upgraded and query/fragment dropped, so a tracking
@@ -42,8 +43,9 @@ const ITEM_NAME=/<(h[1-6]|strong|b)\b[^>]*>([\s\S]{0,500}?)<\/\1\s*>/giu;
  * empty so the candidate is named by its host. */
 export function discoveryListLeads(listUrl:string,page:{readonly url:string;readonly body:Uint8Array;readonly contentType:string}):readonly DiscoveryListLead[] {
  if(page.body.byteLength>MAX_PAGE_BYTES||mediaTypeOf(page.contentType)!=='text/html')return [];
- const seen=new Set([companyHost(listUrl),companyHost(page.url)]),leads:DiscoveryListLead[]=[],source=new TextDecoder('utf-8').decode(page.body);
- // The listing item starts after the previous external link, or at the nearest item element.
+ const listHosts=new Set([companyHost(listUrl),companyHost(page.url)]),seen=new Set(listHosts),leads:DiscoveryListLead[]=[],source=new TextDecoder('utf-8').decode(page.body);
+ // The listing item starts after the previous link to any other host (even a repeated one),
+ // or at the nearest item element.
  let itemStart=0;
  for(const match of source.matchAll(ANCHOR)){
   if(leads.length>=DISCOVERY_LIST_LEAD_LIMIT)break;
@@ -51,14 +53,15 @@ export function discoveryListLeads(listUrl:string,page:{readonly url:string;read
   try{link=new URL(decode(match[1]??match[2]??match[3]??'').trim());}catch{continue;}
   if(link.protocol!=='https:'&&link.protocol!=='http:')continue;
   const before=source.slice(Math.max(itemStart,match.index-2000),match.index);
-  if(!seen.has(companyHost(link.href)))itemStart=match.index+match[0].length;
+  if(!listHosts.has(companyHost(link.href)))itemStart=match.index+match[0].length;
   const url=`https://${link.hostname}${link.pathname}`;
   if(!sourcingUrlSchema.safeParse(url).success)continue;
   const host=companyHost(url);
   let label=text(match[4]??'');
   if(generic(label,host)){
    const item=before.slice(Math.max(0,...[...before.matchAll(/<(?:li|article|tr)\b/giu)].map(m=>m.index)));
-   label=[...item.matchAll(ITEM_NAME)].map(m=>text(m[2]??'')).reverse().find(name=>!generic(name,host))??'';
+   // A recovered heading only names the company: never a list/noise title, so a lead is not lost to it.
+   label=[...item.matchAll(ITEM_NAME)].map(m=>text(m[2]??'')).reverse().find(name=>!generic(name,host)&&classifyDiscoveryPage({url,title:name})==='company')??'';
   }
   if(seen.has(host)||classifyDiscoveryPage({url,title:label})!=='company')continue;
   seen.add(host);leads.push({url,host,label});

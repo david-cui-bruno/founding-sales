@@ -62,6 +62,21 @@ it('replaces "Go to website >>" style labels with the listing item heading, else
  ]);
 });
 
+it('ends a listing item at every external link, including a repeated host, so a later item never inherits its heading',()=>{
+ const html='<div><h3>Shift Property Management</h3><a href="https://shift.example.test/">Go to website</a></div>'
+  +'<div><h3>Shift Property Management</h3><a href="https://shift.example.test/again">Go to website</a></div>'
+  +'<div><p>No heading here.</p><a href="https://unheaded.example.test/">Go to website</a></div>';
+ expect(discoveryListLeads(LIST,page(html)).map(({host,label})=>({host,label}))).toEqual([
+  {host:'shift.example.test',label:'Shift Property Management'},
+  {host:'unheaded.example.test',label:''},
+ ]);
+});
+
+it('never names a lead from a page title or list heading, and keeps the lead under its host instead',()=>{
+ const html='<h1>Dallas Property Managers</h1><h2>Top 10 Property Management Companies in Dallas</h2><p>Intro.</p><a href="https://first.example.test/">Visit website</a>';
+ expect(discoveryListLeads(LIST,page(html))).toEqual([{url:'https://first.example.test/',host:'first.example.test',label:''}]);
+});
+
 it('reads nothing from non-HTML, oversized or unterminated markup',()=>{
  expect(discoveryListLeads(LIST,page('<a href="https://a.example.test/">A</a>','text/plain'))).toEqual([]);
  expect(discoveryListLeads(LIST,page(`<a href="https://a.example.test/">A</a>${' '.repeat(MAX_PAGE_BYTES)}`))).toEqual([]);
