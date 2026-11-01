@@ -99,7 +99,7 @@ it('excludes diagnostic-only copied sources even when their provider origin and 
   const source=(await f.fixture.db.query<{owner_user_id:string;mailbox_id:string}>('SELECT owner_user_id,mailbox_id FROM crm_mail_sources WHERE workspace_id=$1 AND source_id=$2',[f.workspaceId,sourceId])).rows[0]!;
   const id=randomUUID();
   const document={id,purpose:'acquisition_acceptance',workspaceId:f.workspaceId,ownerUserId:source.owner_user_id,mailboxId:source.mailbox_id};
-  await f.fixture.db.query("INSERT INTO crm_acquisition_diagnostic_authorizations(workspace_id,id,owner_user_id,mailbox_id,authorization_sha256,authorization_document,verified_at,valid_until) VALUES($1,$2,$3,$4,repeat('a',64),$5::jsonb,'2026-10-01T00:00:00Z','2026-11-01T00:00:00Z')",[f.workspaceId,id,source.owner_user_id,source.mailbox_id,JSON.stringify(document)]);
+  await f.fixture.db.query("INSERT INTO crm_acquisition_diagnostic_authorizations(workspace_id,id,owner_user_id,mailbox_id,authorization_sha256,authorization_document,verified_at,valid_until) VALUES($1,$2,$3,$4,repeat('a',64),$5::jsonb,now()-interval '1 day',now()+interval '30 days')",[f.workspaceId,id,source.owner_user_id,source.mailbox_id,JSON.stringify(document)]);
   await f.fixture.db.query('UPDATE crm_mail_sources SET conversation_id=NULL,diagnostic_authorization_id=$3 WHERE workspace_id=$1 AND source_id=$2',[f.workspaceId,sourceId,id]);
   expect((await f.post('/crm/progress/read',{includeCommunicationObservations:true,firmId:f.firmId})).body).toMatchObject({events:[],communicationObservations:[],communicationObservationsTruncated:false});
  }finally{await f.fixture.stop();}

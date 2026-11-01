@@ -5,7 +5,7 @@ import { updateSetting } from '../../settings/store.ts';
 import { endOfLocalDay } from '../../src/rules/localClock.ts';
 import { meetingAnalysisPort } from '../../meetings/analysisAdapter.ts';
 const accountId = '123456789012', at = new Date().toISOString();
-const coverage = { accountId, service: 'bedrock', evidenceRef: 'synthetic-evidence', verifiedAt: '2026-10-01T00:00:00Z', validUntil: '2026-11-01T00:00:00Z', status: 'verified' };
+const coverage = { accountId, service: 'bedrock', evidenceRef: 'synthetic-evidence', verifiedAt: '2026-10-01T00:00:00Z', validUntil: new Date(Date.now() + 30 * 86_400_000).toISOString(), status: 'verified' };
 describe('credit-only meeting analysis', () => {
   let f: Awaited<ReturnType<typeof meetingOutcomesFixture>>;
   beforeAll(async () => { f = await meetingOutcomesFixture(); });
