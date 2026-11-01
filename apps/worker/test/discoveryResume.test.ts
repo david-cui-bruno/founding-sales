@@ -27,8 +27,8 @@ it('accounts for newly discovered usage conservatively and refuses either ceilin
  for(const edit of [{'--provider-month-used':'600'},{'--provider-month-used':'40'},{'--provider-month-limit':'21'}])expect(await discoveryResumeCommand({session:db.session,launch,options:{...options(),...edit}})).toMatchObject({ok:false,reason:'quota_exhausted'});
  expect(await discoveryResumeCommand({session:db.session,launch,options:{...options(),'--provider-month-used':'23'}})).toMatchObject({ok:true,value:{monthlyUsed:23,dailyUsed:3}});
 });
-it('enforces the approved global 10/day and 375/month bounds without refunding failures',async()=>{
- for(const [daily,monthly] of [[10,33],[1,375],[20,600]]){
+it('enforces the approved global 20/day and 650/month bounds without refunding failures',async()=>{
+ for(const [daily,monthly] of [[20,33],[1,650],[33,700]]){
   await db.session.query('UPDATE sourcing_search_account SET halted=true,daily_used=$1,monthly_used=$2',[daily,monthly]);
   expect(await discoveryResumeCommand({session:db.session,launch,options:{...options(),'--expected-month-used':String(monthly),'--provider-month-used':'32'}})).toMatchObject({ok:false,reason:'quota_exhausted'});
   expect((await db.session.query('SELECT halted,daily_used,monthly_used FROM sourcing_search_account')).rows[0]).toEqual({halted:true,daily_used:daily,monthly_used:monthly});

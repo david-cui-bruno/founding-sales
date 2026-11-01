@@ -77,13 +77,13 @@ it('skips hosts already held by a candidate or Firm and repeated hosts within on
  expect(await hitLinks(attempt)).toMatchObject({'https://known-candidate-dup.test/':false,'https://www.repeat-dup.test/b':false,'https://fresh-dup.test/':true,'https://fresh-dup.test/contact':false});
 });
 
-it('keeps five new candidates per search across direct hits and list leads, in search-rank order, expanding at most three lists',async()=>{
+it('keeps ten new candidates per search across direct hits and list leads, in search-rank order, expanding at most three lists',async()=>{
  const lists=Array.from({length:4},(_,i)=>`https://lists-cap.test/top-${i}`);
  const pageFetch=htmlPageFetch({
-  [lists[0]!]:['l1','l2','l3'].map(h=>link(`${h}-cap.test`,`${h} PM`)).join(''),
-  [lists[1]!]:link('l4-cap.test','l4 PM')+link('l5-cap.test','l5 PM'),
-  [lists[2]!]:link('l6-cap.test','l6 PM'),
-  [lists[3]!]:link('l7-cap.test','l7 PM'),
+  [lists[0]!]:['l1','l2','l3','l4','l5','l6'].map(h=>link(`${h}-cap.test`,`${h} PM`)).join(''),
+  [lists[1]!]:['l7','l8','l9','lx','ly'].map(h=>link(`${h}-cap.test`,`${h} PM`)).join(''),
+  [lists[2]!]:link('lz-cap.test','lz PM'),
+  [lists[3]!]:link('m1-cap.test','m1 PM'),
  });
  const attempt=await search([
   {url:'https://first-cap.test/',title:'First PM',snippet:''},
@@ -91,8 +91,8 @@ it('keeps five new candidates per search across direct hits and list leads, in s
   {url:'https://last-cap.test/',title:'Last PM',snippet:''},
  ],pageFetch);
  expect(pageFetch.requests.map(r=>r.urls[0])).toEqual(lists.slice(0,3));
- expect(await websites('cap.test')).toEqual(['https://first-cap.test/','https://l1-cap.test/','https://l2-cap.test/','https://l3-cap.test/','https://l4-cap.test/']);
- expect(await expansions(attempt)).toEqual([{listUrl:lists[0],leads:3,created:3},{listUrl:lists[1],leads:2,created:1},{listUrl:lists[2],leads:1,created:0}]);
+ expect(await websites('cap.test')).toEqual(['https://first-cap.test/','https://l1-cap.test/','https://l2-cap.test/','https://l3-cap.test/','https://l4-cap.test/','https://l5-cap.test/','https://l6-cap.test/','https://l7-cap.test/','https://l8-cap.test/','https://l9-cap.test/']);
+ expect(await expansions(attempt)).toEqual([{listUrl:lists[0],leads:6,created:6},{listUrl:lists[1],leads:5,created:3},{listUrl:lists[2],leads:1,created:0}]);
  expect(await hitLinks(attempt)).toMatchObject({'https://first-cap.test/':true,'https://last-cap.test/':false});
 });
 

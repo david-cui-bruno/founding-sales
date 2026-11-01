@@ -86,10 +86,10 @@ it('preserves legitimate managed residences with otherwise valid office proof',(
  const residential=input.facts.find(f=>f.kind==='residential_management')!;residential.blockId='residences';residential.value='We manage residences.';
  expect(verifiedFirmEvidence(input)).toMatchObject({kind:'verified',phone:'+12145550190'});
 });
-it('enforces global10/375 modeled credit bounds and never reports a refund or invoice',()=>{
- expect(discoveryQuotaRemaining(9,374)).toEqual({daily:1,monthly:1});
- expect(discoveryQuotaRemaining(10,375)).toEqual({daily:0,monthly:0});
- expect(discoveryQuotaRemaining(33,600)).toEqual({daily:0,monthly:0});
- expect(discoveryQuotaRemaining(1,33,32)).toEqual({daily:9,monthly:0});
+it('enforces global20/650 modeled credit bounds and never reports a refund or invoice',()=>{
+ expect(discoveryQuotaRemaining(19,649)).toEqual({daily:1,monthly:1});
+ expect(discoveryQuotaRemaining(20,650)).toEqual({daily:0,monthly:0});
+ expect(discoveryQuotaRemaining(33,700)).toEqual({daily:0,monthly:0});
+ expect(discoveryQuotaRemaining(1,33,32)).toEqual({daily:19,monthly:0});
  expect(discoveryQuotaRemaining(-1,0)).toEqual({daily:0,monthly:0});
 });
