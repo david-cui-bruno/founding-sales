@@ -43,6 +43,25 @@ it('stores leads as https://host/path: upgrades http, strips tracking queries, a
  expect(leads.every(lead=>lead.url.startsWith('https://')&&!lead.url.includes('?')&&!lead.url.includes('#'))).toBe(true);
 });
 
+it('replaces "Go to website >>" style labels with the listing item heading, else leaves the host to name the lead',()=>{
+ const card=(name:string,slug:string,site:string,cta='Go to website &gt;&gt;')=>`<div class="company"><h3><a href="/profile/${slug}">${name}</a></h3><p>Serving Dallas since 2004.</p><a href="https://${site}/" rel="nofollow">${cta}</a></div>`;
+ const html=card('Shift Property Management','shift','shiftpropertymanagement.example.test')
+  +card('Access PM Group','access','www.accesspmgroup.example.test','Visit Website ›')
+  +'<div class="company"><p>No heading here.</p><a href="https://urbanpharm.example.test/">Go to website &gt;&gt;</a></div>'
+  +'<ul><li><strong>Edgerow Property Management</strong> — Rentals<br><a href="https://edgerow.example.test/">Learn more</a></li>'
+  +'<li><p>Unnamed listing</p><a href="https://simplepmgroup.example.test/">https://www.simplepmgroup.example.test/</a></li>'
+  +'<li><a href="https://arrow.example.test/">Arrow Realty &raquo;</a></li></ul>';
+ expect(discoveryListLeads(LIST,page(html)).map(({host,label})=>({host,label}))).toEqual([
+  {host:'shiftpropertymanagement.example.test',label:'Shift Property Management'},
+  {host:'accesspmgroup.example.test',label:'Access PM Group'},
+  {host:'urbanpharm.example.test',label:''},
+  {host:'edgerow.example.test',label:'Edgerow Property Management'},
+  // The previous item's heading never names a listing without its own.
+  {host:'simplepmgroup.example.test',label:''},
+  {host:'arrow.example.test',label:'Arrow Realty'},
+ ]);
+});
+
 it('reads nothing from non-HTML, oversized or unterminated markup',()=>{
  expect(discoveryListLeads(LIST,page('<a href="https://a.example.test/">A</a>','text/plain'))).toEqual([]);
  expect(discoveryListLeads(LIST,page(`<a href="https://a.example.test/">A</a>${' '.repeat(MAX_PAGE_BYTES)}`))).toEqual([]);
