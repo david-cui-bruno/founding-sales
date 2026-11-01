@@ -1,5 +1,6 @@
 import {expect,it} from 'vitest';
 import {manualPhoneChoiceSchema,manualProspectFeedbackInputSchema,manualProspectListInputSchema,type ManualPhoneChoice} from '@fss/contracts';
+import {V2_ONLY_PHONE_LABEL,blockPhoneLabels,phoneBlockAllowsV2} from '../../sourcing/manualProspectLiteralPhone.ts';
 import {projectManualPhoneChoice} from '../../sourcing/manualProspectPhoneChoice.ts';
 import {phoneSupplyObservation,phoneSupplyRun,PHONE_SUPPLY_NOW as now} from './phoneSupplyFixtures.ts';
 
@@ -34,4 +35,43 @@ it('keeps legacy command/list inputs valid and rejects prose or unpaired exact s
  expect(manualPhoneChoiceSchema.safeParse({...choice,value:'214-555-0123'}).success).toBe(false);
  expect(manualProspectListInputSchema.safeParse({state:'all',offset:0,candidateId:choice.runId}).success).toBe(false);
  expect(manualProspectListInputSchema.safeParse({state:'all',offset:50,candidateId:choice.runId,expectedRevision:1}).success).toBe(false);
+});
+it.each([
+ ['For any questions regarding our services or to request a property management estimate, please call 202.337.5080, or email us.','202.337.5080','please call'],
+ ['📞 Call us at (617) 249-7141 or fill out our online form to schedule your free Quincy property management consultation today.','(617) 249-7141','Call us'],
+ ['📞 (617) 249-7141','(617) 249-7141','📞'],
+])('v2 verb and emoji labels are choosable for Calling: %s',(text,literal,label)=>{
+ const {run,choice}=fixture(text,literal,label);expect(projectManualPhoneChoice(run,choice,now)?.value).toMatch(/^\+1\d{10}$/u);
+});
+it('a standalone self-labelled number cannot form a Calling choice without a label before it',()=>{
+ const {choice}=fixture('(412) 685-3970','(412) 685-3970','(412) 685-3970');
+ expect(manualPhoneChoiceSchema.safeParse(choice).success).toBe(false);
+});
+it.each([
+ ['Please call 202.337.5080 or text us for SMS updates.','202.337.5080','Please call'],
+ ['Call 412-685-3970 or reach our cell after hours.','412-685-3970','Call'],
+ ['📞 412-685-3970 (personal line)','412-685-3970','📞'],
+ ['☎ 412-685-3970 for emergencies','412-685-3970','☎'],
+ ['Fax and phone: call 412-685-3970','412-685-3970','call'],
+])('a v2-only label never yields a Calling choice beside another line or purpose: %s',(text,literal,label)=>{
+ expect(V2_ONLY_PHONE_LABEL.test(label)).toBe(true);expect(phoneBlockAllowsV2(text)).toBe(false);
+ expect(blockPhoneLabels(text).flatMap(found=>found.literals).filter(found=>found.value!==null)).toEqual([]);
+ const {run,choice}=fixture(text,literal,label);expect(projectManualPhoneChoice(run,choice,now)).toBeNull();
+});
+// Risk P2: stored choices keep v1 label offsets; v2 must reproduce every v1 label span exactly.
+const v1Labels=/\b(?:office\s+phone|main\s+phone|mobile(?:\s+phone)?|personal(?:\s+phone)?|emergency(?:\s+phone)?|fax|telephone|phone|tel|call\s+us)\b/giu;
+it.each([
+ ['Call us: 214-555-0123','214-555-0123','Call us'],
+ ['Please call us: 214-555-0123','214-555-0123','call us'],
+ ['Please call us at 214-555-0123.','214-555-0123','call us'],
+ ['Phone: 214-555-0123','214-555-0123','Phone'],
+ ['Tel 214-555-0123','214-555-0123','Tel'],
+ ['call us at 214-555-0123','214-555-0123','call us'],
+ ['Call us at: 940-323-0505','940-323-0505','Call us'],
+ ['Call us today at 940.262.0091 or enter your address below.','940.262.0091','Call us'],
+])('re-reads an existing v1-shaped stored choice unchanged under v2: %s',(text,literal,label)=>{
+ const v2=blockPhoneLabels(text).map(found=>[found.label,found.labelStart,found.labelEnd]);
+ for(const v1 of text.matchAll(v1Labels))expect(v2).toContainEqual([v1[0],v1.index,v1.index+v1[0].length]);
+ const {run,choice}=fixture(text,literal,label);expect(choice.labelStart).toBe(text.indexOf(label));
+ expect(projectManualPhoneChoice(run,choice,now)).toMatchObject({choice});
 });

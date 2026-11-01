@@ -1,4 +1,6 @@
-import {discoveryFirmName,isDiscoveryDirectory} from './discoveryIdentity.ts';
+import {companyHost,discoveryFirmName} from './discoveryIdentity.ts';
+import {discoveryListLeads,routeDiscoveryHits,type DiscoveryListLead} from './discoveryListLeads.ts';
+import type {PageFetchProvider} from '../research/providers.ts';
 import {withTransaction,type SessionQueryable} from '../db/queryable.ts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {decideAdminOnly} from '../crm/authorization.ts';
@@ -17,8 +19,9 @@ async function allowed(ctx:RepositoryContext):Promise<boolean>{
 }
 /** This owns transactions: call only outside an enclosing job transaction.
  * A committed dispatch is never retried, even when the process dies before network.
+ * List-page fetches use the research fetcher outside every transaction (ADR0034).
  */
-export async function runDiscovery(ctx:RepositoryContext,provider:DiscoverySearchProvider):Promise<void>{
+export async function runDiscovery(ctx:RepositoryContext,provider:DiscoverySearchProvider,pageFetch:PageFetchProvider):Promise<void>{
  const db=ctx.db as SessionQueryable;
  const attempt=await withTransaction(db,async()=>{
   if(!await allowed(ctx))return null;
@@ -49,34 +52,79 @@ export async function runDiscovery(ctx:RepositoryContext,provider:DiscoverySearc
  try{result=await provider.discover({query:attempt.query.query});}catch{result={ok:false,code:'unavailable'};}
  if(result.ok&&result.credits!==1)result={ok:false,code:'usage_unexpected'};
  const answer=result;
+ // A hit is a pointer (ADR0034): noise is retained only, and a list page is read once,
+ // free and unreserved, for links to other companies. A refused or failed read yields none.
+ const {routed,lists}=routeDiscoveryHits(answer.ok?answer.hits.slice(0,DISCOVERY_RESULT_LIMIT).filter(hit=>sourcingUrlSchema.safeParse(hit.url).success):[]);
+ const leads=new Map<string,readonly DiscoveryListLead[]>();
+ if(lists.length){
+  const settings=await readResearchSettings(ctx);
+  for(const list of lists){
+   let found:readonly DiscoveryListLead[]=[];
+   try{
+    const fetched=await pageFetch.fetchPages({urls:[list.url],firmWebsite:list.url,links:[list.url],maxPagesPerFirm:1,maxBytes:settings.maxPageBytes,shouldContinue:()=>allowed(ctx)});
+    const page=fetched.ok?fetched.value.pages[0]:undefined;
+    if(page)found=discoveryListLeads(list.url,page);
+   }catch{found=[];}
+   leads.set(list.url,found);
+  }
+ }
  await withTransaction(db,async()=>{
   if(!answer.ok){
    await db.query('UPDATE sourcing_search_account SET halted=true WHERE id=true');
    await recordCrmAuditEvent(ctx,{action:'sourcing.discovery_failed',subjectKind:'sourcing_discovery_attempt',subjectId:attempt.id,detail:{code:answer.code,provider:provider.providerKey}});
   }else{
    const observed=(await db.query<{day:string}>("SELECT to_char(now() AT TIME ZONE 'UTC','YYYY-MM-DD') AS day")).rows[0]!.day;
+   // One company per host: no new candidate for a host already stored as a candidate website or
+   // source (including discovery-v1 rows, observations and origins) or as a Firm website.
+   // Stored references may be bare or schemed; the host is read the way companyHost does.
+   const hosts=[...new Set([...routed.filter(r=>r.kind==='company').map(r=>companyHost(r.hit.url)),...[...leads.values()].flat().map(lead=>lead.host)])];
+   const known=new Set((await db.query<{host:string}>(`WITH stored(url) AS (
+     SELECT v.url FROM sourcing_candidates c CROSS JOIN LATERAL (SELECT c.payload->>'website' UNION ALL SELECT c.payload->>'sourceUrl' UNION ALL SELECT c.payload#>>'{row,website}'
+      UNION ALL SELECT c.payload#>>'{row,source,sourceUrl}' UNION ALL SELECT jsonb_path_query(c.payload,'$.row.observations[*].sourceUrl')#>>'{}') AS v(url) WHERE c.workspace_id=$1
+     UNION ALL SELECT o.source->>'sourceUrl' FROM sourcing_candidate_discovery_origins o WHERE o.workspace_id=$1
+     UNION ALL SELECT f.website FROM firms f WHERE f.workspace_id=$1)
+    SELECT DISTINCT hosts.host FROM stored JOIN unnest($2::text[]) AS hosts(host)
+     ON regexp_replace(rtrim(lower(split_part(substring(regexp_replace(regexp_replace(stored.url,'^[a-zA-Z][a-zA-Z0-9+.-]*://',''),'^[^/?#@]*@','') FROM '^[^/?#]*'),':',1)),'.'),'^www\\.','')=hosts.host`,[ctx.scope.workspaceId,hosts])).rows.map(row=>row.host));
+   const seen=new Set<string>();
    let created=0;
-   for(const hit of answer.hits.slice(0,DISCOVERY_RESULT_LIMIT)){
-    if(!sourcingUrlSchema.safeParse(hit.url).success)continue;
+   // Discovery never changes review status. The qualification scheduler or an
+   // explicit owner request may qualify this saved draft.
+   const save=async(input:{firmName:string;website:string;evidence:string})=>{
+    const saved=await saveCandidate(ctx,{...input,locality:attempt.query.locality,region:attempt.query.region,signal:'fit_only',sourceUrl:input.website,observedOn:observed,preparedBy:'Tavily Basic search · not verified',discoveryQuery:attempt.query.query});
+    if(!saved.ok)throw new Error('discovery_candidate_invalid');
+    created++;return saved.value.id;
+   };
+   for(const {hit,kind} of routed){
     const inserted=await db.query('INSERT INTO sourcing_discovery_hits(workspace_id,source_url,attempt_id,native_result) VALUES($1,$2,$3,$4::jsonb) ON CONFLICT DO NOTHING RETURNING source_url',[ctx.scope.workspaceId,hit.url,attempt.id,JSON.stringify(hit)]);
+    if(kind==='noise')continue;
+    if(kind==='list'){
+     // The list page itself is never a candidate nor a source of the listed companies' facts.
+     const listed=leads.get(hit.url);if(!listed)continue;
+     leads.delete(hit.url);
+     let made=0;
+     for(const lead of listed){
+      if(seen.has(lead.host)||known.has(lead.host))continue;
+      seen.add(lead.host);
+      if(created>=DISCOVERY_NEW_CANDIDATE_LIMIT)break;
+      await save({firmName:lead.label?discoveryFirmName(lead.label,lead.url):lead.host,website:lead.url,evidence:`Listed on ${hit.url}: ${lead.label||lead.host}`.slice(0,2000)});
+      made++;
+     }
+     await recordCrmAuditEvent(ctx,{action:'sourcing.discovery_list_expanded',subjectKind:'sourcing_discovery_attempt',subjectId:attempt.id,detail:{listUrl:hit.url,leads:listed.length,created:made}});
+     continue;
+    }
     if(inserted.rows.length===0){
      const prior=(await db.query<{candidate_id:string|null}>('SELECT candidate_id FROM sourcing_discovery_hits WHERE workspace_id=$1 AND source_url=$2',[ctx.scope.workspaceId,hit.url])).rows[0];
      if(prior?.candidate_id)continue;
     }
-    // Preserve the raw hit for review, but do not turn known directories into firms.
-    if(isDiscoveryDirectory(hit.url))continue;
+    const host=companyHost(hit.url);
     const existing=(await db.query<{id:string}>("SELECT id FROM sourcing_candidates WHERE workspace_id=$1 AND (payload->>'sourceUrl'=$2 OR payload->>'website'=$2) LIMIT 1",[ctx.scope.workspaceId,hit.url])).rows[0];
-    if(existing){await db.query('UPDATE sourcing_discovery_hits SET candidate_id=$3 WHERE workspace_id=$1 AND source_url=$2',[ctx.scope.workspaceId,hit.url,existing.id]);continue;}
+    if(existing){seen.add(host);await db.query('UPDATE sourcing_discovery_hits SET candidate_id=$3 WHERE workspace_id=$1 AND source_url=$2',[ctx.scope.workspaceId,hit.url,existing.id]);continue;}
+    if(seen.has(host)||known.has(host))continue;
+    seen.add(host);
     // Retain excess raw hits; a later result can revisit one not yet made into a candidate.
     if(created>=DISCOVERY_NEW_CANDIDATE_LIMIT)continue;
-    const host=new URL(hit.url).hostname.replace(/^www\./,'');
-    const known=(await db.query("SELECT id FROM firms WHERE workspace_id=$1 AND regexp_replace(lower(split_part(website,'/',3)),'^www\\.','')=$2 LIMIT 1",[ctx.scope.workspaceId,host])).rows.length>0;
-    const saved=await saveCandidate(ctx,{firmName:discoveryFirmName(hit.title,hit.url),website:hit.url,locality:attempt.query.locality,region:attempt.query.region,signal:'fit_only',evidence:hit.snippet.trim().slice(0,2000)||'Search returned no excerpt; source verification required.',sourceUrl:hit.url,observedOn:observed,preparedBy:'Tavily Basic search · not verified',discoveryKnownDomain:known,discoveryQuery:attempt.query.query});
-    if(!saved.ok)throw new Error('discovery_candidate_invalid');
-    created++;
-    // Discovery never changes review status. The separately attested identity
-    // scheduler or an explicit owner request may qualify this saved draft.
-    await db.query('UPDATE sourcing_discovery_hits SET candidate_id=$3 WHERE workspace_id=$1 AND source_url=$2',[ctx.scope.workspaceId,hit.url,saved.value.id]);
+    const id=await save({firmName:discoveryFirmName(hit.title,hit.url),website:hit.url,evidence:hit.snippet.trim().slice(0,2000)||'Search returned no excerpt; source verification required.'});
+    await db.query('UPDATE sourcing_discovery_hits SET candidate_id=$3 WHERE workspace_id=$1 AND source_url=$2',[ctx.scope.workspaceId,hit.url,id]);
    }
   }
   await db.query('UPDATE sourcing_discovery_attempts SET state=$2,request_id=$4 WHERE id=$1 AND workspace_id=$3',[attempt.id,answer.ok?'complete':'failed',ctx.scope.workspaceId,answer.ok?answer.requestId:null]);

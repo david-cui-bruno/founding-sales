@@ -57,3 +57,13 @@ it('retained phone legacy missing evidence stays unknown and compact mode expose
  expect(screen.getByText(`Phone ${value} · observed, not call-ready`)).toBeTruthy();
  expect(screen.queryByRole('link')).toBeNull();expect(screen.queryByText(/Source label:/u)).toBeNull();expect(view.container.querySelector('details')).toBeNull();
 });
+it('offers a Calling choice only for a label before the literal, never for a v2 standalone self-span',()=>{
+ const authority={kind:'phone_discovery',runId:source.runId,expiresAt:'2099-01-01T00:00:00.000Z'};
+ const labelled={...literal,parser:'manual-literal-phone-v2',authority};
+ const standalone={...labelled,literal:'(214) 555-0123',start:0,end:14,label:'(214) 555-0123',labelStart:0,labelEnd:14};
+ const choose=()=>undefined;
+ const view=render(<RetainedPhoneEvidence evidence={manualProspectPhoneEvidenceSchema.parse({state:'observed',value,sources:[labelled],coverage:{...coverage,parser:'manual-literal-phone-v2'}})} onPhoneChoice={choose}/>);
+ expect(screen.getByRole('button',{name:`Keep ${value} in Calling`})).toBeTruthy();
+ view.rerender(<RetainedPhoneEvidence evidence={manualProspectPhoneEvidenceSchema.parse({state:'observed',value,sources:[standalone],coverage:{...coverage,parser:'manual-literal-phone-v2'}})} onPhoneChoice={choose}/>);
+ expect(screen.queryByRole('button')).toBeNull();expect(screen.getByText(/Standalone published number; its own text is the label\. Not yet selectable in Calling\./u)).toBeTruthy();
+});

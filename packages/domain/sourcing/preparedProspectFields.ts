@@ -6,7 +6,12 @@ const attribution=/\b(?:testimonial|customer review|powered by|website by|web de
 const customerPerspective=/\b(?:we|I)\s+(?:breathe easy|could(?:n't| not) be happier)\b|\b(?:we|I)\s+wish\b[^.!?\n]{0,100}\b(?:were|could|would)\b/iu;
 const customerRecommendation=/\b(?:[Ww]e|I)\s+(?:highly\s+)?recommend\s+(?:(?:this|the)\s+(?:company|team|firm|property managers?)|[\p{Lu}][\p{Ll}]+(?:\s+[\p{Lu}][\p{Ll}]+){1,4})\b/u;
 const attributed=(text:string)=>attribution.test(text)||customerPerspective.test(text)||customerRecommendation.test(text);
-const residential=/\b(?:residential|single.family|multi.family|multifamily|homes|houses|apartments|condominiums|residences)\b/iu;
+// Residential property-management context: explicit housing types, association
+// management, or the people a residential manager serves. People terms alone do
+// not count beside commercial/industrial scope (commercial tenants, office space).
+const residential=/\b(?:residential|single.family|multi.family|multifamily|homes|houses|townhomes?|apartments?|condominiums?|condos?|residences|HOAs?|homeowners?\s+associations?|(?:community|condominium)\s+associations?)\b/iu;
+const residentialPeople=/\b(?:tenants?|residents?|landlords?|rental\s+propert(?:y|ies))\b/iu;
+const nonResidentialScope=/\b(?:commercial|industrial|retail|office)\s+(?:tenants?|landlords?|propert(?:y|ies)|real estate|space|buildings?|leasing)\b/iu;
 const management=/\b(?:manag(?:e|es|ed|ing|ement)|leasing|rental management)\b/iu;
 const vendor=/\b(?:software|platform|tools?|technology)\b[^.!?\n]{0,100}\b(?:helps?|enables?|empowers?|for)\b[^.!?\n]{0,60}\b(?:property managers?|management companies|landlords?)\b|\b(?:we|our company)\b[^.!?\n]{0,60}\b(?:sell|build|develop|provide|offer)\b[^.!?\n]{0,60}\b(?:software|platform|tools?)\b/iu;
 const ownManager=/\b(?:we|our (?:team|company|firm|office|management|property|residential|rental))\b[^.!?\n]{0,200}\b(?:manag(?:e|es|ed|ing|ement)|leasing)\b/iu;
@@ -56,5 +61,6 @@ const passageKinds=(text:string,usefulBusiness:boolean,usefulOperations:boolean,
 /** Classification of this one intact retained block; never source, identity or contact authority. */
 export function classifyPreparedPassage(text:string,_locality:string):PreparedPassageClassification {
  const usefulBusiness=business(text),usefulOperations=operations(text),hasContrary=contrary.test(text)||businessDenial.test(text);
- return {kinds:passageKinds(text,usefulBusiness,usefulOperations,hasContrary),usefulBusiness,usefulOperations,residentialContext:usefulBusiness&&residential.test(text),contrary:hasContrary};
+ return {kinds:passageKinds(text,usefulBusiness,usefulOperations,hasContrary),usefulBusiness,usefulOperations,
+  residentialContext:(usefulBusiness||usefulOperations)&&(residential.test(text)||residentialPeople.test(text)&&!nonResidentialScope.test(text)),contrary:hasContrary};
 }

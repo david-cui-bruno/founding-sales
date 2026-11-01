@@ -116,15 +116,61 @@ it('retains same-identity review stops across prompt/policy changes and preserve
  }finally{await f.database.drop();}
 });
 
-it('keeps disabled scheduling and automatic-OFF unreviewed intake off despite stale versions',async()=>{
+// ADR0034 intentionally changed this: unreviewed Tavily intake no longer waits for the
+// verified-firm attestation, so only disabled scheduling and other unreviewed drafts stay off.
+it('keeps disabled scheduling and automatic-OFF non-discovery unreviewed intake off despite stale versions',async()=>{
  const f=await versionFixture();try{
   const c=await f.candidate('automatic-off',{prompt:'qualification-context-v6'});
   expect(await f.pass(false)).toMatchObject({outcome:'ran',inserted:0});
-  await f.session.query("UPDATE sourcing_candidates SET status='needs_review',next_source_check_at=NULL WHERE id=$1",[c.id]);
+  await f.session.query("UPDATE sourcing_candidates SET status='needs_review',next_source_check_at=NULL,payload=jsonb_set(payload,'{preparedBy}','\"Fixture\"') WHERE id=$1",[c.id]);
   await f.session.query('UPDATE sourcing_discovery_settings SET auto_admission_enabled=false');
   expect(await f.pass()).toMatchObject({outcome:'ran',inserted:0});
   expect((await f.session.query('SELECT id FROM sourcing_qualification_runs')).rows).toHaveLength(1);
   expect((await f.session.query('SELECT id FROM jobs')).rows).toHaveLength(0);
+ }finally{await f.database.drop();}
+});
+
+it.each(['open','disabled','held'] as const)('captures unreviewed Tavily discovery without verified-firm attestation only while research is %s',async gate=>{
+ const f=await versionFixture();try{
+  await f.session.query("UPDATE sourcing_discovery_settings SET auto_admission_enabled=false,qualification_evaluation='{}'::jsonb");
+  const draft=(name:string,preparedBy:string)=>withTransaction(f.session,async()=>{
+   const saved=await saveCandidate(f.ctx,{firmName:name,website:`https://${name}.example.test/`,locality:'Dallas',region:'TX',signal:'fit_only',evidence:'Unknown',sourceUrl:`https://${name}.example.test/`,observedOn:'2026-10-18',preparedBy});
+   if(!saved.ok)throw new Error(saved.reason);return saved.value.id;
+  });
+  const tavily=await draft('unattested','Tavily Basic search · not verified'),other=await draft('unattested-manual','Fixture');
+  if(gate==='disabled')await f.session.query('UPDATE research_settings SET enabled=false');
+  if(gate==='held')await withTransaction(f.session,()=>openHold(f.ctx,{scopeKind:'workspace',reasonCode:'scoped_pause',blockedActionKinds:['research'],sourceEventKind:'fixture'}));
+  const runs=async(id:string)=>(await f.session.query('SELECT producer_version FROM sourcing_qualification_runs WHERE candidate_id=$1',[id])).rows;
+  if(gate==='open'){
+   expect(await f.pass()).toMatchObject({outcome:'ran',inserted:1});
+   expect(await runs(tavily)).toEqual([{producer_version:'qualification-context-v7'}]);
+   expect((await f.session.query("SELECT payload->>'candidateId' AS id FROM jobs WHERE kind='sourcing.qualify'")).rows).toEqual([{id:tavily}]);
+  }else{
+   expect(await f.pass()).toMatchObject({outcome:'ran',inserted:0});
+   expect(await runs(tavily)).toEqual([]);
+   expect((await f.session.query('SELECT qualification_wait_reason FROM sourcing_discovery_settings')).rows).toEqual([{qualification_wait_reason:gate==='disabled'?'research_disabled':'research_held'}]);
+  }
+  expect(await runs(other)).toEqual([]);
+  expect((await f.session.query('SELECT status,revision FROM sourcing_candidates WHERE id=$1',[tavily])).rows[0]).toEqual({status:'needs_review',revision:1});
+  for(const table of ['firms','sourcing_admissions'])expect((await f.session.query(`SELECT * FROM ${table}`)).rows).toHaveLength(0);
+ }finally{await f.database.drop();}
+});
+
+it('keeps the same-revision identity-review stop for unattested Tavily intake even when its run is stale',async()=>{
+ const f=await versionFixture();try{
+  await f.session.query("UPDATE sourcing_discovery_settings SET auto_admission_enabled=false,qualification_evaluation='{}'::jsonb");
+  const stale=async(name:string,reason:string|null)=>withTransaction(f.session,async()=>{
+   const saved=await saveCandidate(f.ctx,{firmName:name,website:`https://${name}.example.test/`,locality:'Dallas',region:'TX',signal:'fit_only',evidence:'Unknown',sourceUrl:`https://${name}.example.test/`,observedOn:'2026-10-18',preparedBy:'Tavily Basic search · not verified'});
+   if(!saved.ok)throw new Error(saved.reason);
+   const requested=await requestQualification(f.ctx,{candidateId:saved.value.id,expectedRevision:1},{enqueue:false});if(!requested.ok)throw new Error(requested.reason);
+   await f.session.query("UPDATE sourcing_qualification_runs SET state='review',admission_reason=$2,requested_at=now()-interval '8 days',prompt_version='qualification-context-v6',fingerprint=repeat('b',64) WHERE id=$1",[requested.value.runId,reason]);
+   return saved.value.id;
+  });
+  const stopped:string[]=[];for(const [n,reason] of IDENTITY_REVIEW_REASONS.entries())stopped.push(await stale(`unattested-stopped-${n}`,reason));
+  const ordinary=await stale('unattested-ordinary',null);
+  expect(await f.pass()).toMatchObject({outcome:'ran',inserted:1});
+  expect((await f.session.query("SELECT payload->>'candidateId' AS id FROM jobs WHERE kind='sourcing.qualify'")).rows).toEqual([{id:ordinary}]);
+  for(const id of stopped)expect((await f.session.query('SELECT id FROM sourcing_qualification_runs WHERE candidate_id=$1',[id])).rows).toHaveLength(1);
  }finally{await f.database.drop();}
 });
 

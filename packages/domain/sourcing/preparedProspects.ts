@@ -1,5 +1,5 @@
 import {isDeepStrictEqual} from 'node:util';
-import {preparedProspectListInputSchema,preparedProspectListSchema,preparedProspectReadInputSchema,preparedProspectBriefSchema,preparedProspectSummarySchema,type PreparedProspectBrief,type PreparedProspectTarget} from '@fss/contracts';
+import {preparedProspectListInputSchema,preparedProspectListSchema,preparedProspectReadInputSchema,preparedProspectBriefSchema,preparedProspectSummarySchema,type PreparedProspectCurrentBrief,type PreparedProspectTarget} from '@fss/contracts';
 import type {z} from 'zod';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {activeIdentityActor} from '../crm/identityAccess.ts';
@@ -33,7 +33,7 @@ async function expirations(ctx:RepositoryContext,rows:readonly ManualProspectRow
 }
 /** Caller owns the transaction. Reuse the retained-original lifecycle and exact
  * evidence locks, then recheck current rights and wall time after principal waits. */
-async function currentBriefs(ctx:RepositoryContext,readRows:()=>Promise<ManualProspectRow[]>,authority:()=>Promise<boolean>):Promise<Result<{briefs:PreparedProspectBrief[];now:number}>>{
+async function currentBriefs(ctx:RepositoryContext,readRows:()=>Promise<ManualProspectRow[]>,authority:()=>Promise<boolean>):Promise<Result<{briefs:PreparedProspectCurrentBrief[];now:number}>>{
  if(!await admin(ctx))return refuse('authority_changed');
  await lockLivePreparationCleanup(ctx);
  const rows=await readRows();
@@ -57,16 +57,17 @@ async function currentBriefs(ctx:RepositoryContext,readRows:()=>Promise<ManualPr
   const brief=projectPreparedProspect(row,current.find(s=>s.candidate_id===row.id),currentRuns.find(r=>r.candidate_id===row.id),now,byUrl);if(!brief)return [];
   const rowDeadlines=(Array.isArray(row['source_urls'])?row['source_urls']:[]).flatMap(url=>typeof url==='string'&&deadlines.has(url.replace(/\/+$/u,''))?[deadlines.get(url.replace(/\/+$/u,''))!]:[]);
   if(brief.validUntil!==null)rowDeadlines.push(Date.parse(brief.validUntil));
-  return [preparedProspectBriefSchema.parse({...brief,validUntil:rowDeadlines.length?new Date(Math.min(...rowDeadlines)).toISOString():null})];
+  const parsed=preparedProspectBriefSchema.parse({...brief,validUntil:rowDeadlines.length?new Date(Math.min(...rowDeadlines)).toISOString():null});
+  return parsed.policyVersion==='prepared-prospect-v2'?[parsed]:[];
  });
  return {ok:true,value:{briefs,now}};
 }
 
-export async function listPreparedProspects(ctx:RepositoryContext,input:z.infer<typeof preparedProspectListInputSchema>,authority:()=>Promise<boolean>=async()=>true):Promise<Result<z.infer<typeof preparedProspectListSchema>>>{
+export async function listPreparedProspects(ctx:RepositoryContext,input:z.input<typeof preparedProspectListInputSchema>,authority:()=>Promise<boolean>=async()=>true):Promise<Result<z.infer<typeof preparedProspectListSchema>>>{
  const parsed=preparedProspectListInputSchema.safeParse(input);if(!parsed.success)return refuse('candidate_unavailable');
  if(!await admin(ctx))return refuse('authority_changed');
  await lockLivePreparationCleanup(ctx);
- const order=await preparedPriorityOrder(ctx,parsed.data.offset);
+ const order=await preparedPriorityOrder(ctx,parsed.data.offset,parsed.data.order);
  if(parsed.data.viewRevision&&parsed.data.viewRevision!==order.viewRevision)return refuse('view_changed');
  const selected=order.rows.slice(0,50);
  const readRows=async()=>{
@@ -75,14 +76,14 @@ export async function listPreparedProspects(ctx:RepositoryContext,input:z.infer<
   return selected.flatMap(s=>{const row=rows.find(r=>r.id===s.id&&r.revision===s.revision);return row?[row]:[];});
  };
  const result=await currentBriefs(ctx,readRows,authority);if(!result.ok)return result;
- const finalOrder=await preparedPriorityOrder(ctx,parsed.data.offset);if(finalOrder.viewRevision!==order.viewRevision)return refuse('view_changed');
+ const finalOrder=await preparedPriorityOrder(ctx,parsed.data.offset,parsed.data.order);if(finalOrder.viewRevision!==order.viewRevision)return refuse('view_changed');
  if(!await authority()||!await admin(ctx))return refuse('authority_changed');
  const wall=(await ctx.db.query<{at:Date}>('SELECT clock_timestamp() AS at')).rows[0]!.at.getTime();
  if(result.value.briefs.some(b=>b.validUntil!==null&&Date.parse(b.validUntil)<=wall))return refuse('source_expired');
- return {ok:true,value:preparedProspectListSchema.parse({prospects:result.value.briefs.map(brief=>preparedProspectSummarySchema.parse({target:brief.target,displayName:brief.displayName,discoveryLabel:brief.discoveryLabel,website:brief.website,targetingLocality:brief.targetingLocality,targetingRegion:brief.targetingRegion,sourceNotices:brief.sourceNotices,state:brief.state,summary:brief.summary,unknowns:brief.unknowns,validUntil:brief.validUntil})),hasMore:order.rows.length>50,viewRevision:order.viewRevision,checkedAt:new Date(wall).toISOString()})};
+ return {ok:true,value:preparedProspectListSchema.parse({prospects:result.value.briefs.map(brief=>preparedProspectSummarySchema.parse({target:brief.target,displayName:brief.displayName,discoveryLabel:brief.discoveryLabel,website:brief.website,targetingLocality:brief.targetingLocality,targetingRegion:brief.targetingRegion,sourceNotices:brief.sourceNotices,state:brief.state,summary:brief.summary,unknowns:brief.unknowns,validUntil:brief.validUntil,callable:brief.callable,companyHost:brief.companyHost})),hasMore:order.rows.length>50,viewRevision:order.viewRevision,checkedAt:new Date(wall).toISOString()})};
 }
 
-export async function readPreparedProspect(ctx:RepositoryContext,target:PreparedProspectTarget,authority:()=>Promise<boolean>=async()=>true):Promise<Result<PreparedProspectBrief>>{
+export async function readPreparedProspect(ctx:RepositoryContext,target:PreparedProspectTarget,authority:()=>Promise<boolean>=async()=>true):Promise<Result<PreparedProspectCurrentBrief>>{
  const parsed=preparedProspectReadInputSchema.safeParse(target);if(!parsed.success)return refuse('candidate_unavailable');
  const readRows=async()=>{const row=await readManualProspectSubject(ctx,{candidateId:target.candidateId,expectedRevision:target.candidateRevision});return row?[{...row,duplicate_count:0}]:[];};
  const result=await currentBriefs(ctx,readRows,authority);if(!result.ok)return result;

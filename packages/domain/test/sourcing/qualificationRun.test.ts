@@ -9,6 +9,7 @@ import {requestQualification,readQualification} from '../../sourcing/qualificati
 import {runQualification,expireQualifications} from '../../sourcing/qualificationRun.ts';
 import type {PageFetchProvider} from '../../research/providers.ts';
 import type {QualificationExtractionProvider} from '../../sourcing/qualificationPrompt.ts';
+import {refusingPageFetch} from './support/discoveryPageFetch.ts';
 let db:TestDatabase;let workspaceId:string;
 const ctx=()=>repositoryContext(workspaceScope(workspaceId,{kind:'system',component:'worker'}),db.session);
 const tx=<T>(fn:()=>Promise<T>)=>withTransaction(db.session,fn);
@@ -157,10 +158,10 @@ it('research channel pauses discovery and kept-candidate checks, then release re
  expect(await tx(()=>requestSourceCheck(ctx(),{id:ids.candidateId,expectedRevision:2}))).toEqual({ok:false,reason:'research_held'});
  expect(await tx(()=>monitorCandidateSources(ctx()))).toEqual({queued:0});
  let searches=0;
- await runDiscovery(ctx(),{providerKey:'tavily_basic',discover:async()=>{searches++;throw Error('held search must not run');}});
+ await runDiscovery(ctx(),{providerKey:'tavily_basic',discover:async()=>{searches++;throw Error('held search must not run');}},refusingPageFetch);
  expect(searches).toBe(0);
  await tx(()=>releaseHold(ctx(),hold));
  expect(await tx(()=>monitorCandidateSources(ctx()))).toEqual({queued:1});
- await runDiscovery(ctx(),{providerKey:'tavily_basic',discover:async()=>{searches++;return {ok:true,credits:1,requestId:'released-fixture',hits:[]};}});
+ await runDiscovery(ctx(),{providerKey:'tavily_basic',discover:async()=>{searches++;return {ok:true,credits:1,requestId:'released-fixture',hits:[]};}},refusingPageFetch);
  expect(searches).toBe(1);
 });

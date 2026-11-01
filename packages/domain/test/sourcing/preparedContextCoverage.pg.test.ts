@@ -28,6 +28,8 @@ it.each([
  const brief=await withTransaction(runtime,()=>readPreparedProspect(ctx(),page.value.prospects[0]!.target));if(!brief.ok)throw Error(brief.reason);
  expect(brief.value).toMatchObject({state:'prepared',contactAuthority:'not_granted',coverage:'complete_retained_pages'});
  expect(brief.value.passages).toContainEqual(expect.objectContaining({kind:'workflow',blockId:'workflow-only',quote:text,url:f.website}));
- expect(brief.value.unknowns.join(' ')).toMatch(/residential.*unknown/iu);expect(brief.value.unknowns.join(' ')).toMatch(/publisher.*identity.*not independently verified/iu);
+ // Step1.6/ADR0034: resident/tenant operations are residential context; callable still needs business context and a published phone.
+ expect(brief.value.unknowns.join(' ')).not.toMatch(/residential.*unknown/iu);expect(brief.value.unknowns.join(' ')).toMatch(/publisher.*identity.*not independently verified/iu);
+ expect(brief.value.callable).toMatchObject({state:'not_callable',residential:true,missing:['no_business_context','no_published_phone']});
  expect(brief.value.summary).not.toMatch(/first.party/iu);expect(await preparedProspectsBusinessSnapshot(ctx())).toEqual(before);
 });

@@ -142,3 +142,51 @@ it('existing retained interpretation requires surviving exact ancestor and revis
  s.original_observations=[];expect(projectManualPhone(s).state).toBe('not_extracted');
  s.dependency_changed=true;expect(projectManualPhone(s)).toMatchObject({state:'not_extracted',coverage:{state:'changed'}});
 });
+// ADR0034 grammar v2: real October31 own-site published phone passages (red under v1 except 'Call Us:').
+it.each([
+ ['(412) 685-3970','(412) 685-3970','(412) 685-3970'],
+ ['804.372.3272','804.372.3272','804.372.3272'],
+ ['410-401-9903 office@astoriacharm.com','410-401-9903','410-401-9903'],
+ ['(617) 249-7141','(617) 249-7141','(617) 249-7141'],
+ ['202.337.5080','202.337.5080','202.337.5080'],
+ ['410.366.2100','410.366.2100','410.366.2100'],
+ ['(888) 827-6485','(888) 827-6485','(888) 827-6485'],
+ ['1.800.998.4640','1.800.998.4640','1.800.998.4640'],
+ ['For any questions regarding our services or to request a property management estimate, please call 202.337.5080, or email us.','202.337.5080','please call'],
+ ['📞 Call us at (617) 249-7141 or fill out our online form to schedule your free Quincy property management consultation today.','(617) 249-7141','Call us'],
+ ['Call Us: 804.372.3272','804.372.3272','Call Us'],
+ ['📞 (617) 249-7141','(617) 249-7141','📞'],
+ ['804.555.0142 office24@peak.example.test','804.555.0142','804.555.0142'],
+])('v2 accepts the published number in %s with exact spans',(text,literal,label)=>{
+ const r=scanManualLiteralPhones(input([text]));expect(r).toMatchObject({unresolved:false,coverage:{parser:'manual-literal-phone-v2',state:'complete'}});
+ expect(r.sources).toHaveLength(1);const source=r.sources[0]!;
+ expect(source).toMatchObject({literal,label,normalizationBasis:'default_us'});expect(source.normalizedValue).toMatch(/^\+1\d{10}$/u);
+ expect(text.slice(source.start,source.end)).toBe(literal);expect(text.slice(source.labelStart,source.labelEnd)).toBe(label);
+ expect(manualProspectPhoneEvidenceSchema.safeParse({state:'observed',value:source.normalizedValue,sources:r.sources,coverage:r.coverage}).success).toBe(true);
+ expect(projectManualPhone(snapshot([text]))).toMatchObject({state:'observed',value:source.normalizedValue});
+});
+it.each([
+ 'Customer Care 800.870.0010',
+ 'Call or text 412-685-3970 anytime.',
+ 'For emergencies call 412-685-3970.',
+ '1200 Penn Ave, Pittsburgh, PA 15222',
+ 'Pittsburgh, PA 15222-4120',
+ '412-685-3970 Main Street',
+ '2145550123',
+ '804.555.0142 office24@peak.example.test 412-685-3970',
+ 'office24@peak.example.test 804.555.0142',
+])('v2 keeps unlabelled, other-line and address digits without a phone: %s',text=>{
+ expect(scanManualLiteralPhones(input([text])).sources.filter(source=>source.normalizedValue!==null)).toEqual([]);
+ expect(projectManualPhone(snapshot([text])).state).not.toBe('observed');
+});
+it.each([
+ 'Fax: (412) 685-3971',
+ 'Mobile: 412-685-3970',
+ 'Call us at (412) 685-3970 or fax (412) 685-3971.',
+ 'Call us at (412) 685-3970 or (412) 685-3971 for service.',
+ 'Phone: (412) 685-3970, cell 412-685-3971 after hours.',
+])('v2 stays conservative for fax, mobile, cell and two-number prose: %s',text=>{
+ const r=scanManualLiteralPhones(input([text]));expect(r.unresolved).toBe(true);
+ expect(r.sources.filter(source=>source.normalizedValue!==null)).toEqual([]);
+ expect(projectManualPhone(snapshot([text])).state).toBe('conflicting');
+});

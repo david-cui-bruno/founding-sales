@@ -9,10 +9,27 @@ export type LiteralLineage=LiteralSource['lineage'];
 export type LiteralDiagnostics=NonNullable<Extract<Evidence,{state:'conflicting'}>['diagnostics']>;
 export interface LiteralInput {runId:string;observations:unknown;website:string|null;authorities:Record<string,LiteralAuthority>;lineage:LiteralLineage;now:number}
 export interface LiteralScan {sources:LiteralSource[];coverage:NonNullable<Evidence['coverage']>;unresolved:boolean;diagnostics?:LiteralDiagnostics;reason?:'original_not_usable'|'bounded_scan_incomplete'}
-const parser='manual-literal-phone-v1' as const;
+/** v2 extends v1 (ADR0034) with verb attachment before prose and standalone published
+ * numbers; every v1-accepted span is unchanged. Evidence is recomputed per read, never stored. */
+export const MANUAL_LITERAL_PHONE_PARSER='manual-literal-phone-v2' as const;
+const parser=MANUAL_LITERAL_PHONE_PARSER;
 const host=(value:string|null)=>{try{const url=new URL(value??'');return ['http:','https:'].includes(url.protocol)&&!url.username&&!url.password?url.hostname.toLowerCase().replace(/^www\./u,''):null;}catch{return null;}};
 // Labels, not arbitrary prose, introduce a phone-bearing segment in one block.
-const labels=/\b(?:office\s+phone|main\s+phone|mobile(?:\s+phone)?|personal(?:\s+phone)?|emergency(?:\s+phone)?|fax|telephone|phone|tel|call\s+us)\b/giu;
+// Stored choices keep v1 label offsets: v2 verbs never cover a v1 label (`Please call us`
+// keeps the v1 `call us` span), so v2 only adds labels where v1 found none.
+const labels=/\b(?:office\s+phone|main\s+phone|mobile(?:\s+phone)?|personal(?:\s+phone)?|emergency(?:\s+phone)?|fax|telephone|phone|tel|call\s+us|please\s+call(?!\s+us\b)|call)\b/giu;
+// v2 forms apply only where no other line or purpose is mentioned anywhere in the block.
+const otherLine=/\b(?:fax(?:es)?|mobile|cell(?:ular|s)?|emergenc(?:y|ies)|text(?:s|ing)?|sms|personal|vendor|powered\s+by|website\s+by|testimonial|customer\s+review)\b/iu;
+/** v2-only labels (call verbs, phone emoji) attach nothing in a block naming another line or purpose. */
+export const V2_ONLY_PHONE_LABEL=/^(?:please\s+call|call|📞|☎\uFE0F?)$/iu;
+export function phoneBlockAllowsV2(text:string):boolean{return !otherLine.test(text);}
+// A bare call verb is a label only when one literal follows directly (`call 202…`, `please call: 202…`).
+const verbOnly=/^(?:please\s+call|call)$/iu,verbAttached=/^\s*:?\s*(?:at\s*:?\s*)?[+\p{N}(]/iu;
+// v2: these labels keep one directly attached literal before ordinary sentence prose.
+const proseLabels=/^(?:call(?:\s+us)?|please\s+call|phone|tel|telephone)$/iu;
+// v2 standalone block: optional phone emoji/punctuation, one formatted NANP literal, optional one email.
+const standalonePrefix=/^[\s:•|–—-]*(?:(?:📞|☎)\uFE0F?[\s:•|–—-]*)?$/u,standaloneEmail=/\s+[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\s*$/iu;
+const nanp=/^(?:\+?1[ .-])?(?:\(\d{3}\)\s?|\d{3}[ .-])\d{3}[ .-]\d{4}$/u;
 // Vanity and extension forms are retained as unsupported WHOLE literals. Never
 // accept their numeric prefix as a business endpoint. No cross-block stitching.
 const tokens=/\+?[\p{N}(][\p{N}(). \t-]*\p{N}(?:[ \t]*(?:ext(?:ension)?\.?|x|#)[ \t]*[\p{L}\p{N}]+|-?[\p{L}\p{N}-]+)?/giu;
@@ -23,7 +40,7 @@ export function isWholeManualPhoneLiteral(text:string,start:number,end:number):b
 /** Consume only explicitly attached literals. Unmatched prose/fields/residue
  * makes the segment unresolved, never a license to search later identifiers.
  * Unicode/vanity tokens are retained but do NOT extend the supported grammar. */
-function attachedLiterals(segment:string):{matches:RegExpExecArray[];complete:boolean}{
+function attachedLiterals(segment:string,prose:boolean):{matches:RegExpExecArray[];complete:boolean}{
  const matches:RegExpExecArray[]=[];let cursor=0;
  for(const token of segment.matchAll(tokens)){
   const gap=segment.slice(cursor,token.index);
@@ -31,9 +48,49 @@ function attachedLiterals(segment:string):{matches:RegExpExecArray[];complete:bo
   if(!connector.test(gap))return {matches,complete:false};
   matches.push(token);cursor=token.index+token[0].length;
  }
- return {matches,complete:/^[\s.,;]*$/u.test(segment.slice(cursor))};
+ const rest=segment.slice(cursor);
+ // v2 prose tail: exactly one literal, then a separator and digit-free prose.
+ return {matches,complete:/^[\s.,;]*$/u.test(rest)||prose&&matches.length===1&&/^[\s,.;!]/u.test(rest)&&!/\p{N}/u.test(rest)};
 }
 const splitSurrogate=(text:string,at:number)=>at>0&&at<text.length&&/[\uD800-\uDBFF]/u.test(text[at-1]!)&&/[\uDC00-\uDFFF]/u.test(text[at]!);
+type LiteralReason=LiteralDiagnostics['entries'][number]['reason'];
+export interface BlockLiteral {literal:string;start:number;value:string|null;reason:LiteralReason|null}
+export interface BlockPhoneLabel {label:string;labelStart:number;labelEnd:number;complete:boolean;unattached:boolean;literals:BlockLiteral[]}
+/** The reviewed same-block grammar for one intact block. Callers own bounds,
+ * coverage, authority and lineage; a value here is never contact permission. */
+export function blockPhoneLabels(text:string):BlockPhoneLabel[]{
+ const relaxed=phoneBlockAllowsV2(text);
+ // Ordinary "personal touch" prose is not a phone label. Keep every
+ // digit-bearing block conservative, including Unicode/unsupported numbers.
+ const found=[...text.matchAll(labels)].filter(label=>
+  !(/^personal$/iu.test(label[0])&&/^\s+touch\b/iu.test(text.slice(label.index+label[0].length))&&!/\p{N}/u.test(text))&&
+  (!verbOnly.test(label[0])||relaxed&&verbAttached.test(text.slice(label.index+label[0].length))));
+ const labelled=found.map((label,index):BlockPhoneLabel=>{
+  const labelEnd=label.index+label[0].length,segment=text.slice(labelEnd,found[index+1]?.index??text.length),attached=attachedLiterals(segment,relaxed&&proseLabels.test(label[0]));
+  // An explicit phone label with unresolved nonempty content cannot disappear
+  // beside a valid alternate (including malformed/vanity phone attempts).
+  return {label:label[0],labelStart:label.index,labelEnd,complete:attached.complete,unattached:attached.matches.length===0&&/\S/u.test(segment.replace(/^[\s:.-]+/u,'')),
+   literals:attached.matches.map(token=>{
+    const literal=token[0].trimEnd(),start=labelEnd+token.index,to=start+literal.length;
+    const adjacent=(text[start-1]??'')+(text[to]??'');
+    const ambiguous=/\b(?:fax|mobile|personal|emergency|vendor|powered\s+by|website\s+by|testimonial|customer\s+review)\b/iu.test(text)||/[\p{L}\p{N}]/u.test(adjacent)||splitSurrogate(text,start)||splitSurrogate(text,to);
+    const normalized=canonicalizePhone(literal),plain=/^[0-9+(). \t-]+$/u.test(literal),supported=normalized.ok&&!ambiguous&&attached.complete&&plain;
+    return {literal,start,value:supported&&normalized.ok?normalized.handle.value:null,reason:supported?null:ambiguous?'ambiguous_context':!normalized.ok||!plain?'unsupported_literal':'unattached_label_content'};
+   })};
+ });
+ return labelled.length||!relaxed?labelled:standaloneNumber(text);
+}
+/** A block that is only one supported NANP literal (plus optional emoji/email) is a
+ * published number. Its label is the emoji when present, else the literal's own span. */
+function standaloneNumber(text:string):BlockPhoneLabel[]{
+ // The permitted email tail is removed first so its digits are not a second number; offsets stay in `text`.
+ const core=text.slice(0,standaloneEmail.exec(text)?.index??text.length),all=[...core.matchAll(tokens)];if(all.length!==1)return [];
+ const token=all[0]!,literal=token[0].trimEnd(),start=token.index,end=start+literal.length,prefix=text.slice(0,start);
+ if(!standalonePrefix.test(prefix)||!/^\s*$/u.test(core.slice(end))||!nanp.test(literal))return [];
+ const normalized=canonicalizePhone(literal);if(!normalized.ok||!normalized.handle.value.startsWith('+1'))return [];
+ const emoji=/(?:📞|☎)\uFE0F?/u.exec(prefix),label=emoji?{label:emoji[0],labelStart:emoji.index,labelEnd:emoji.index+emoji[0].length}:{label:literal,labelStart:start,labelEnd:end};
+ return [{...label,complete:true,unattached:false,literals:[{literal,start,value:normalized.handle.value,reason:null}]}];
+}
 export function scanManualLiteralPhones(input:LiteralInput):LiteralScan {
  const coverage:LiteralScan['coverage']={parser,state:'complete',observations:0,blocks:0};
  const result:LiteralScan={sources:[],coverage,unresolved:false};
@@ -58,35 +115,22 @@ export function scanManualLiteralPhones(input:LiteralInput):LiteralScan {
    createHash('sha256').update(JSON.stringify(source.blocks)).digest('hex')!==source.relevantTextHash)return unusable();
   coverage.observations++;coverage.blocks+=source.blocks.length;
   for(const block of source.blocks){
-   // Ordinary "personal touch" prose is not a phone label. Keep every
-   // digit-bearing block conservative, including Unicode/unsupported numbers.
-   const found=[...block.text.matchAll(labels)].filter(label=>
-    !(/^personal$/iu.test(label[0])&&/^\s+touch\b/iu.test(block.text.slice(label.index+label[0].length))&&!/\p{N}/u.test(block.text)));
-   for(const [index,label] of found.entries()){
-    const start=label.index+label[0].length,end=found[index+1]?.index??block.text.length;
-    const segment=block.text.slice(start,end);
-    const attached=attachedLiterals(segment),candidates=attached.matches;
-    const reasons=new Set<LiteralDiagnostics['entries'][number]['reason']>();
-    if(!attached.complete){result.unresolved=true;reasons.add('unattached_label_content');}
-    for(const token of candidates){
-     const literal=token[0].trimEnd(),at=start+token.index,to=at+literal.length;
-     if(literal.length>200||label[0].length>200||result.sources.length>=16)return bounded();
-     const adjacent=(block.text[at-1]??'')+(block.text[to]??'');
-     const ambiguous=/\b(?:fax|mobile|personal|emergency|vendor|powered\s+by|website\s+by|testimonial|customer\s+review)\b/iu.test(block.text)||/[\p{L}\p{N}]/u.test(adjacent)||splitSurrogate(block.text,at)||splitSurrogate(block.text,to);
-     const normalized=canonicalizePhone(literal),supported=normalized.ok&&!ambiguous&&attached.complete&&/^[0-9+(). \t-]+$/u.test(literal);
-     if(!supported){result.unresolved=true;reasons.add(ambiguous?'ambiguous_context':!normalized.ok||!/^[0-9+(). \t-]+$/u.test(literal)?'unsupported_literal':'unattached_label_content');}
-     result.sources.push(literalSource(input,source,block.id,label[0],label.index,literal,at,supported&&normalized.ok?normalized.handle.value:null));
+   for(const found of blockPhoneLabels(block.text)){
+    const reasons=new Set<LiteralReason>();
+    if(!found.complete){result.unresolved=true;reasons.add('unattached_label_content');}
+    for(const literal of found.literals){
+     if(literal.literal.length>200||found.label.length>200||result.sources.length>=16)return bounded();
+     if(literal.reason){result.unresolved=true;reasons.add(literal.reason);}
+     result.sources.push(literalSource(input,source,block.id,found.label,found.labelStart,literal.literal,literal.start,literal.value));
     }
-    // An explicit phone label with unresolved nonempty content cannot disappear
-    // beside a valid alternate (including malformed/vanity phone attempts).
-    if(candidates.length===0&&/\S/u.test(segment.replace(/^[\s:.-]+/u,''))){result.unresolved=true;reasons.add('unattached_label_content');}
+    if(found.unattached){result.unresolved=true;reasons.add('unattached_label_content');}
     for(const reason of reasons){
      const diagnostics=result.diagnostics??={entries:[],truncated:false};
      const authority=input.authorities[source.id]!;
      if(authority.kind==='phone_discovery'&&(!diagnostics.expiresAt||Date.parse(authority.expiresAt)<Date.parse(diagnostics.expiresAt)))diagnostics.expiresAt=authority.expiresAt;
-     if(label[0].length>200||diagnostics.entries.length>=16){diagnostics.truncated=true;continue;}
+     if(found.label.length>200||diagnostics.entries.length>=16){diagnostics.truncated=true;continue;}
      diagnostics.entries.push({reason,runId:input.runId,observationId:source.id,blockId:block.id,url:source.url,retrievedAt:source.retrievedAt,
-      contentHash:source.contentHash,relevantTextHash:source.relevantTextHash,parser,label:label[0],labelStart:label.index,labelEnd:start,
+      contentHash:source.contentHash,relevantTextHash:source.relevantTextHash,parser,label:found.label,labelStart:found.labelStart,labelEnd:found.labelEnd,
       authority,lineage:input.lineage});
     }
    }
