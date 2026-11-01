@@ -66,6 +66,15 @@ it('associates the homepage a deep landing page led to through the landing page\
  expect(buildPreparedCapture(deep,[{source:landing,trace:trace(`${site}/contact`)},{source:home,trace:trace(`${site}/`),linkedFrom:`${site}/contact`},{source:about,trace:trace(`${site}/about-us`),linkedFrom:`${site}/contact`}])?.pages.map(p=>[p.observationId,p.redirectUrls]))
   .toEqual([[home.id,[`${site}/contact`,`${site}/`]],[about.id,[`${site}/contact`,`${site}/about-us`]]]);
 });
+it('keeps the homepage association when the requested root redirects on its site, with the full chain',()=>{
+ const deep={...binding,sourceUrl:`${site}/contact`},landing=observation(`${site}/contact`),home=observation(`${site}/en/`);
+ expect(buildPreparedCapture(deep,[{source:landing,trace:trace(`${site}/contact`)},{source:home,trace:trace(`${site}/`,`${site}/en/`),linkedFrom:`${site}/contact`}])?.pages.map(p=>[p.observationId,p.redirectUrls]))
+  .toEqual([[home.id,[`${site}/contact`,`${site}/`,`${site}/en/`]]]);
+});
+it('does not synthesize a homepage when the landing chain passed through a root of the same site (www/apex)',()=>{
+ expect(discoverSameSiteUrls({firmWebsite:'https://www.ownsite.example.test/',maxPagesPerFirm:2,prioritizeContactPages:true,diversifyOwnSitePages:true},{from:`${site}/en/`,hrefs:['/contact'],requested:['https://www.ownsite.example.test/',`${site}/en/`]})).toEqual([`${site}/contact`]);
+ expect(discoverSameSiteUrls({firmWebsite:`${site}/en/`,maxPagesPerFirm:2,prioritizeContactPages:true,diversifyOwnSitePages:true},{from:`${site}/en/`,hrefs:['/contact'],requested:[`${site}/en/`]})).toEqual([`${site}/`,`${site}/contact`]);
+});
 it('v2 lineage may follow the company site once to another company host, never to a directory or a second move',()=>{
  const movedSite='https://tucson.moved-site.test',landing=observation(`${movedSite}/`),contact=observation(`${movedSite}/contact-us`);
  const pages=[{source:landing,trace:trace(`${site}/`,`${movedSite}/`)},{source:contact,trace:trace(`${movedSite}/contact-us`),linkedFrom:`${movedSite}/`}];

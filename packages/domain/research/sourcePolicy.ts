@@ -245,6 +245,15 @@ function sameSite(firmHost: string, host: string): boolean {
  * robots file. Anything that is not is not this host's rules, and a host whose rules
  * cannot be read is a host whose pages are not fetched.
  */
+/** Whether a URL is its host's root page (`https://example.test/`), whatever its query. */
+export function isSiteRootUrl(value: string): boolean {
+  try {
+    return new URL(value).pathname.replace(/\/+$/u, '') === '';
+  } catch {
+    return false;
+  }
+}
+
 export function isSameResearchSite(a: string, b: string): boolean {
   const left = normalizedHost(a);
   const right = normalizedHost(b);
@@ -360,7 +369,7 @@ export function permittedRedirectTarget(
  */
 export function discoverSameSiteUrls(
   input: PermittedUrlInput,
-  found: { readonly from: string; readonly hrefs: readonly string[] },
+  found: { readonly from: string; readonly hrefs: readonly string[]; readonly requested?: readonly string[] },
 ): readonly string[] {
   const firmHost = input.firmWebsite === null ? null : normalizedHost(input.firmWebsite);
   if (firmHost === null || isBlockedHost(firmHost)) return [];
@@ -398,8 +407,11 @@ export function discoverSameSiteUrls(
   // does; its own host's homepage does, so it leads, linked or not. Then one page of each
   // own-site kind (contact, about, team), the remaining contact pages, then the rest in page
   // order, so a small page budget reads one of each.
+  // A landing whose own request chain passed through a root of this site (www.example.test/ →
+  // example.test/en/) already read the homepage.
   const from = new URL(found.from), fromHost = from.hostname.toLowerCase().replace(/\.$/u, '');
-  const home = from.pathname.replace(/\/+$/u, '') !== '' && sameSite(firmHost, fromHost) ? [`https://${fromHost}/`] : [];
+  const viaRoot = [found.from, ...(found.requested ?? [])].some(url => isSiteRootUrl(url) && isSameResearchSite(url, found.from));
+  const home = !viaRoot && sameSite(firmHost, fromHost) ? [`https://${fromHost}/`] : [];
   const first = OWN_SITE_PAGE_KINDS.flatMap(([kind]) => relevant.filter(url => ownSitePageKind(url) === kind).slice(0, 1));
   const contacts = relevant.filter(url => !first.includes(url) && ownSitePageKind(url) === 'contact');
   const ordered = [...home, ...first, ...contacts, ...relevant.filter(url => !first.includes(url) && !contacts.includes(url))];

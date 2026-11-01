@@ -213,6 +213,8 @@ it.each([
  'Full Management Services',
  'Member of the National Association of Residential Property Managers',
  'Acme Realty is a full-service property management company serving Knoxville owners.',
+ 'Welcome to Brown, Brown & West, a local real estate management company serving owners and tenants in Knoxville.',
+ 'Welcome to The Harbor Group, a family-owned property management firm for Boston homeowners.',
 ])('recognizes the company placing itself in property management or naming its service: %s',text=>{
  expect(classifyPreparedPassage(text,'')).toMatchObject({usefulBusiness:true,contrary:false,kinds:expect.arrayContaining(['business'])});
 });
@@ -239,6 +241,10 @@ it.each([
  'Our software helps every member of the National Association of Residential Property Managers.',
  'Welcome to RentTools, a property management software company for landlords and managers.',
  'Find property management companies near me, compare reviews and hire one today.',
+ 'Welcome to PM Finder, a property management company directory and review site for renters.',
+ 'Welcome to RentHub, a property management company marketplace where owners compare local managers.',
+ 'Welcome to Acme, a property management company with an online review portal for tenants.',
+ 'Welcome to the owners of Acme, a property management company we hired last year.',
 ])('still refuses labels, products, jobs, directories, testimonials and denials: %s',text=>{
  expect(classifyPreparedPassage(text,'').usefulBusiness).toBe(false);
 });

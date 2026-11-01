@@ -77,6 +77,22 @@ it('cites the host homepage\'s business context when the source is a deep contac
  expect(brief.value.passages.filter(p=>p.kind==='business').map(p=>p.url)).toContain(`${f.site}/`);
  expect(brief.value.callable).toMatchObject({state:'callable',phone:'(617) 555-0100'});
 });
+it('cites a homepage whose root redirects on its site (/ → /home) for a deep landing page',async()=>{
+ const f=await capture({maxPages:2,source:site=>`${site}/contact-us`,redirects:site=>({[`${site}/`]:`${site}/home`}),extra:site=>({
+  [`${site}/contact-us`]:'<main><p>Questions about your rental? Call us at (617) 555-0100.</p></main>',
+  [`${site}/home`]:'<main><p>Our property management company manages residential homes for owners in Boston.</p></main>'})});
+ expect((await f.stored()).prepared_capture?.pages.map(p=>[p.url,p.redirectUrls])).toEqual([[`${f.site}/home`,[`${f.site}/contact-us`,`${f.site}/`,`${f.site}/home`]]]);
+ const brief=await tx(()=>readPreparedProspect(ctx(),f.target));if(!brief.ok)throw Error(brief.reason);
+ expect(brief.value.passages.filter(p=>p.kind==='business').map(p=>p.url)).toContain(`${f.site}/home`);
+ expect(brief.value.callable).toMatchObject({state:'callable',phone:'(617) 555-0100'});
+});
+it('spends no budget on a second homepage when the landing request was the www root (2-page budget keeps the phone page)',async()=>{
+ const f=await capture({maxPages:2,source:site=>site.replace('https://','https://www.')+'/',redirects:site=>({[site.replace('https://','https://www.')+'/']:`${site}/en/`}),extra:site=>({
+  [`${site}/en/`]:'<nav><a href="/contact-us">Contact</a></nav><main><p>Our property management company manages residential homes for owners in Boston.</p></main>'})});
+ expect(f.requests.filter(url=>!url.endsWith('/robots.txt'))).toEqual([f.site.replace('https://','https://www.')+'/',`${f.site}/en/`,`${f.site}/contact-us`]);
+ const brief=await tx(()=>readPreparedProspect(ctx(),f.target));if(!brief.ok)throw Error(brief.reason);
+ expect(brief.value.callable).toMatchObject({state:'callable',phone:'(617) 555-0100'});
+});
 it('keeps model input inside the existing bound by leaving out the lowest-priority extra pages first',async()=>{
  // Eight full pages of whole blocks exceed the 100000-byte observation bound together.
  const full=(label:string)=>`<main>${Array.from({length:60},(_,i)=>`<p>${label} paragraph ${i}: ${'fictional residential management detail '.repeat(5)}</p>`).join('')}</main>`;
