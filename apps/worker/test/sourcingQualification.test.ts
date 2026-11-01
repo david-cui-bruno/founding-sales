@@ -109,3 +109,9 @@ it('retains a unique scoped area despite a weak selected city label on the curre
  const result=await provider.extract({...input,observations:[observation]});
  expect(result).toMatchObject({ok:true,value:{facts:[{kind:'firm_identity',blockId:'name'},{kind:'service_area',blockId:'label'},{kind:'residential_management',blockId:'description'},{kind:'service_area',blockId:'description'}]}});
 });
+it('keeps a moved company site selection only as residential_management prepared context and drops its other kinds',async()=>{
+ const moved={...source,url:'https://moved.example.test/',blocks:[{id:'b1',text:'Harbor Example Management manages residential homes in Boston, MA.'}]};
+ const result=await extractText(encoded([{kind:'residential_management',observationId:moved.id,blockId:'b1'},{kind:'firm_identity',observationId:moved.id,blockId:'b1'}]),'end_turn',[moved]);
+ expect(result).toMatchObject({ok:true,value:{facts:[{kind:'residential_management',observationId:moved.id,blockId:'b1',value:moved.blocks[0]!.text}]}});
+ if(result.ok)expect(result.value.facts).toHaveLength(1);
+});
