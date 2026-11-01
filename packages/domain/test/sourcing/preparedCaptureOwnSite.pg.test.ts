@@ -78,3 +78,14 @@ it('keeps model input inside the existing bound by leaving out the lowest-priori
  expect(urls.slice(0,4)).toEqual([f.landing,`${f.site}/contact-us`,`${f.site}/about-us`,`${f.site}/our-team`]);
  expect(stored.prepared_capture?.pages.map(p=>p.url)).toEqual([`${f.site}/contact-us`,`${f.site}/about-us`,`${f.site}/our-team`]);
 });
+
+it('uses a landing page with only navigation and images as lineage, so its contact page phone makes the company callable',async()=>{
+ const f=await capture({extra:site=>({[`${site}/`]:'<nav><a href="/contact-us">Contact</a><a href="/about-us"><img src="/logo.png" alt=""></a></nav>',
+  [`${site}/about-us`]:'<main><p>Our property management company manages residential homes for owners in Boston.</p></main>'})});
+ const stored=await f.stored();
+ expect(stored.observations.map(o=>o.url)).not.toContain(f.landing);
+ expect(stored.prepared_capture?.pages.map(p=>[p.url,p.redirectUrls])).toEqual([[`${f.site}/contact-us`,[f.landing,`${f.site}/contact-us`]],[`${f.site}/about-us`,[f.landing,`${f.site}/about-us`]]]);
+ const brief=await tx(()=>readPreparedProspect(ctx(),f.target));if(!brief.ok)throw Error(brief.reason);
+ expect(brief.value.callable).toMatchObject({state:'callable',phone:'(617) 555-0100'});
+ expect(brief.value.passages.some(p=>p.url===`${f.site}/contact-us`&&p.kind==='contact')).toBe(true);
+});

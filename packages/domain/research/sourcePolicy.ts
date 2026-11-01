@@ -265,6 +265,8 @@ export interface PermittedUrlInput {
   readonly maxPagesPerFirm: number;
   /** Prefer published contact paths within the bounded navigation scan. */
   readonly prioritizeContactPages?: boolean;
+  /** Prepared own-site capture only (ADR0034): one contact, about and team page first. */
+  readonly diversifyOwnSitePages?: boolean;
   /**
    * Same-site URLs found in the firm's own homepage (`discoverSameSiteUrls`).
    *
@@ -384,9 +386,12 @@ export function discoverSameSiteUrls(
   const relevant = candidates.filter(url => {
     const path = new URL(url).pathname;
     if (path === '/') return false;
-    return DISCOVERED_PATH_PATTERN.test(path) || (input.prioritizeContactPages === true && ownSitePageKind(url) !== null);
+    return DISCOVERED_PATH_PATTERN.test(path) || (input.diversifyOwnSitePages === true && ownSitePageKind(url) !== null);
   });
-  if (!input.prioritizeContactPages) return Object.freeze(relevant.slice(0, MAX_DISCOVERED_CANDIDATES));
+  if (!input.diversifyOwnSitePages) {
+    if (input.prioritizeContactPages) relevant.sort((a,b)=>Number(/contact/iu.test(new URL(b).pathname))-Number(/contact/iu.test(new URL(a).pathname)));
+    return Object.freeze(relevant.slice(0, MAX_DISCOVERED_CANDIDATES));
+  }
   // One page of each own-site kind first (contact, about, team), then the remaining contact
   // pages, then the rest in page order, so a small page budget reads one of each.
   const first = OWN_SITE_PAGE_KINDS.flatMap(([kind]) => relevant.filter(url => ownSitePageKind(url) === kind).slice(0, 1));

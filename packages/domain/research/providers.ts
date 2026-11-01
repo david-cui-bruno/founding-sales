@@ -64,6 +64,8 @@ export interface PageFetchRequest {
   readonly recordRedirectTrace?: boolean;
   /** Qualification needs a contact route; prioritize published contact links within the same page cap. */
   readonly prioritizeContactPages?: boolean;
+  /** Prepared own-site capture only (ADR0034): read one contact, about and team page first. */
+  readonly diversifyOwnSitePages?: boolean;
   /**
    * The exact URLs that may be requested, in order. The caller builds them with
    * `researchUrlsForFirm`; the adapter must request nothing else, including after a

@@ -7,7 +7,7 @@ import {buildPreparedCapture} from '../../sourcing/preparedCapture.ts';
 const site='https://www.ownsite.example.test';
 it('orders one contact, about and team page first from the landing page\'s own same-site links',()=>{
  const hrefs=['/services','https://elsewhere.example.test/contact','/faq','/contact-us','/contact-us/','#top','/company','/property-management-company','/contact','/leadership/','http://www.ownsite.example.test/about','/about-us','tel:5550100','mailto:a@b.test','https://ownsite.example.test/our-team'];
- const urls=discoverSameSiteUrls({firmWebsite:`${site}/`,maxPagesPerFirm:4,prioritizeContactPages:true},{from:`${site}/`,hrefs});
+ const urls=discoverSameSiteUrls({firmWebsite:`${site}/`,maxPagesPerFirm:4,prioritizeContactPages:true,diversifyOwnSitePages:true},{from:`${site}/`,hrefs});
  expect(urls).toEqual([`${site}/contact-us`,`${site}/company`,`${site}/leadership`,`${site}/contact`,`${site}/services`,`${site}/faq`,`${site}/about-us`,'https://ownsite.example.test/our-team']);
  // Other research keeps its existing filter and page order.
  expect(discoverSameSiteUrls({firmWebsite:`${site}/`,maxPagesPerFirm:4},{from:`${site}/`,hrefs})).toEqual([`${site}/services`,`${site}/faq`,`${site}/contact-us`,`${site}/contact`,`${site}/about-us`,'https://ownsite.example.test/our-team']);
@@ -18,6 +18,13 @@ const blocks=(text:string)=>[{id:'b1',text}];
 const observation=(url:string,text='Fictional company text.'):SourceObservation=>({id:randomUUID(),url,contentHash:'a'.repeat(64),relevantTextHash:createHash('sha256').update(JSON.stringify(blocks(text))).digest('hex'),retrievedAt:'2026-11-01T01:00:00.000Z',publishedAt:null,publishedAtBlockId:null,firstParty:true,truncated:false,blocks:blocks(text)});
 const trace=(...urls:string[])=>({version:'page-redirect-trace-v1' as const,urls});
 const binding={candidateId:'10000000-0000-4000-8000-000000000001',candidateRevision:1,sourceUrl:`${site}/`};
+it('keeps phone discovery\'s contact-first order; only the prepared own-site pass diversifies',()=>{
+ const hrefs=['/contact-tenants','/about','/contact-owners','/team','/leadership'];
+ // Phone discovery (prioritizeContactPages only): every contact page first, own-site-only paths not admitted.
+ expect(discoverSameSiteUrls({firmWebsite:`${site}/`,maxPagesPerFirm:4,prioritizeContactPages:true},{from:`${site}/`,hrefs})).toEqual([`${site}/contact-tenants`,`${site}/contact-owners`,`${site}/about`,`${site}/team`]);
+ expect(discoverSameSiteUrls({firmWebsite:`${site}/`,maxPagesPerFirm:4,prioritizeContactPages:true,diversifyOwnSitePages:true},{from:`${site}/`,hrefs})).toEqual([`${site}/contact-tenants`,`${site}/about`,`${site}/team`,`${site}/contact-owners`,`${site}/leadership`]);
+});
+
 it('associates at most one linked contact, about and team page through the landing page\'s exact traced chain',()=>{
  const landing=observation(`${site}/`),contact=observation(`${site}/contact-us`),moved=observation(`${site}/about/company-story`),team=observation(`${site}/our-team`),second=observation(`${site}/contact`),services=observation(`${site}/services`);
  const pages=[
@@ -36,6 +43,9 @@ it('associates at most one linked contact, about and team page through the landi
  // V1 never associates a linked page; an untraced or unlinked landing supplies nothing.
  expect(buildPreparedCapture(binding,pages,'prepared-source-association-v1')).toBeNull();
  expect(buildPreparedCapture(binding,[{source:landing,trace:undefined},pages[1]!])).toBeNull();
+ // A landing page with no citable text is still lineage when the adapter returned its trace.
+ expect(buildPreparedCapture(binding,[pages[1]!],undefined,[{url:`${site}/`,trace:trace(`${site}/`),firstParty:true},{url:contact.url,trace:trace(`${site}/contact-us`),linkedFrom:`${site}/`,firstParty:true}])?.pages.map(p=>p.redirectUrls)).toEqual([[`${site}/`,`${site}/contact-us`]]);
+ expect(buildPreparedCapture(binding,[pages[1]!],undefined,[])).toBeNull();
  expect(buildPreparedCapture(binding,[pages[0]!,{...pages[1]!,linkedFrom:`${site}/elsewhere`}])).toBeNull();
  // A linked chain that loops back or leaves the site is not an association.
  expect(buildPreparedCapture(binding,[pages[0]!,{source:contact,trace:trace(`${site}/`,`${site}/contact-us`),linkedFrom:`${site}/`}])).toBeNull();

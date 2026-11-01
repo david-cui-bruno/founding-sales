@@ -52,14 +52,18 @@ export function validatePreparedCapture(value:unknown,binding:PreparedCaptureBin
  * page itself linked to (ADR0034): its lineage is the landing page's request chain from
  * the exact source followed by the linked page's own chain, so every URL the association
  * depends on keeps its own loss/expiry/denial check. Any other auxiliary page stays unassociated. */
-export function buildPreparedCapture(binding:Omit<PreparedCaptureBinding,'observations'>,pages:readonly {source:SourceObservation;trace:FetchedPage['redirectTrace'];linkedFrom?:string|undefined}[],policy:PreparedCapturePolicy=PREPARED_CAPTURE_POLICY):PreparedCapture|null {
+export interface PreparedCaptureLineage {url:string;trace:FetchedPage['redirectTrace'];linkedFrom?:string|undefined;firstParty:boolean}
+/** `fetched` is every page the adapter returned, including one with no citable text: a
+ * landing page's request chain is lineage for its linked pages whether or not it is cited. */
+export function buildPreparedCapture(binding:Omit<PreparedCaptureBinding,'observations'>,pages:readonly {source:SourceObservation;trace:FetchedPage['redirectTrace'];linkedFrom?:string|undefined}[],policy:PreparedCapturePolicy=PREPARED_CAPTURE_POLICY,
+ fetched:readonly PreparedCaptureLineage[]=pages.map(({source,trace,linkedFrom})=>({url:source.url,trace,linkedFrom,firstParty:source.firstParty}))):PreparedCapture|null {
  const traced=(urls:readonly string[]|undefined,url:string)=>urls!==undefined&&urls[0]===binding.sourceUrl&&urls.at(-1)===url;
  const kinds=new Set<string>();
  const matched=pages.flatMap(({source,trace,linkedFrom})=>{
   if(trace?.version!=='page-redirect-trace-v1'||!source.firstParty)return [];
   let urls:readonly string[]=trace.urls;
   if(policy===PREPARED_CAPTURE_POLICY&&linkedFrom!==undefined){
-   const landing=pages.find(page=>page.source.url===linkedFrom&&page.linkedFrom===undefined&&page.source.firstParty&&traced(page.trace?.urls,linkedFrom));
+   const landing=fetched.find(page=>page.url===linkedFrom&&page.linkedFrom===undefined&&page.firstParty&&page.trace?.version==='page-redirect-trace-v1'&&traced(page.trace.urls,linkedFrom));
    const kind=ownSitePageKind(source.url);
    if(!landing||kind===null||kinds.has(kind))return [];
    urls=[...landing.trace!.urls,...trace.urls];
