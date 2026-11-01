@@ -158,3 +158,33 @@ it.each([['412-685-3970 ext 5 24hr@company.test'],['412-685-3970-HOME 24hr@compa
  expect(projectManualPhone(current,now).state).not.toBe('observed');
  expect(projectPreparedPhoneChoice(current,locate(source,text,'412-685-3970','412-685-3970'),now)).toBeNull();
 });
+// Hosted RL shape (Nov 1): the brief is callable from the candidate's own source URL, admitted by its exact grant
+// with NO prepared capture manifest, and the page is incomplete. Calling's phone read must take the same pages.
+function ownSourcePage(blocks:string[],extra:Partial<SourceObservation>={}){
+ const source=page(blocks,{url:website,truncated:true,...extra});
+ const current:ManualPhoneSnapshot={...snapshot([source],{captured:[],permitted:[website]}),payload:{firmName:'Capture Property Management',website,sourceUrl:website,locality:'Columbus',region:'OH',signal:'fit_only',evidence:'Fictional',observedOn:'2026-10-30',preparedBy:'Fixture'}};
+ return {source,current};
+}
+const briefOf=(current:ManualPhoneSnapshot)=>projectPreparedProspect({id:candidateId,revision:1,payload:current.payload as CandidateInput,origins:[],created_at:new Date(now-2000),manual_state:'new',duplicate_count:0} satisfies ManualProspectRow,current,{id:runId,candidate_revision:1},now);
+it('reads a callable brief\'s phone from an incomplete own-source page admitted by exact grant without any capture manifest',()=>{
+ const blocks=[business,'(614) 725-3059 info@capture.example.test',...Array.from({length:80},(_,index)=>`Filler passage number ${index} about nothing in particular.`),'(614) 725-3059'];
+ const {source,current}=ownSourcePage(blocks);
+ expect(current['prepared_capture']).toBeNull();
+ expect(briefOf(current)).toMatchObject({callable:{state:'callable',phone:'(614) 725-3059'},coverage:'partial_retained_pages'});
+ // The unchanged exact path refuses an incomplete page; the brief-equivalent read does not.
+ expect(preparedPhoneSource(current,now)?.authorities[source.id]).toMatchObject({kind:'prepared_capture',sourceUrl:website});
+ const evidence=projectManualPhone(current,now);
+ expect(evidence).toMatchObject({state:'observed',value:'+16147253059',coverage:{state:'partial'}});
+ if(evidence.state!=='observed')throw Error('expected observed');
+ expect(evidence.sources).toHaveLength(2);
+ expect(evidence.sources.every(item=>'method' in item&&item.authority.kind==='prepared_capture')).toBe(true);
+ const standaloneChoice=locate(source,'(614) 725-3059','(614) 725-3059'),emailChoice=locate(source,'(614) 725-3059 info@capture.example.test','(614) 725-3059');
+ expect(projectPreparedPhoneChoice(current,standaloneChoice,now)).toMatchObject({value:'+16147253059',sourceUrl:website});
+ expect(projectPreparedPhoneChoice(current,emailChoice,now)).toMatchObject({value:'+16147253059'});
+});
+it('keeps an ungranted or other-host page out of the grant-admitted read, and a lost grant offers nothing',()=>{
+ const {source,current}=ownSourcePage([business,LABELLED]);
+ expect(projectManualPhone({...current,permitted_urls:[]},now)).toMatchObject({state:'not_extracted',reason:'original_not_usable'});
+ expect(projectPreparedPhoneChoice({...current,permitted_urls:[]},locate(source,LABELLED,'(614) 725-3059','Office phone'),now)).toBeNull();
+ expect(projectManualPhone({...current,prepared_source_deadlines:{[website]:now}},now)).toMatchObject({state:'not_extracted'});
+});

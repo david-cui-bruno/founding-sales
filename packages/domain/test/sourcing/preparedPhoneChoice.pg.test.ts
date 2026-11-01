@@ -1,4 +1,4 @@
-import {randomUUID} from 'node:crypto';
+import {createHash,randomUUID} from 'node:crypto';
 import {afterAll,beforeAll,beforeEach,expect,it} from 'vitest';
 import {createTestDatabase,type TestDatabase} from '../../db/testing/testDatabase.ts';
 import {withTransaction,type SessionQueryable} from '../../db/queryable.ts';
@@ -128,4 +128,21 @@ it('attaches the earliest retained-evidence expiry of each permitted page from t
  const snapshot={permitted_urls:[page],candidate_id:f.candidateId} as unknown as ManualPhoneSnapshot,row={id:f.candidateId} as unknown as ManualProspectRow;
  const [decorated]=await tx(()=>withPreparedSourceDeadlines(ctx(),[row],[snapshot]));
  expect(decorated?.['prepared_source_deadlines']).toEqual({[page]:expires.getTime()});
+});
+it('offers and keeps the phone of an incomplete own-source page the brief cites by exact grant, with no capture manifest (hosted RL shape)',async()=>{
+ const domain=`own-${randomUUID()}.example.test`,website=`https://${domain}/`;
+ const saved=await tx(()=>saveCandidate(ctx(),{firmName:'Capture Property Management',website,sourceUrl:website,locality:'Columbus',region:'OH',signal:'fit_only',evidence:'Fictional search label only',observedOn:new Date().toISOString().slice(0,10),preparedBy:'Fixture'}));
+ if(!saved.ok)throw Error(saved.reason);
+ const requested=await tx(()=>requestQualification(ctx(runtime,true),{candidateId:saved.value.id,expectedRevision:1},{enqueue:false}));if(!requested.ok)throw Error(requested.reason);
+ const blocks=[{id:'b1',text:'(614) 725-3059 info@rlpmg.test'},{id:'b2',text:'Our property management company manages residential homes for owners and coordinates tenant maintenance requests.'},{id:'b83',text:'(614) 725-3059'}];
+ const page={id:randomUUID(),url:website,contentHash:'a'.repeat(64),relevantTextHash:createHash('sha256').update(JSON.stringify(blocks)).digest('hex'),retrievedAt:new Date(Date.now()-60_000).toISOString(),publishedAt:null,publishedAtBlockId:null,firstParty:true,truncated:true,blocks};
+ await runtime.query("UPDATE sourcing_qualification_runs SET state='review',observations=$3::jsonb WHERE workspace_id=$1 AND id=$2",[seed.alpha.workspaceId,requested.value.runId,JSON.stringify([page])]);
+ const id=saved.value.id;
+ expect(await tx(()=>readPreparedProspect(ctx(),{candidateId:id,candidateRevision:1,runId:requested.value.runId}))).toMatchObject({ok:true,value:{callable:{state:'callable',phone:'(614) 725-3059'},coverage:'partial_retained_pages'}});
+ const prospect=await only(id);
+ expect(prospect.phoneEvidence).toMatchObject({state:'observed',value:'+16147253059',coverage:{state:'partial'},sources:[{url:website,authority:{kind:'prepared_capture'}},{url:website,authority:{kind:'prepared_capture'}}]});
+ expect((await only(id,false)).phoneEvidence).toMatchObject({state:'not_extracted',reason:'original_not_usable'});
+ const choice=choiceFrom(prospect);
+ expect(await keep(id,choice)).toMatchObject({ok:true,value:{phoneChoice:choice}});
+ expect((await only(id)).manualPhone).toMatchObject({value:'+16147253059',choice,sourceUrl:website});
 });
