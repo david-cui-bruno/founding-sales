@@ -31,15 +31,17 @@ beforeEach(async()=>{
 afterAll(async()=>db?.drop());
 
 /** A real redirected own-site capture whose final page carries the supplied blocks. */
-async function captured(page:string){
- const domain=`phone-${randomUUID()}.example.test`,website=`https://${domain}/`,sourceUrl=website+'old-landing',middle=`https://www.${domain}/new-entry`,final=`https://www.${domain}/contact`;
+async function captured(page:string,options:{moved?:boolean}={}){
+ const domain=`phone-${randomUUID()}.example.test`,website=`https://${domain}/`,sourceUrl=website+'old-landing',middle=`https://www.${domain}/new-entry`;
+ // A moved company site: the old host's landing redirects to another company host (ADR0034).
+ const final=options.moved?`https://${domain.replace('phone-','moved-')}/contact`:`https://www.${domain}/contact`;
  const saved=await tx(()=>saveCandidate(ctx(),{firmName:'Capture Property Management',website,sourceUrl,locality:'Columbus',region:'OH',signal:'fit_only',evidence:'Fictional search label only',observedOn:new Date().toISOString().slice(0,10),preparedBy:'Controlled redirect fixture'}));
  if(!saved.ok)throw Error(saved.reason);
  await runtime.query('INSERT INTO research_settings(workspace_id,enabled,max_pages_per_firm) VALUES($1,true,1)',[seed.alpha.workspaceId]);
  const requested=await tx(()=>requestQualification(ctx(runtime,true),{candidateId:saved.value.id,expectedRevision:1},{enqueue:false}));if(!requested.ok)throw Error(requested.reason);
  const provider=researchPageFetch({lookup:async()=>['93.184.216.34'],request:async input=>{
   if(input.url.endsWith('/robots.txt'))return {statusCode:200,headers:{'content-type':'text/plain'},body:new TextEncoder().encode('User-agent: *\nDisallow:\n'),abortedOverCap:false};
-  if(input.url===sourceUrl)return {statusCode:301,headers:{location:middle},body:null,abortedOverCap:false};
+  if(input.url===sourceUrl)return {statusCode:301,headers:{location:options.moved?final:middle},body:null,abortedOverCap:false};
   if(input.url===middle)return {statusCode:302,headers:{location:final},body:null,abortedOverCap:false};
   if(input.url===final)return response(`<main>${business}${page}</main>`);
   return {statusCode:404,headers:{},body:null,abortedOverCap:false};
@@ -145,4 +147,17 @@ it('offers and keeps the phone of an incomplete own-source page the brief cites 
  const choice=choiceFrom(prospect);
  expect(await keep(id,choice)).toMatchObject({ok:true,value:{phoneChoice:choice}});
  expect((await only(id)).manualPhone).toMatchObject({value:'+16147253059',choice,sourceUrl:website});
+});
+
+it('keeps and prepares the phone of a company whose site moved to another host, through the traced move only',async()=>{
+ const f=await captured('<p>Office phone: (614) 725-3059</p>',{moved:true});
+ expect(await tx(()=>readPreparedProspect(ctx(),f.target))).toMatchObject({ok:true,value:{callable:{state:'callable',phone:'(614) 725-3059'}}});
+ const prospect=await only(f.candidateId);
+ expect(prospect.phoneEvidence).toMatchObject({state:'observed',value:'+16147253059',sources:[{url:f.final,authority:{kind:'prepared_capture',sourceUrl:f.final}}]});
+ const choice=choiceFrom(prospect);
+ expect(await keep(f.candidateId,choice)).toMatchObject({ok:true,value:{state:'kept',phoneChoice:choice}});
+ expect((await only(f.candidateId)).manualPhone).toMatchObject({value:'+16147253059',choice,sourceUrl:f.final});
+ expect(await tx(()=>readCallingPreparation(ctx(),{candidateId:f.candidateId,expectedCandidateRevision:1,choice},async()=>true))).toMatchObject({state:'available',phone:{value:'+16147253059'},contactAuthority:'not_granted'});
+ // Without the capture association the moved host is not the company's website: the default read stays exact.
+ expect((await only(f.candidateId,false)).phoneEvidence).toMatchObject({state:'not_extracted',reason:'original_not_usable'});
 });

@@ -882,3 +882,39 @@ it('finds a published contact after twenty navigation links without spending mor
  expect(answer.ok&&answer.value.pages.map(p=>p.url)).toEqual(['https://example.test/','https://example.test/contact-us']);
  expect(h.sent.map(r=>r.url)).toEqual(['https://example.test/robots.txt','https://example.test/','https://example.test/contact-us']);
 });
+
+describe('a prepared capture following the company site to another host (ADR0034)', () => {
+  const moved = (location: string): RawResponse => ({ statusCode: 301, headers: { location }, body: null, abortedOverCap: false });
+  // The production rentalsamericatucson.com shape: robots.txt and / both move to tucson.rentalsamerica.com.
+  const responses = {
+    'https://alias.test/robots.txt': moved('https://tucson.moved.test/robots.txt'),
+    'https://alias.test/': moved('https://tucson.moved.test/'),
+    'https://tucson.moved.test/robots.txt': ok('User-agent: *\nDisallow: /private\n', 'text/plain'),
+    'https://tucson.moved.test/': ok('<a href="/contact-us">Contact</a><a href="https://alias.test/about">Old about</a><a href="/private/team">Team</a><p>We manage residential property.</p>'),
+    'https://tucson.moved.test/contact-us': ok('<p>Call (520) 555-0100.</p>'),
+  };
+  const answers = { 'alias.test': ['93.184.216.34'], 'tucson.moved.test': ['93.184.216.35'] };
+  const capture = { firmWebsite: 'https://alias.test/', links: ['https://alias.test/'], urls: ['https://alias.test/'], maxPagesPerFirm: 4, maxBytes: 1_000_000,
+    recordRedirectTrace: true, prioritizeContactPages: true, diversifyOwnSitePages: true };
+
+  it('reads the moved host as the firm site: its robots, its discovered pages, first-party, with the chain traced', async () => {
+    const { provider } = harness({ answers, responses });
+    const outcome = await provider.fetchPages({ ...capture, followSiteMove: url => !url.includes('portal') });
+    if (!outcome.ok) throw Error('fetch');
+    expect(outcome.value.pages.map(page => [page.url, page.firstParty, page.redirectTrace?.urls, page.linkedFrom])).toEqual([
+      ['https://tucson.moved.test/', true, ['https://alias.test/', 'https://tucson.moved.test/'], undefined],
+      ['https://tucson.moved.test/contact-us', true, ['https://tucson.moved.test/contact-us'], 'https://tucson.moved.test/'],
+    ]);
+    // The moved host's robots were honoured; the old host's link was not discovered.
+    expect(outcome.value.skipped).toEqual({ robots_disallowed: 1 });
+  });
+
+  it('refuses the move without the opt-in or to a host the caller refuses', async () => {
+    for (const followSiteMove of [undefined, (url: string) => !url.includes('moved')]) {
+      const { provider } = harness({ answers, responses });
+      const outcome = await provider.fetchPages({ ...capture, ...(followSiteMove ? { followSiteMove } : {}) });
+      expect(outcome.ok && outcome.value.pages).toEqual([]);
+      expect(outcome.ok && outcome.value.skipped).toEqual({ robots_unreadable: 1 });
+    }
+  });
+});

@@ -7,7 +7,8 @@ export type LiteralSource=Extract<Extract<Evidence,{state:'observed'}>['sources'
 export type LiteralAuthority=LiteralSource['authority'];
 export type LiteralLineage=LiteralSource['lineage'];
 export type LiteralDiagnostics=NonNullable<Extract<Evidence,{state:'conflicting'}>['diagnostics']>;
-export interface LiteralInput {runId:string;observations:unknown;website:string|null;authorities:Record<string,LiteralAuthority>;lineage:LiteralLineage;now:number;partial?:boolean}
+/** `moved`: prepared-capture observations admitted on the company site's moved host (ADR0034); only these may differ from `website`. */
+export interface LiteralInput {runId:string;observations:unknown;website:string|null;authorities:Record<string,LiteralAuthority>;lineage:LiteralLineage;now:number;partial?:boolean;moved?:ReadonlySet<string>}
 export interface LiteralScan {sources:LiteralSource[];coverage:NonNullable<Evidence['coverage']>;unresolved:boolean;diagnostics?:LiteralDiagnostics;reason?:'original_not_usable'|'bounded_scan_incomplete'}
 /** v2 extends v1 (ADR0034) with verb attachment before prose and standalone published
  * numbers; every v1-accepted span is unchanged. Evidence is recomputed per read, never stored. */
@@ -119,7 +120,7 @@ export function scanManualLiteralPhones(input:LiteralInput):LiteralScan {
   // A lost/unusable original is incomplete coverage, never a selected survivor. Only the prepared
   // authority (ADR0034) reads an incomplete page, and only until its own bound.
   const authority=input.authorities[source.id],prepared=authority?.kind==='prepared_capture';
-  if(!authority||!website||host(source.url)!==website||!source.firstParty||source.truncated&&!prepared||Date.parse(source.retrievedAt)>input.now||
+  if(!authority||!website||host(source.url)!==website&&!(prepared&&input.moved?.has(source.id))||!source.firstParty||source.truncated&&!prepared||Date.parse(source.retrievedAt)>input.now||
    prepared&&!(Date.parse(authority.expiresAt)>input.now)||
    createHash('sha256').update(JSON.stringify(source.blocks)).digest('hex')!==source.relevantTextHash)return unusable();
   coverage.observations++;coverage.blocks+=source.blocks.length;

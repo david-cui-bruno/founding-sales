@@ -1,4 +1,5 @@
 import type {PreparedProspectBrief} from '@fss/contracts';
+import {US_BUSINESS_REGIONS} from '../../contracts/src/usBusinessGeography.ts';
 
 export type PreparedPassageKind=PreparedProspectBrief['passages'][number]['kind'];
 export interface PreparedPassageClassification {kinds:PreparedPassageKind[];usefulBusiness:boolean;usefulOperations:boolean;residentialContext:boolean;contrary:boolean}
@@ -35,8 +36,18 @@ const taglineLead=new RegExp(`^(?:an?\\s+)?(?:${leadToken}(?:(?:,?\\s+(?:&|and)\
 const residentialSelfTagline=(text:string)=>{const trimmed=text.trim(),match=residentialTagline.exec(trimmed);return match!==null&&taglineLead.test(trimmed.slice(0,match.index));};
 const substantive=(text:string)=>text.length>=50&&text.trim().split(/\s+/u).length>=8;
 const question=(text:string)=>/\?\s*$/u.test(text)||/^\s*(?:why|how|what|when|where|who|which|do|does|did|can|could|should|would|is|are)\b[^.!?\n]*$/iu.test(text);
+// A service heading on the company's own page names the service it sells: "Property Management Services",
+// "Full-Service Property Management Company in Boston", "Property Management Grand Rapids MI". It needs a
+// service word or a place, so a bare "Property Management" menu label or "… Software" is none.
+const serviceHeading=new RegExp(`(?:(?:[Rr]esidential|[Ss]ingle.[Ff]amily|[Mm]ulti.?[Ff]amily|[Rr]ental)\\s+)?(?:[Pp]roperty|[Rr]ental)\\s+[Mm]anagement(?:\\s+([Ss]ervices?|[Cc]ompany|[Ff]irm|[Tt]eam|[Oo]ffices?))?(\\s+(?:in|across|serving|throughout)\\s+(?:the\\s+)?\\p{Lu}[\\p{L}.'’-]*(?:(?:,\\s*|\\s+|,?\\s+and\\s+|\\s+&\\s+)(?:the\\s+)?\\p{Lu}[\\p{L}.'’-]*)*|\\s+\\p{Lu}[\\p{L}.'’-]*(?:\\s+\\p{Lu}[\\p{L}.'’-]*){0,3},?\\s+(?:${US_BUSINESS_REGIONS.join('|')}))?\\.?$`,'u');
+// Product, job, directory and review headings name no company's own service, wherever the word sits.
+const nonServiceHeading=/\b(?:software|platforms?|apps?|tools?|systems?|jobs?|careers?|hiring|directory|directories|lists?|listings?|reviews?|near me|companies)\b/iu;
+const serviceHeadingText=(text:string)=>{const trimmed=text.trim(),match=serviceHeading.exec(trimmed);return trimmed.length<=120&&!nonServiceHeading.test(trimmed)&&match!==null&&(match[1]!==undefined||match[2]!==undefined)&&taglineLead.test(trimmed.slice(0,match.index));};
+// The company placing itself in the industry: "Being in property management we're …", "As your property management company, we …".
+// Only allowlisted adjectives may sit between "As a" and the service, so a tenant, owner or client of one is never the company.
+const industryMember=new RegExp(`\\b(?:being in property management|as (?:a|an|your)(?:\\s+${leadToken}){0,2}\\s+(?:(?:residential|rental)\\s+)?property management\\s+(?:company|firm|team|professionals?|provider)),?\\s+(?:we|our)\\b`,'iu');
 function business(text:string):boolean {
- return substantive(text)&&(residentialSelfTagline(text)||management.test(text)&&propertyManagementService.test(text)&&managementServiceAction.test(text)&&(ownManager.test(text)||namedManager.test(text)))&&(!nonServiceBusiness.test(text)||explicitManagementService.test(text))&&!question(text)&&!vendor.test(text)&&!productOffering.test(text)&&!educationalOffering.test(text)&&!attributed(text)&&!contrary.test(text)&&!businessDenial.test(text);
+ return (serviceHeadingText(text)||substantive(text)&&(residentialSelfTagline(text)||industryMember.test(text)||management.test(text)&&propertyManagementService.test(text)&&managementServiceAction.test(text)&&(ownManager.test(text)||namedManager.test(text))))&&(!nonServiceBusiness.test(text)||explicitManagementService.test(text))&&!question(text)&&!vendor.test(text)&&!productOffering.test(text)&&!educationalOffering.test(text)&&!attributed(text)&&!contrary.test(text)&&!businessDenial.test(text);
 }
 const workflowTopic=/\b(?:maintenance|repair|vendors?|tenants?|requests?|dispatch|rent collection|screening|leasing|after.hours|market(?:s|ed|ing)?|qualif(?:y|ies|ied|ying)|payments?|portal)\b/iu;
 const propertyOperationsDomain=/\b(?:propert(?:y|ies)|tenants?|residents?|landlords?|rent(?:al)?|leasing|homes|houses|apartments|buildings?|condominiums)\b/iu;
