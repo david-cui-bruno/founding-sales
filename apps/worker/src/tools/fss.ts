@@ -8,7 +8,8 @@ import {discoveryResumeCommand} from './fss/discoveryResume.ts';
 import {qualificationResolveIdentityCommand} from './fss/qualificationResolveIdentity.ts';
 import {qualificationConfigureCommand} from './fss/qualificationConfigure.ts';
 import {targetingConfigureCommand} from './fss/targetingConfigure.ts';
-import {researchLowerCeilingsCommand} from './fss/researchLowerCeilings.ts';
+import {researchSetCeilingsCommand} from './fss/researchSetCeilings.ts';
+import {researchStatusCommand} from './fss/researchStatus.ts';
 import {discoveryConfigureCommand} from './fss/discoveryConfigure.ts';
 import { writeFile } from 'node:fs/promises';
 import pg from 'pg';
@@ -213,7 +214,8 @@ const ADMIN_COMMANDS: Readonly<Record<string, AdminRunner>> = Object.freeze({
   'discovery resume': discoveryResumeCommand,
   'qualification configure': qualificationConfigureCommand,
   'targeting configure': targetingConfigureCommand,
-  'research lower-ceilings': researchLowerCeilingsCommand,
+  'research set-ceilings': researchSetCeilingsCommand,
+  'research status': researchStatusCommand,
   'qualification resolve-identity': qualificationResolveIdentityCommand,
   'import-match report': importMatchReportCommand,
   // Lane M1: what the attendance correction will change, as counts.
@@ -269,7 +271,7 @@ async function adminInvocation(
     options: parsed.options,
     switches: parsed.switches,
   };
-  if (name === 'holds release-restore' || name === 'discovery configure' || name === 'apollo configure' || name === 'discovery resume' || name === 'qualification configure' || name === 'qualification resolve-identity' || name === 'targeting configure' || name === 'research lower-ceilings' || name.startsWith('release drain ')) {
+  if (name === 'holds release-restore' || name === 'discovery configure' || name === 'apollo configure' || name === 'discovery resume' || name === 'qualification configure' || name === 'qualification resolve-identity' || name === 'targeting configure' || name === 'research set-ceilings' || name.startsWith('release drain ')) {
     const identity = await launchIdentity(environment);
     if ('refusal' in identity) return identity;
     return { ...base, launch: identity.launch };
