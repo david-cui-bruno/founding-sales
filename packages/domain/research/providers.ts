@@ -64,6 +64,8 @@ export interface PageFetchRequest {
   readonly recordRedirectTrace?: boolean;
   /** Qualification needs a contact route; prioritize published contact links within the same page cap. */
   readonly prioritizeContactPages?: boolean;
+  /** Prepared own-site capture only (ADR0034): read one contact, about and team page first. */
+  readonly diversifyOwnSitePages?: boolean;
   /**
    * The exact URLs that may be requested, in order. The caller builds them with
    * `researchUrlsForFirm`; the adapter must request nothing else, including after a
@@ -98,6 +100,11 @@ export interface FetchedPage {
   readonly url: string;
   /** Opt-in page requests only: initial URL through the final URL, excluding robots reads. */
   readonly redirectTrace?: {readonly version:'page-redirect-trace-v1';readonly urls:readonly string[]};
+  /**
+   * Opt-in page requests only: the final URL of the first-party page whose own published
+   * link named this page's initial URL. Absent for a URL the caller asked for.
+   */
+  readonly linkedFrom?: string;
   /** A sha256 of the exact bytes read. The evidence item's `content_hash`. */
   readonly contentHash: string;
   /** The `content-type` header value, as received. */

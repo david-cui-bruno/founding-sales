@@ -576,6 +576,8 @@ export function researchPageFetch(deps: PageFetchDeps = {}): PageFetchProvider {
       const queue: string[] = [...input.urls];
       /** The URLs the homepage named. Passed to the policy, which permits exactly these. */
       const discovered: string[] = [];
+      /** Each discovered URL's publishing page, for an opt-in page's `linkedFrom`. */
+      const linkedFrom = new Map<string, string>();
       let discoveryDone = false;
 
       for (let index = 0; index < queue.length; index += 1) {
@@ -692,7 +694,7 @@ export function researchPageFetch(deps: PageFetchDeps = {}): PageFetchProvider {
           const contentType = headerOf(response, 'content-type');
           pages.push({
             url,
-            ...(input.recordRedirectTrace===true?{redirectTrace:{version:'page-redirect-trace-v1' as const,urls:redirectUrls}}:{}),
+            ...(input.recordRedirectTrace===true?{redirectTrace:{version:'page-redirect-trace-v1' as const,urls:redirectUrls},...(linkedFrom.has(initial)?{linkedFrom:linkedFrom.get(initial)!}:{})}:{}),
             // The exact bytes read, and nothing else: the hash and the blocks
             // `parsePageText` produces describe the same thing.
             contentHash: createHash('sha256').update(response.body).digest('hex'),
@@ -718,6 +720,7 @@ export function researchPageFetch(deps: PageFetchDeps = {}): PageFetchProvider {
               if (queue.slice(0,index+1).includes(candidate)) continue;
               discovered.push(candidate);
               navigation.push(candidate);
+              linkedFrom.set(candidate, url);
             }
             const remaining=queue.slice(index+1).filter(candidate=>!navigation.includes(candidate));
             queue.splice(index+1,queue.length-index-1,...navigation,...remaining);

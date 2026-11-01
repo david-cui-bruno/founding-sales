@@ -90,11 +90,11 @@ export async function runQualification(ctx:RepositoryContext,input:{runId:string
  if(host(source)!==host(website)){await finish('official_site_unknown');return;}
  const settings=await readResearchSettings(ctx);
  try{
-  const fetched=await deps.pageFetch.fetchPages({urls:[...new Set([source,withoutFragment(website)])],firmWebsite:website,links:[source],prioritizeContactPages:true,maxPagesPerFirm:settings.maxPagesPerFirm,maxBytes:settings.maxPageBytes,shouldContinue:async()=>await allowed(ctx,run.id)!==null,...(captureEnabled?{recordRedirectTrace:true,mayFetchUrl:mayFetch}:{})});
+  const fetched=await deps.pageFetch.fetchPages({urls:[...new Set([source,withoutFragment(website)])],firmWebsite:website,links:[source],prioritizeContactPages:true,diversifyOwnSitePages:true,maxPagesPerFirm:settings.maxPagesPerFirm,maxBytes:settings.maxPageBytes,shouldContinue:async()=>await allowed(ctx,run.id)!==null,...(captureEnabled?{recordRedirectTrace:true,mayFetchUrl:mayFetch}:{})});
   if(!fetched.ok){diagnose('fetch_failed');await finish('source_unavailable');return;}
   if(captureEnabled&&fetched.value.skipped['source_authority_refused']){await finish('source_unavailable');return;}
   fetchedPages=fetched.value.pages.length;skipped=fetched.value.skipped;
-  const captured:{source:SourceObservation;trace:FetchedPage['redirectTrace']}[]=[];
+  const captured:{source:SourceObservation;trace:FetchedPage['redirectTrace'];linkedFrom?:string|undefined}[]=[];
   observations=fetched.value.pages.slice(0,settings.maxPagesPerFirm).flatMap(page=>{
    const parsed=parsePageText(page.body,page.contentType,{omitNavigation:true,includeArticles:true});
    const blocks=parsed.blocks.filter(b=>b.text.length<=2000).slice(0,100);
@@ -108,9 +108,12 @@ export async function runQualification(ctx:RepositoryContext,input:{runId:string
    const date=publication.length===1?publication[0]:undefined;
    const observation:SourceObservation={id:randomUUID(),url:page.url,contentHash:page.contentHash,relevantTextHash:createHash('sha256').update(JSON.stringify(blocks)).digest('hex'),
     retrievedAt:page.retrievedAt,publishedAt:date?.value??null,publishedAtBlockId:date?.blockId??null,firstParty:page.firstParty,blocks,truncated:parsed.truncated||blocks.length<parsed.blocks.length};
-   captured.push({source:observation,trace:page.redirectTrace});return [observation];
+   captured.push({source:observation,trace:page.redirectTrace,linkedFrom:page.linkedFrom});return [observation];
   });
-  if(captureEnabled)preparedCapture=buildPreparedCapture({candidateId:run.candidate_id,candidateRevision:run.candidate_revision,sourceUrl:run.payload.sourceUrl},captured,isPreparedCapturePolicy(run['capture_policy_version'])?run['capture_policy_version']:undefined);
+  // Pages arrive landing first, then contact, about and team. Over the input bound, the
+  // lowest-priority extra pages are left out rather than losing the whole capture.
+  while(observations.length>1&&Buffer.byteLength(JSON.stringify(observations))>100000){const dropped=observations.pop()!;captured.splice(captured.findIndex(c=>c.source.id===dropped.id),1);}
+  if(captureEnabled)preparedCapture=buildPreparedCapture({candidateId:run.candidate_id,candidateRevision:run.candidate_revision,sourceUrl:run.payload.sourceUrl},captured,isPreparedCapturePolicy(run['capture_policy_version'])?run['capture_policy_version']:undefined,fetched.value.pages.map(page=>({url:page.url,trace:page.redirectTrace,linkedFrom:page.linkedFrom,firstParty:page.firstParty})));
  }catch(error){if(error&&typeof error==='object'&&'code' in error&&error.code==='40001')throw error;diagnose('fetch_exception');await finish('source_unavailable');return;}
  if(!observations.length||Buffer.byteLength(JSON.stringify(observations))>100000){
   diagnose(observations.length?'observations_over_bound':'no_observations');
