@@ -1,5 +1,7 @@
+import type {QualificationFact} from '@fss/contracts';
 import {providerErrorOf} from '@fss/domain/classification/providerError.ts';
 import {preparedIdentityCitationRoles} from '@fss/domain/sourcing/preparedIdentity.ts';
+import {preparedOffSiteSelection} from '@fss/domain/sourcing/qualificationCitationRoles.ts';
 import {QUALIFICATION_PROVIDER_KEY,isPricedQualificationModel,qualificationCents} from '@fss/domain/sourcing/qualificationModel.ts';
 import {qualificationRequest,qualificationSelectionSchema,QUALIFICATION_SCHEMA_TOKEN_ALLOWANCE,type QualificationExtractionProvider} from '@fss/domain/sourcing/qualificationPrompt.ts';
 import {normalizeQualificationExtractionDiagnostic,type QualificationExtractionDiagnostic} from '@fss/domain/sourcing/qualificationDiagnostics.ts';
@@ -55,9 +57,9 @@ export function qualificationExtraction(surface:GeminiSurface):QualificationExtr
   const finish=candidate?.finishReason;
   if(response.promptFeedback?.blockReason!==undefined||REFUSAL_FINISH_REASONS.some(reason=>reason===finish))return {ok:false,failureCode:'model_refusal',...cost};
   const stopReason=finish===undefined?undefined:finish==='STOP'?'end_turn' as const:finish==='MAX_TOKENS'?'max_tokens' as const:'other' as const;
-  const rejected=(failureCode:'malformed_answer'|'invalid_evidence',detail:unknown)=>{
+  const rejected=(failureCode:'malformed_answer'|'invalid_evidence',detail:unknown,preparedFacts:readonly QualificationFact[]=[])=>{
    const diagnostic=normalizeQualificationExtractionDiagnostic(detail,input.observations);
-   return {ok:false as const,failureCode,...cost,...(diagnostic?{diagnostic}:{})};
+   return {ok:false as const,failureCode,...cost,...(diagnostic?{diagnostic}:{}),...(preparedFacts.length?{preparedFacts:[...preparedFacts]}:{})};
   };
   let decoded:unknown;
   try{decoded=JSON.parse((candidate?.content?.parts??[]).filter(p=>p.thought!==true).map(p=>p.text??'').join(''));}catch{return rejected('malformed_answer',{stage:'json',code:'json_invalid',stopReason});}
@@ -66,20 +68,26 @@ export function qualificationExtraction(surface:GeminiSurface):QualificationExtr
    const selections=typeof decoded==='object'&&decoded!==null&&'selections' in decoded&&Array.isArray(decoded.selections)?decoded.selections:undefined;
    return rejected('invalid_evidence',{stage:'schema',...schemaDiagnostic(parsed.error.issues[0]),selectionCount:selections?.length,stopReason});
   }
-  const facts=[];
+  const facts:QualificationFact[]=[];
   const selectionCount=parsed.data.selections.length;
+  let refused:unknown;
   for(const [selectionIndex,selected] of parsed.data.selections.entries()){
    const source=input.observations.find(s=>s.id===selected.observationId);
    const block=source?.blocks.find(b=>b.id===selected.blockId);
-   const detail={stage:'selection',selectionIndex,selectionCount,observationId:selected.observationId,blockId:selected.blockId,stopReason};
-   if(!source)return rejected('invalid_evidence',{...detail,code:'observation_unoffered'});
-   if(!block)return rejected('invalid_evidence',{...detail,code:'block_missing'});
-   if(block.text.length>2000)return rejected('invalid_evidence',{...detail,code:'block_over_bound'});
+   const code=!source?'observation_unoffered':!block?'block_missing':block.text.length>2000?'block_over_bound':null;
+   if(code!==null||!block){refused??={stage:'selection',selectionIndex,selectionCount,observationId:selected.observationId,blockId:selected.blockId,stopReason,code};continue;}
    facts.push({...selected,value:block.text});
   }
-  const roles=preparedIdentityCitationRoles(input.candidate,facts,input.observations,input.producerVersion);
-  if(!roles.ok)return rejected(roles.reason,{...roles.diagnostic,stopReason});
-  return {ok:true,value:{facts:roles.facts,openingQuestion:parsed.data.openingQuestion,...(roles.preparedIdentity?{preparedIdentity:roles.preparedIdentity}:{})},...cost};
+  // The answer still fails as a whole for every citation reader, but each resolved residential_management selection
+  // survives on the unavailable run as the prepared brief's business judgment only: an invalid selection drops itself.
+  const judged=facts.filter(fact=>fact.kind==='residential_management');
+  if(refused!==undefined)return rejected('invalid_evidence',refused,judged);
+  // A moved company site's pages (ADR0034) are no citation host: their residential_management selections are kept
+  // for the prepared brief only, other kinds there are dropped; every remaining selection keeps the citation rules.
+  const offSite=facts.filter(fact=>preparedOffSiteSelection(input.candidate,fact,input.observations));
+  const roles=preparedIdentityCitationRoles(input.candidate,facts.filter(fact=>!offSite.includes(fact)),input.observations,input.producerVersion);
+  if(!roles.ok)return rejected(roles.reason,{...roles.diagnostic,stopReason},judged);
+  return {ok:true,value:{facts:[...roles.facts,...offSite.filter(fact=>fact.kind==='residential_management')],openingQuestion:parsed.data.openingQuestion,...(roles.preparedIdentity?{preparedIdentity:roles.preparedIdentity}:{})},...cost};
  }};
 }
 /**

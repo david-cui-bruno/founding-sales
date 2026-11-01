@@ -13,6 +13,13 @@
  */
 export const QUALIFICATION_MODEL_NAME = 'gemini-3.8-flash';
 
+/**
+ * Models whose qualification runs carry the business judgment (`QUALIFICATION_JUDGMENT_SYSTEM_TEXT`): their
+ * residential_management selections are the prepared brief's business context. The stored `model_name` is the marker,
+ * so no prompt/policy version (admission and currency) moves; Gemini ships only with the judgment prompt.
+ */
+export const BUSINESS_JUDGMENT_MODELS: readonly string[] = Object.freeze([QUALIFICATION_MODEL_NAME]);
+
 /** `provider_reservations.provider_key`; the kind `google_vertex` is credit-funded (`settings/funding.ts`). */
 export const QUALIFICATION_PROVIDER_KEY = 'google_vertex.sourcing_qualification';
 

@@ -50,3 +50,9 @@ it('distinguishes unusable source, missing block, mismatched citation and oversi
  expect(qualificationCitationRoles(candidate,[{kind:'firm_identity',value:long.blocks[0]!.text,observationId:source.id,blockId:'long'}],[long])).toMatchObject({ok:false,diagnostic:{code:'block_over_bound'}});
  expect(qualificationCitationRoles({...candidate,locality:''},[],[source])).toMatchObject({ok:false,diagnostic:{code:'candidate_invalid'}});
 });
+it('leaves a moved-site residential_management selection out of every citation read, never as authority',()=>{
+ const moved={...source,url:'https://harbor-moved.example.test/'};
+ expect(qualificationCitationRoles(candidate,[fact('b2','residential_management')],[moved])).toEqual({ok:true,facts:[]});
+ expect(qualificationCitationRoles(candidate,[fact('b1','firm_identity')],[moved])).toMatchObject({ok:false,diagnostic:{code:'source_unusable'}});
+ for(const edit of [{truncated:true},{firstParty:false}])expect(qualificationCitationRoles(candidate,[fact('b2','residential_management')],[{...moved,...edit}])).toMatchObject({ok:false,diagnostic:{code:'source_unusable'}});
+});

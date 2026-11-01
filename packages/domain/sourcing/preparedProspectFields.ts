@@ -91,9 +91,11 @@ const passageKinds=(text:string,usefulBusiness:boolean,usefulOperations:boolean,
  return result;
 };
 
-/** Classification of this one intact retained block; never source, identity or contact authority. */
-export function classifyPreparedPassage(text:string,_locality:string):PreparedPassageClassification {
- const usefulBusiness=business(text),usefulOperations=operations(text),hasContrary=contrary.test(text)||businessDenial.test(text);
+/** Classification of this one intact retained block; never source, identity or contact authority.
+ * `judged` is whether a business-judgment run's model selected this block as residential management: it then replaces
+ * the business and residential rules; contrary, attribution and the other kinds stay these rules. Absent, the rules decide. */
+export function classifyPreparedPassage(text:string,_locality:string,judged?:boolean):PreparedPassageClassification {
+ const usefulBusiness=judged??business(text),usefulOperations=operations(text),hasContrary=contrary.test(text)||businessDenial.test(text);
  return {kinds:passageKinds(text,usefulBusiness,usefulOperations,hasContrary),usefulBusiness,usefulOperations,
-  residentialContext:(usefulBusiness||usefulOperations)&&(residential.test(text)||residentialPeople.test(text)&&!nonResidentialScope.test(text)),contrary:hasContrary};
+  residentialContext:judged??((usefulBusiness||usefulOperations)&&(residential.test(text)||residentialPeople.test(text)&&!nonResidentialScope.test(text))),contrary:hasContrary};
 }

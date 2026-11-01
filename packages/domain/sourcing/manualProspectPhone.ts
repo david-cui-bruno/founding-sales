@@ -11,6 +11,8 @@ import {preparedPhoneSource} from './preparedPhoneSource.ts';
 type PhoneEvidence=NonNullable<ManualProspect['phoneEvidence']>;
 export interface ManualPhoneSnapshot extends Record<string,unknown>,ManualOriginalSnapshot{
  candidate_id:string;candidate_revision:number;id:string;observations:unknown;facts:unknown;permitted_urls:string[];
+ /** The run's model: a `BUSINESS_JUDGMENT_MODELS` run's selections are the prepared brief's business context. */
+ model_name?:string;
 }
 /** Each observation has its OWN retention/source-loss fence. A qualification read
  * alone is not permission. A source is retained either by the raw candidate's
@@ -56,7 +58,7 @@ async function readPhoneSnapshots(ctx:RepositoryContext,rows:readonly ManualPros
   JOIN LATERAL(SELECT q.observations FROM sourcing_qualification_runs q WHERE q.workspace_id=c.workspace_id AND q.candidate_id=c.id ORDER BY q.requested_at DESC,q.id DESC LIMIT 1) latest ON true
   CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(latest.observations)='array' THEN latest.observations ELSE '[]'::jsonb END) page
   WHERE c.workspace_id=$1 AND c.id=ANY($2::uuid[]))
- ) SELECT r.id,r.candidate_id,r.candidate_revision,r.observations,r.facts,c.payload,
+ ) SELECT r.id,r.candidate_id,r.candidate_revision,r.observations,r.facts,r.model_name,c.payload,
  r.retained_identity_decision_id,d.original_run_id,d.original_revision,d.result_revision,d.candidate_id AS decision_candidate_id,
  original.candidate_id AS original_candidate_id,original.candidate_revision AS ancestor_revision,original.observations AS original_observations,
  original.reason AS original_reason,d.observation_id AS decision_observation_id,d.block_id AS decision_block_id,d.content_hash AS decision_content_hash,d.relevant_text_hash AS decision_text_hash,

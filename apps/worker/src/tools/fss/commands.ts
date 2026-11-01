@@ -101,6 +101,7 @@ export const COMMAND_DEPENDENCIES: Readonly<Record<string, DependencyMode>> = Ob
   // Research settings, spend, firm-run counter and discovery allowance, READ ONLY.
   'research status': 'database',
   'qualification resolve-identity': 'database',
+  'qualification requeue-prepared': 'database',
   // Lane M1: what the attendance correction (0039) will change, counts only, READ ONLY.
   'meetings attendance-report': 'database',
   'suppression-journal replay': 'journal',
@@ -350,6 +351,12 @@ export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
     valueFlags:['--workspace-id','--candidate-id','--expected-revision','--confirmed-identity','--reason',...REPORTABLE],
     booleanFlags:[],requiredFlags:['--workspace-id','--candidate-id','--expected-revision','--confirmed-identity','--reason'],
     summary:'After human identity review, detach stale source attribution and require new qualification. Existing CRM history remains untouched; audited ECS launcher required.',
+  },
+  {
+    path:['admin','qualification','requeue-prepared'],
+    valueFlags:['--workspace-id','--approval-ref','--limit',...REPORTABLE],
+    booleanFlags:['--dry-run'],requiredFlags:['--workspace-id','--approval-ref'],
+    summary:'One-time re-qualification of current prepared candidates whose latest run lacks the business judgment, through requestQualification under the existing research holds and firm/money ceilings; --dry-run counts only. Audited ECS launcher and approval reference required; no ceiling, quota, sending or contact change.',
   },
   {
     path:['admin','qualification','configure'],
