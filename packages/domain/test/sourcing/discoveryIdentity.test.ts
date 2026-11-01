@@ -1,5 +1,5 @@
 import {expect,it} from 'vitest';
-import {classifyDiscoveryPage,companyHost,discoveryFirmName,isDiscoveryDirectory} from '../../sourcing/discoveryIdentity.ts';
+import {classifyDiscoveryPage,companyHost,discoveryFirmName,isDiscoveryDirectory,registrableDomain} from '../../sourcing/discoveryIdentity.ts';
 it('separates branded names from the production SEO titles without treating them as evidence',()=>{
  for(const [title,name] of [
   ['Property Management Company Providence, RI | Lyon Property Group','Lyon Property Group'],
@@ -33,4 +33,10 @@ it('keys a company by host without www and keeps distinct hosts distinct',()=>{
  expect(companyHost('https://WWW.Alarca.com/charlotte')).toBe('alarca.com');
  expect(companyHost('https://pittsburgh.homeriver.com/')).toBe('pittsburgh.homeriver.com');
  expect(companyHost('https://www.homeriver.com/pennsylvania')).toBe('homeriver.com');
+});
+it('approximates the registrable domain and drops property-management portal and statistics hosts',()=>{
+ for(const [url,domain] of [['https://community.evernest.co/x','evernest.co'],['https://www.evernest.co/blog','evernest.co'],['https://evernest.appfolio.com/connect','appfolio.com'],
+  ['https://shop.firm.co.uk/','firm.co.uk'],['https://www.alpha.mix.example.test/','alpha.mix.example.test']] as const)expect(registrableDomain(url)).toBe(domain);
+ for(const url of ['https://evernest.appfolio.com/connect/users/sign_in','https://acme.managebuilding.com/Resident','https://www.rentcafe.com/x','https://app.doorloop.com/','https://www.macrotrends.net/global-metrics/cities/23159/tucson/population'])
+  expect(classifyDiscoveryPage({url,title:'Acme Property Management'})).toBe('noise');
 });

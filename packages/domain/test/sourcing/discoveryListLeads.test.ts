@@ -98,3 +98,22 @@ it('routes every hit in result order and expands only the first three list pages
  expect(routed.map(r=>r.hit)).toEqual(hits);
  expect(lists.map(h=>h.url)).toEqual(['https://www.yelp.com/search?x=1','https://blog.example.test/a','https://www.bbb.org/x']);
 });
+
+it('drops the production Tucson waste: statistic citations, the list owner\'s own subdomains and portals, keeping named listings',()=>{
+ const list='https://www.evernest.co/blog/tucson-property-management-companies';
+ const html=`<p>Tucson grew <a href="https://www.macrotrends.net/global-metrics/cities/23159/tucson/population">1.1% growth rate</a> last year.</p>
+  <p>Rents rose <a href="https://stats.example-data.test/tucson">2.4% year over year</a>.</p>
+  <h2>Rentals America</h2><p>Family owned.</p><a href="https://rentalsamericatucson.com/">Learn more here</a>
+  <p>Join our <a href="https://community.evernest.co/">community</a> or <a href="https://evernest.appfolio.com/connect">Owner Login</a>.</p>
+  <p>Already a client? <a href="https://clients.firm-portal.example.test/">Tenant Portal</a> <a href="https://pay.example-pm.test/">Pay rent</a></p>
+  <p><a href="https://eliteimpactrealty.com/">Learn more here</a></p>
+  <h3>100% Property Management</h3><a href="https://hundred.example.test/">Click here to learn more</a>
+  <li><a href="https://pct.example.test/">5% Realty Group</a></li>`;
+ expect(discoveryListLeads(list,page(html,undefined,list)).map(({host,label})=>({host,label}))).toEqual([
+  {host:'rentalsamericatucson.com',label:'Rentals America'},
+  // A navigation label without a heading still leaves the host to name a real listing.
+  {host:'eliteimpactrealty.com',label:''},
+  {host:'hundred.example.test',label:'100% Property Management'},
+  {host:'pct.example.test',label:'5% Realty Group'},
+ ]);
+});
