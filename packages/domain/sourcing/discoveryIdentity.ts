@@ -16,7 +16,12 @@ export const DISCOVERY_DIRECTORY_DOMAINS=[...DISCOVERY_SEARCH_EXCLUDED_DOMAINS,
 /** Hosts that never describe a prospect company: reference, social, jobs, listings and portals. */
 export const DISCOVERY_NONCOMPANY_DOMAINS=['wikipedia.org','merriam-webster.com','dictionary.com','britannica.com','mychart.org','facebook.com','instagram.com',
  'linkedin.com','twitter.com','x.com','youtube.com','tiktok.com','reddit.com','quora.com','pinterest.com','indeed.com','glassdoor.com','ziprecruiter.com',
- 'zillow.com','trulia.com','redfin.com','realtor.com','apartments.com','rent.com','craigslist.org','nextdoor.com','google.com','apple.com','amazon.com'] as const;
+ 'zillow.com','trulia.com','redfin.com','realtor.com','apartments.com','rent.com','craigslist.org','nextdoor.com','google.com','apple.com','amazon.com',
+ 'macrotrends.net','statista.com','city-data.com','bestplaces.net','datausa.io','worldpopulationreview.com','neighborhoodscout.com'] as const;
+/** Property-management software, portal and payment hosts. A firm's owner/tenant portal or
+ * rent-payment page on them is not that firm's own site. */
+export const DISCOVERY_PORTAL_DOMAINS=['appfolio.com','managebuilding.com','buildium.com','rentmanager.com','propertyware.com','rentcafe.com','yardi.com',
+ 'yardibreeze.com','doorloop.com','tenantcloud.com','rentecdirect.com','rentvine.com','turbotenant.com','avail.co','rentredi.com','cozy.co','paylease.com','zego.io'] as const;
 
 const hostOf=(url:string)=>new URL(url).hostname.toLowerCase().replace(/\.$/u,'');
 const within=(host:string,domains:readonly string[])=>domains.some(domain=>host===domain||host.endsWith('.'+domain));
@@ -24,6 +29,18 @@ const within=(host:string,domains:readonly string[])=>domains.some(domain=>host=
 /** Exact host families only: an ordinary firm's similar name is not a directory. */
 export function isDiscoveryDirectory(url:string):boolean {
  return within(hostOf(url),DISCOVERY_DIRECTORY_DOMAINS);
+}
+
+// Suffixes under which the registrable domain takes three labels: multi-label country
+// suffixes, and shared hosting where each tenant subdomain is its own organization.
+const MULTI_LABEL_SUFFIXES=new Set(['co.uk','org.uk','ac.uk','com.au','net.au','org.au','co.nz','co.za','com.br','com.mx','co.in','com.sg','co.jp',
+ 'wixsite.com','squarespace.com','wordpress.com','weebly.com','godaddysites.com','webflow.io','netlify.app','github.io','blogspot.com','site123.me',
+ 'carrd.co','business.site','ueniweb.com','vercel.app','pages.dev','myshopify.com','editorx.io','strikingly.com','jimdosite.com']);
+/** One organization per registrable domain: the last two labels, three under a known
+ * multi-label or shared-hosting suffix. An approximation of eTLD+1 for same-organization links only. */
+export function registrableDomain(url:string):string {
+ const labels=hostOf(url).split('.');
+ return labels.slice(MULTI_LABEL_SUFFIXES.has(labels.slice(-2).join('.'))?-3:-2).join('.');
 }
 
 /** One company per host (ADR0034): lowercase hostname without `www.`. */
@@ -36,7 +53,7 @@ export type DiscoveryPageKind='company'|'list'|'noise';
 /** Routes a search hit or stored record (ADR0034). A list page yields leads, never facts. */
 export function classifyDiscoveryPage(input:{url:string;title:string}):DiscoveryPageKind {
  const host=hostOf(input.url);
- if(within(host,DISCOVERY_NONCOMPANY_DOMAINS)||/\.(?:gov|edu|mil)$/u.test(host))return 'noise';
+ if(within(host,DISCOVERY_NONCOMPANY_DOMAINS)||within(host,DISCOVERY_PORTAL_DOMAINS)||/\.(?:gov|edu|mil)$/u.test(host))return 'noise';
  if(within(host,DISCOVERY_DIRECTORY_DOMAINS)||LIST_TITLE.test(input.title))return 'list';
  return 'company';
 }
