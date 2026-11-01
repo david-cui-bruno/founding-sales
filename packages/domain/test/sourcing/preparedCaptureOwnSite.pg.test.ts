@@ -66,6 +66,17 @@ it('erases the association when a linked page is lost, leaving only the exact la
  expect(brief.value.callable).toMatchObject({state:'not_callable',phone:null});
 });
 
+it('cites the host homepage\'s business context when the source is a deep contact page (production fourleafpm.com/contact shape)',async()=>{
+ const f=await capture({maxPages:4,source:site=>`${site}/contact-us`,extra:site=>({
+  [`${site}/contact-us`]:'<nav><a href="/about-us">About</a><a href="/our-team">Team</a></nav><main><p>Questions about your rental? Call us at (617) 555-0100.</p></main>',
+  [`${site}/`]:'<main><h1>Property Management in Boston</h1><p>Our property management company manages residential homes for owners in Boston.</p></main>'})});
+ expect(f.requests.filter(url=>!url.endsWith('/robots.txt'))).toEqual([`${f.site}/contact-us`,`${f.site}/`,`${f.site}/about-us`,`${f.site}/our-team`]);
+ const stored=await f.stored();
+ expect(stored.prepared_capture?.pages.map(p=>[p.url,p.redirectUrls])).toEqual(expect.arrayContaining([[`${f.site}/`,[`${f.site}/contact-us`,`${f.site}/`]]]));
+ const brief=await tx(()=>readPreparedProspect(ctx(),f.target));if(!brief.ok)throw Error(brief.reason);
+ expect(brief.value.passages.filter(p=>p.kind==='business').map(p=>p.url)).toContain(`${f.site}/`);
+ expect(brief.value.callable).toMatchObject({state:'callable',phone:'(617) 555-0100'});
+});
 it('keeps model input inside the existing bound by leaving out the lowest-priority extra pages first',async()=>{
  // Eight full pages of whole blocks exceed the 100000-byte observation bound together.
  const full=(label:string)=>`<main>${Array.from({length:60},(_,i)=>`<p>${label} paragraph ${i}: ${'fictional residential management detail '.repeat(5)}</p>`).join('')}</main>`;

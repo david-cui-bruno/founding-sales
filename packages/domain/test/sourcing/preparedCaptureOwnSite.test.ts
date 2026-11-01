@@ -11,7 +11,15 @@ it('orders one contact, about and team page first from the landing page\'s own s
  expect(urls).toEqual([`${site}/contact-us`,`${site}/company`,`${site}/leadership`,`${site}/contact`,`${site}/services`,`${site}/faq`,`${site}/about-us`,'https://ownsite.example.test/our-team']);
  // Other research keeps its existing filter and page order.
  expect(discoverSameSiteUrls({firmWebsite:`${site}/`,maxPagesPerFirm:4},{from:`${site}/`,hrefs})).toEqual([`${site}/services`,`${site}/faq`,`${site}/contact-us`,`${site}/contact`,`${site}/about-us`,'https://ownsite.example.test/our-team']);
- expect(['/contact-us','/about','/who-we-are/','/meet-the-team','/staff','/property-management-company','/teamwork','/'].map(path=>ownSitePageKind(site+path))).toEqual(['contact','about','about','team','team',null,null,null]);
+ expect(['/contact-us','/about','/who-we-are/','/meet-the-team','/staff','/property-management-company','/teamwork','/'].map(path=>ownSitePageKind(site+path))).toEqual(['contact','about','about','team','team',null,null,'home']);
+});
+it('leads with the host homepage when the landing page is deeper than the root, linked or not, and only in the prepared pass',()=>{
+ const hrefs=['/about-us','/contact','/team','/services'];
+ expect(discoverSameSiteUrls({firmWebsite:`${site}/contact`,maxPagesPerFirm:4,prioritizeContactPages:true,diversifyOwnSitePages:true},{from:`${site}/contact/`,hrefs})).toEqual([`${site}/`,`${site}/contact`,`${site}/about-us`,`${site}/team`,`${site}/services`]);
+ // A root landing is the homepage already; phone discovery and research keep their own orders.
+ expect(discoverSameSiteUrls({firmWebsite:`${site}/`,maxPagesPerFirm:4,prioritizeContactPages:true,diversifyOwnSitePages:true},{from:`${site}/`,hrefs})[0]).toBe(`${site}/contact`);
+ expect(discoverSameSiteUrls({firmWebsite:`${site}/contact`,maxPagesPerFirm:4,prioritizeContactPages:true},{from:`${site}/contact`,hrefs})).not.toContain(`${site}/`);
+ expect(discoverSameSiteUrls({firmWebsite:`${site}/contact`,maxPagesPerFirm:4},{from:`${site}/contact`,hrefs})).not.toContain(`${site}/`);
 });
 
 const blocks=(text:string)=>[{id:'b1',text}];
@@ -53,6 +61,11 @@ it('associates at most one linked contact, about and team page through the landi
  expect(buildPreparedCapture(binding,[pages[0]!,{source:{...offsite,firstParty:false},trace:trace(`${site}/contact-x`,'https://partner.example.test/contact'),linkedFrom:`${site}/`}])).toBeNull();
 });
 
+it('associates the homepage a deep landing page led to through the landing page\'s traced chain, once',()=>{
+ const deep={...binding,sourceUrl:`${site}/contact`},landing=observation(`${site}/contact`),home=observation(`${site}/`),about=observation(`${site}/about-us`);
+ expect(buildPreparedCapture(deep,[{source:landing,trace:trace(`${site}/contact`)},{source:home,trace:trace(`${site}/`),linkedFrom:`${site}/contact`},{source:about,trace:trace(`${site}/about-us`),linkedFrom:`${site}/contact`}])?.pages.map(p=>[p.observationId,p.redirectUrls]))
+  .toEqual([[home.id,[`${site}/contact`,`${site}/`]],[about.id,[`${site}/contact`,`${site}/about-us`]]]);
+});
 it('v2 lineage may follow the company site once to another company host, never to a directory or a second move',()=>{
  const movedSite='https://tucson.moved-site.test',landing=observation(`${movedSite}/`),contact=observation(`${movedSite}/contact-us`);
  const pages=[{source:landing,trace:trace(`${site}/`,`${movedSite}/`)},{source:contact,trace:trace(`${movedSite}/contact-us`),linkedFrom:`${movedSite}/`}];

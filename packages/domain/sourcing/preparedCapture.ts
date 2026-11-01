@@ -55,8 +55,8 @@ export function validatePreparedCapture(value:unknown,binding:PreparedCaptureBin
 
 /** The caller pairs each newly parsed observation with the adapter page that
  * supplied its bytes. Metadata stays outside observations and model inputs.
- * V2 also associates at most one contact, about and team page that the traced landing
- * page itself linked to (ADR0034): its lineage is the landing page's request chain from
+ * V2 also associates at most one homepage (a deeper landing page's own host root), contact, about and team page that the traced landing
+ * page led to (ADR0034): its lineage is the landing page's request chain from
  * the exact source followed by the linked page's own chain, so every URL the association
  * depends on keeps its own loss/expiry/denial check. Any other auxiliary page stays unassociated. */
 export interface PreparedCaptureLineage {url:string;trace:FetchedPage['redirectTrace'];linkedFrom?:string|undefined;firstParty:boolean}
