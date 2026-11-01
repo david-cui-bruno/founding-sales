@@ -58,6 +58,7 @@ export const CALLING_PREPARATION_CONSTRAINT_CASES:readonly Case[]=[
  bad('calling_preparations_check1',{updated_at:'2000-01-01T00:00:00Z'}),
  bad('calling_preparations_check2',{choice:'{}'}),
  bad('calling_preparations_erase_reason_check',()=>({state:'erased',choice:null,source_url_hashes:null,profile_hash:null,erased_at:new Date(Date.now()+1000),erase_reason:'rebound'})),
+ bad('calling_preparations_source_kind',{source_kind:'search_hit'}),
  duplicate('calling_preparations_pkey',()=>({})),
  duplicate('calling_preparations_workspace_id_candidate_ref_key',()=>({id:randomUUID()})),
  duplicate('calling_preparations_workspace_id_firm_ref_key',()=>({id:randomUUID(),candidate_ref:randomUUID()})),

@@ -8,7 +8,7 @@ import {recordCrmAuditEvent} from '../crm/audit.ts';
 import {isKnownTimeZone} from '../src/rules/localClock.ts';
 import {phoneDiscoveryAdmin,phoneDiscoveryNow} from '../sourcing/prospectPhoneDiscoveryAuthority.ts';
 import {lockDiscoveryReviewSources} from '../sourcing/discoveryReviewVisibility.ts';
-import {readPreparationSource,preparationSelection,samePreparationChoice,type PreparationAuthority,type PreparationResult} from './preparationSource.ts';
+import {readPreparationSource,preparationSelection,preparationSourceMatches,samePreparationChoice,type PreparationAuthority,type PreparationResult} from './preparationSource.ts';
 import {lockPreparationCleanup} from './preparationLifecycle.ts';
 import {preparationForCandidate,preparationForFirm,plannedProfileHash,storedPreparedProfile,writePreparedProfile,preparationDuplicates} from './preparationStore.ts';
 
@@ -21,7 +21,7 @@ export async function readCallingPreparation(ctx:RepositoryContext,input:Calling
  if(!await currentAdmin(ctx,authority))return {state:'refused',reason:'admin_only'};
  await lockDiscoveryReviewSources(ctx);
  const prep=await preparationForCandidate(ctx,input.candidateId);
- const source=await readPreparationSource(ctx,input,authority);
+ const source=await readPreparationSource(ctx,input,authority,false,prep?.prepared_by_ref);
  if(!await currentAdmin(ctx,authority))throw new CallingPreparationChanged('authority_changed');
  if(prep?.state==='erased'||prep&&!source.ok)return {state:'withdrawn',preparationId:prep.id,revision:prep.revision,reason:'source_withdrawn'};
  if(!source.ok)return {state:'refused',reason:source.reason};
@@ -37,7 +37,7 @@ export async function readCallingPreparation(ctx:RepositoryContext,input:Calling
  const profile=prep?await storedPreparedProfile(ctx,prep.firm_ref):source.value.profile;
  if(!profile)return {state:'refused',reason:'firm_changed'};
  const duplicates=await preparationDuplicates(ctx,profile,source.value.phone.value,prep?.firm_ref??null);
- const final=await readPreparationSource(ctx,input,authority);
+ const final=await readPreparationSource(ctx,input,authority,false,prep?.prepared_by_ref);
  if(!final.ok||!await currentAdmin(ctx,authority))throw new CallingPreparationChanged(final.ok?'authority_changed':final.reason);
  const boundExpiry=prep?await requireCurrentCallingPreparation(ctx,prep.firm_ref,authority):null;
  const phone={...final.value.phone,expiresAt:boundExpiry??final.value.phone.expiresAt};
@@ -57,7 +57,7 @@ export async function confirmCallingPreparation(ctx:RepositoryContext,raw:Callin
  await lockPreparationCleanup(ctx);
  const existing=await preparationForCandidate(ctx,input.selection.candidateId);
  if(existing?.state==='erased')return {ok:false,reason:'preparation_terminal'};
- const source=await readPreparationSource(ctx,input.selection,authority);if(!source.ok)return source;
+ const source=await readPreparationSource(ctx,input.selection,authority,false,existing?.prepared_by_ref);if(!source.ok)return source;
  if(input.expected.state==='absent'&&existing||input.expected.state==='live'&&(!existing||existing.id!==input.expected.preparationId||existing.revision!==input.expected.revision||existing.route_version!==input.expected.routeVersion))return {ok:false,reason:'preparation_version_conflict'};
  if(existing&&existing.candidate_revision!==input.selection.expectedCandidateRevision)return {ok:false,reason:'candidate_changed'};
  if(existing){
@@ -70,10 +70,10 @@ export async function confirmCallingPreparation(ctx:RepositoryContext,raw:Callin
  const w=ctx.scope.workspaceId,id=existing?.id??randomUUID(),firmId=existing?.firm_ref??randomUUID(),routeId=existing?.route_ref??randomUUID();
  const hash=await plannedProfileHash(ctx,profile);
  if(!existing){
-  await ctx.db.query(`INSERT INTO calling_preparations(workspace_id,id,candidate_ref,candidate_revision,discovery_run_ref,source_creator_ref,prepared_by_ref,
+  await ctx.db.query(`INSERT INTO calling_preparations(workspace_id,id,candidate_ref,candidate_revision,discovery_run_ref,source_kind,source_creator_ref,prepared_by_ref,
    firm_ref,route_ref,firm_id,phone_route_id,choice,source_url_hashes,profile_hash,source_expires_at)
-   VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$8,$9,$10::jsonb,$11::text[],$12,$13)`,
-  [w,id,input.selection.candidateId,input.selection.expectedCandidateRevision,source.value.run.id,source.value.run.creator_user_id,ctx.scope.actor.userId,
+   VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$9,$10,$11::jsonb,$12::text[],$13,$14)`,
+  [w,id,input.selection.candidateId,input.selection.expectedCandidateRevision,source.value.runId,source.value.kind,source.value.creatorUserId,ctx.scope.actor.userId,
    firmId,routeId,JSON.stringify(input.selection.choice),source.value.sourceHashes,hash,source.value.phone.expiresAt]);
   const created=await createFirm(ctx,{name:profile.companyName,website:profile.website??undefined,addressLine:profile.addressLine??undefined,
    locality:profile.locality??undefined,regionCode:profile.regionCode??undefined,postalCode:profile.postalCode??undefined,countryCode:'US',assignedUserId:ctx.scope.actor.userId,
@@ -99,8 +99,8 @@ export async function requireCurrentCallingPreparation(ctx:RepositoryContext,fir
  const p=await preparationForFirm(ctx,firmId);if(!p)return null;
  const input=preparationSelection(p.candidate_ref,p.candidate_revision,p.choice);
  if(p.state!=='live'||!input||!await phoneDiscoveryAdmin(ctx,p.prepared_by_ref))throw new CallingPreparationChanged('source_withdrawn');
- const source=await readPreparationSource(ctx,input,authority);if(!source.ok)throw new CallingPreparationChanged(source.reason);
- if(source.value.run.creator_user_id!==p.source_creator_ref||source.value.run.id!==p.discovery_run_ref)throw new CallingPreparationChanged('source_withdrawn');
+ const source=await readPreparationSource(ctx,input,authority,false,p.prepared_by_ref);if(!source.ok)throw new CallingPreparationChanged(source.reason);
+ if(!preparationSourceMatches(source.value,p))throw new CallingPreparationChanged('source_withdrawn');
  const rows=await ctx.db.query(`SELECT 1 FROM firms f JOIN phone_routes r ON r.workspace_id=f.workspace_id AND r.firm_id=f.id
   WHERE f.workspace_id=$1 AND f.id=$2 AND f.status='active' AND f.calling_preparation_id=$3 AND f.calling_preparation_erased_at IS NULL
   AND r.id=$4 AND r.version=$5 AND r.e164=$6 AND r.calling_preparation_id=$3 AND r.calling_preparation_erased_at IS NULL
