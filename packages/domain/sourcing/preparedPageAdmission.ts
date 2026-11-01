@@ -5,7 +5,8 @@ import {originalAuthorities} from './manualProspectOriginalAuthority.ts';
 import {preparedCaptureAuthority} from './preparedCapture.ts';
 
 export type PreparedSourceExpirations=ReadonlyMap<string,number>;
-export interface AdmittedPreparedPage {source:SourceObservation;captured:boolean;expires:number|undefined}
+/** `moved`: captured on the company site's moved host (ADR0034), cited through its manifest lineage, not the website host. */
+export interface AdmittedPreparedPage {source:SourceObservation;captured:boolean;moved:boolean;expires:number|undefined}
 export interface AdmittedPreparedPages {pages:AdmittedPreparedPage[];unshown:boolean;captureDeadline:number|null;capturedIds:ReadonlySet<string>;website:string|null}
 const host=(value:string|null)=>{try{const url=new URL(value??'');return ['http:','https:'].includes(url.protocol)&&!url.username&&!url.password?url.hostname.toLowerCase().replace(/^www\./u,''):null;}catch{return null;}};
 
@@ -29,7 +30,7 @@ export function admitPreparedPages(snapshot:ManualPhoneSnapshot,now:number,expir
   const source=parsed.data,expires=expirations.get(source.url);
   // A captured page keeps its own host: its manifest lineage may follow the company site's move (ADR0034).
   if((!snapshot.permitted_urls.includes(source.url)&&!captured.has(source.id))||new Set(source.blocks.map(block=>block.id)).size!==source.blocks.length||(!grants.authorities[source.id]&&!captured.has(source.id))||!expectedHost||host(source.url)!==expectedHost&&!captured.has(source.id)||!source.firstParty||Date.parse(source.retrievedAt)>now||expires!==undefined&&expires<=now||createHash('sha256').update(JSON.stringify(source.blocks)).digest('hex')!==source.relevantTextHash){result.unshown=true;continue;}
-  result.pages.push({source,captured:captured.has(source.id),expires});
+  result.pages.push({source,captured:captured.has(source.id),moved:host(source.url)!==expectedHost,expires});
  }
  return result;
 }

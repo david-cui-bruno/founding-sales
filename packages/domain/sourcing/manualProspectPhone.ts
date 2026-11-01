@@ -104,7 +104,7 @@ export function projectManualPhone(snapshot:ManualPhoneSnapshot|undefined,now=Da
  // ADR0034: a candidate with a current prepared source association is read through the pages its brief cites.
  const prepared=preparedPhoneSource(snapshot,now);
  const scan=scanManualLiteralPhones({runId:snapshot.id,observations:prepared?.observations??snapshot.observations,
-  ...(prepared?{website:prepared.website,authorities:prepared.authorities,partial:prepared.partial}:originalAuthorities(snapshot)),lineage,now});
+  ...(prepared?{website:prepared.website,authorities:prepared.authorities,partial:prepared.partial,moved:prepared.moved}:originalAuthorities(snapshot)),lineage,now});
  if(scan.reason)return {state:'not_extracted',reason:scan.reason,coverage:scan.coverage};
  const factSources=factEvidence.state==='observed'||factEvidence.state==='conflicting'?factEvidence.sources:[];
  const sources=[...factSources,...scan.sources];
