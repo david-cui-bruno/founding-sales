@@ -52,7 +52,7 @@ const industryMember=new RegExp(`\\b(?:being in property management|as (?:a|an|y
 // company noun may not be qualified as a directory, review, listing, software or similar product, and no such word
 // may appear in the introduction at all.
 const introducedRole='(?:tenants?|landlords?|owners?|clients?|customers?|residents?|investors?|members?|my|our|your)';
-const introducedName=(first:string)=>`${first}(?:(?!\\b${introducedRole}\\b)[^.!?\\n]){1,80}?`;
+const introducedName=(first:string)=>`(?!${introducedRole}\\b)${first}(?:(?!\\b${introducedRole}\\b)[^.!?\\n]){1,80}?`;
 const selfIntroduction=new RegExp(`(?:\\bwelcome to\\s+${introducedName('[^.!?\\n,]')},|^(?!(?:my|our|your|the|this|that|a|an)\\b)${introducedName('\\p{Lu}')}\\s+is)\\s+(?:an?|your)(?:\\s+${leadToken}){0,3}\\s+(?:(?:residential|rental)\\s+)?(?:real estate|property|rental)\\s+management\\s+(?:company|firm)\\b(?!\\s+(?:director(?:y|ies)|reviews?|listings?|marketplace|software|platforms?|apps?|sites?|portals?|finder|search)\\b)`,'iu');
 const introductionNonService=/\b(?:director(?:y|ies)|reviews?|listings?|marketplace|software|platforms?|apps?|portals?|websites?|finder|near me|jobs?|careers?|hiring|compare|comparison)\b/iu;
 // "Full Property Management", "Full Management Services" as an own-page service heading; product/job/directory words still refuse.

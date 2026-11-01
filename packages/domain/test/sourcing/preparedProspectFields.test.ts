@@ -245,6 +245,9 @@ it.each([
  'Welcome to RentHub, a property management company marketplace where owners compare local managers.',
  'Welcome to Acme, a property management company with an online review portal for tenants.',
  'Welcome to the owners of Acme, a property management company we hired last year.',
+ 'Welcome to tenants of Acme, a local property management company serving Boston.',
+ 'Welcome to clients of Acme, a property management company we hired last year.',
+ 'Tenants of Acme is a property management company forum.',
 ])('still refuses labels, products, jobs, directories, testimonials and denials: %s',text=>{
  expect(classifyPreparedPassage(text,'').usefulBusiness).toBe(false);
 });
