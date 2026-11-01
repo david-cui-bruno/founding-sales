@@ -12,7 +12,13 @@ type Dependency={id:string;dependencyUrls:string[];groups:Set<string>};
  * own URL/denial/expiry/evidence set; the union is only a database transport bound.
  * Principal/lifecycle are common to this single context, never cached across calls.
  * Shared manual/phone grants and permitted_urls are neither changed nor reused. */
-export async function withPreparedCaptureSnapshots(ctx:RepositoryContext,snapshots:readonly ManualPhoneSnapshot[]):Promise<ManualPhoneSnapshot[]>{
+export interface PreparedCaptureCustody {
+ /** The principal whose authority a captured dependency needs, when it is not the reading actor (a preparation's preparer). */
+ principal:boolean;
+ /** A nonlocking projection read: no lifecycle lock is held, so none is required of it. */
+ lockless?:boolean;
+}
+export async function withPreparedCaptureSnapshots(ctx:RepositoryContext,snapshots:readonly ManualPhoneSnapshot[],custody?:PreparedCaptureCustody):Promise<ManualPhoneSnapshot[]>{
  if(!snapshots.length)return [];
  const captures=(await ctx.db.query<{id:string;candidate_id:string;candidate_revision:number;capture_policy_version:string;capture_state:string;prepared_capture:unknown;payload:unknown}>(`SELECT r.id,r.candidate_id,r.candidate_revision,r.capture_policy_version,r.state AS capture_state,r.prepared_capture,c.payload
  FROM sourcing_qualification_runs r JOIN sourcing_candidates c ON c.workspace_id=r.workspace_id AND c.id=r.candidate_id AND c.revision=r.candidate_revision
@@ -39,7 +45,7 @@ export async function withPreparedCaptureSnapshots(ctx:RepositoryContext,snapsho
  const union=[...new Set([...dependencies.values()].flatMap(d=>[...d.groups]))];
  const evidence=(await ctx.db.query<Evidence>("SELECT id,source_reference,content_hash,retrieved_at,terms_allow_retention,retention_expires_at FROM evidence_items WHERE workspace_id=$1 AND rtrim(source_reference,'/')=ANY($2::text[]) ORDER BY id",[ctx.scope.workspaceId,union])).rows;
  const lifecycle=(await ctx.db.query<{held:boolean}>("SELECT calling_preparation_lock_held('sourcing-discovery-review:'||$1::text,'ExclusiveLock') AS held",[ctx.scope.workspaceId])).rows[0]?.held===true;
- const principal=lifecycle&&ctx.scope.actor.kind==='user'&&ctx.scope.actor.role==='admin'&&await activeIdentityActor(ctx);
+ const principal=(lifecycle||custody?.lockless===true)&&(custody?custody.principal:ctx.scope.actor.kind==='user'&&ctx.scope.actor.role==='admin'&&await activeIdentityActor(ctx));
  return current.map(snapshot=>{
   const dependency=dependencies.get(snapshot.id);if(!dependency)return snapshot;
   const limit=limits.find(row=>row.id===snapshot.id);
