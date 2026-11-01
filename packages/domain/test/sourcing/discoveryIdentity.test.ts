@@ -36,7 +36,7 @@ it('keys a company by host without www and keeps distinct hosts distinct',()=>{
 });
 it('approximates the registrable domain and drops property-management portal and statistics hosts',()=>{
  for(const [url,domain] of [['https://community.evernest.co/x','evernest.co'],['https://www.evernest.co/blog','evernest.co'],['https://evernest.appfolio.com/connect','appfolio.com'],
-  ['https://shop.firm.co.uk/','firm.co.uk'],['https://www.alpha.mix.example.test/','alpha.mix.example.test']] as const)expect(registrableDomain(url)).toBe(domain);
+  ['https://shop.firm.co.uk/','firm.co.uk'],['https://publisher.wixsite.com/list','publisher.wixsite.com'],['https://acme.squarespace.com/','acme.squarespace.com']] as const)expect(registrableDomain(url)).toBe(domain);
  for(const url of ['https://evernest.appfolio.com/connect/users/sign_in','https://acme.managebuilding.com/Resident','https://www.rentcafe.com/x','https://app.doorloop.com/','https://www.macrotrends.net/global-metrics/cities/23159/tucson/population'])
   expect(classifyDiscoveryPage({url,title:'Acme Property Management'})).toBe('noise');
 });

@@ -31,14 +31,15 @@ export function isDiscoveryDirectory(url:string):boolean {
  return within(hostOf(url),DISCOVERY_DIRECTORY_DOMAINS);
 }
 
-// Suffixes under which the registrable domain takes three labels.
-const MULTI_LABEL_SUFFIXES=new Set(['co.uk','org.uk','ac.uk','com.au','net.au','org.au','co.nz','co.za','com.br','com.mx','co.in','com.sg','co.jp']);
+// Suffixes under which the registrable domain takes three labels: multi-label country
+// suffixes, and shared hosting where each tenant subdomain is its own organization.
+const MULTI_LABEL_SUFFIXES=new Set(['co.uk','org.uk','ac.uk','com.au','net.au','org.au','co.nz','co.za','com.br','com.mx','co.in','com.sg','co.jp',
+ 'wixsite.com','squarespace.com','wordpress.com','weebly.com','godaddysites.com','webflow.io','netlify.app','github.io','blogspot.com','site123.me',
+ 'carrd.co','business.site','ueniweb.com','vercel.app','pages.dev','myshopify.com','editorx.io','strikingly.com','jimdosite.com']);
 /** One organization per registrable domain: the last two labels, three under a known
- * multi-label suffix. An approximation of eTLD+1 for same-organization links only. Each host
- * under the reserved `.test` fixture TLD is its own organization. */
+ * multi-label or shared-hosting suffix. An approximation of eTLD+1 for same-organization links only. */
 export function registrableDomain(url:string):string {
- const host=hostOf(url),labels=host.split('.');
- if(host.endsWith('.test'))return companyHost(url);
+ const labels=hostOf(url).split('.');
  return labels.slice(MULTI_LABEL_SUFFIXES.has(labels.slice(-2).join('.'))?-3:-2).join('.');
 }
 
