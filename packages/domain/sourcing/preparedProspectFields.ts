@@ -46,8 +46,16 @@ const serviceHeadingText=(text:string)=>{const trimmed=text.trim(),match=service
 // The company placing itself in the industry: "Being in property management we're …", "As your property management company, we …".
 // Only allowlisted adjectives may sit between "As a" and the service, so a tenant, owner or client of one is never the company.
 const industryMember=new RegExp(`\\b(?:being in property management|as (?:a|an|your)(?:\\s+${leadToken}){0,2}\\s+(?:(?:residential|rental)\\s+)?property management\\s+(?:company|firm|team|professionals?|provider)),?\\s+(?:we|our)\\b`,'iu');
+// Source policy (David, Nov 1): looser own-page context. A self-introduction names the company as a management
+// company: "Welcome to Brown, Brown & West, a local real estate management company located in …", "Acme Realty is a
+// property management company …"; the introduced name may not be a customer, tenant or owner role.
+const selfIntroduction=new RegExp(`(?:\\bwelcome to\\s+(?![^.!?\\n]*\\b(?:tenants?|landlords?|owners?|clients?|customers?|residents?|investors?|members?|my|our|your)\\b)[^.!?\\n]{2,80}?,|^(?!(?:my|our|your|the|this|that|a|an)\\b)(?![^.!?\\n]*\\b(?:tenants?|landlords?|owners?|clients?|customers?|residents?|investors?)\\b[^.!?\\n]*\\bis\\s+an?\\b)\\p{Lu}[^.!?\\n]{1,80}?\\s+is)\\s+(?:an?|your)(?:\\s+${leadToken}){0,3}\\s+(?:(?:residential|rental)\\s+)?(?:real estate|property|rental)\\s+management\\s+(?:company|firm)\\b`,'iu');
+// "Full Property Management", "Full Management Services" as an own-page service heading; product/job/directory words still refuse.
+const fullServiceHeading=/^(?:Full|Complete|Full[- ]Service)\s+(?:Property\s+Management(?:\s+Services?)?|Management\s+Services?)\.?$/iu;
+// The company's own NARPM membership line (a residential-management trade body); a whole block, never a mention in prose.
+const narpmMember=/^(?:(?:we are|we're|proud|a|an)\s+){0,3}members?\s+of\s+(?:the\s+)?National Association of Residential Property Managers(?:\s*\(NARPM\))?\.?$/iu;
 function business(text:string):boolean {
- return (serviceHeadingText(text)||substantive(text)&&(residentialSelfTagline(text)||industryMember.test(text)||management.test(text)&&propertyManagementService.test(text)&&managementServiceAction.test(text)&&(ownManager.test(text)||namedManager.test(text))))&&(!nonServiceBusiness.test(text)||explicitManagementService.test(text))&&!question(text)&&!vendor.test(text)&&!productOffering.test(text)&&!educationalOffering.test(text)&&!attributed(text)&&!contrary.test(text)&&!businessDenial.test(text);
+ return (serviceHeadingText(text)||fullServiceHeading.test(text.trim())&&!nonServiceHeading.test(text)||narpmMember.test(text.trim())||substantive(text)&&(residentialSelfTagline(text)||industryMember.test(text)||selfIntroduction.test(text.trim())||management.test(text)&&propertyManagementService.test(text)&&managementServiceAction.test(text)&&(ownManager.test(text)||namedManager.test(text))))&&(!nonServiceBusiness.test(text)||explicitManagementService.test(text))&&!question(text)&&!vendor.test(text)&&!productOffering.test(text)&&!educationalOffering.test(text)&&!attributed(text)&&!contrary.test(text)&&!businessDenial.test(text);
 }
 const workflowTopic=/\b(?:maintenance|repair|vendors?|tenants?|requests?|dispatch|rent collection|screening|leasing|after.hours|market(?:s|ed|ing)?|qualif(?:y|ies|ied|ying)|payments?|portal)\b/iu;
 const propertyOperationsDomain=/\b(?:propert(?:y|ies)|tenants?|residents?|landlords?|rent(?:al)?|leasing|homes|houses|apartments|buildings?|condominiums)\b/iu;

@@ -207,6 +207,12 @@ it.each([
  'Property Management Grand Rapids MI',
  'Full-Service Property Management Company in Boston',
  'Residential Property Management in Spokane, Liberty Lake and the Spokane Valley',
+ // Production brownbrownwestrox.com and empirepropertymanagement.net homepage blocks (Nov 1).
+ 'Welcome to Brown, Brown & West, a local real estate management company located in the heart of Knoxville, TN with apartment homes and single family homes available.',
+ 'Full Property Management',
+ 'Full Management Services',
+ 'Member of the National Association of Residential Property Managers',
+ 'Acme Realty is a full-service property management company serving Knoxville owners.',
 ])('recognizes the company placing itself in property management or naming its service: %s',text=>{
  expect(classifyPreparedPassage(text,'')).toMatchObject({usefulBusiness:true,contrary:false,kinds:expect.arrayContaining(['business'])});
 });
@@ -225,6 +231,14 @@ it.each([
  'Property Management Directory Phoenix AZ',
  'As a tenant of a property management company, we were never told about hidden fees until move-out.',
  'As an owner with a property management company, we expected far better communication.',
+ 'Full Management Software',
+ 'Full Property Management Jobs',
+ 'Full Property Management Directory',
+ 'Welcome to the tenant portal of Acme, a property management company that handles our lease.',
+ 'My landlord is a property management company that never returns calls about repairs.',
+ 'Our software helps every member of the National Association of Residential Property Managers.',
+ 'Welcome to RentTools, a property management software company for landlords and managers.',
+ 'Find property management companies near me, compare reviews and hire one today.',
 ])('still refuses labels, products, jobs, directories, testimonials and denials: %s',text=>{
  expect(classifyPreparedPassage(text,'').usefulBusiness).toBe(false);
 });
