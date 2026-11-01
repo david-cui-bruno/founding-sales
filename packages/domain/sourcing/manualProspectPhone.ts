@@ -40,6 +40,11 @@ export async function manualPhoneSnapshots(ctx:RepositoryContext,rows:readonly M
  const current=await readPhoneSnapshots(ctx,rows,locked.rows.map(row=>row.id));
  return current.map(snapshot=>({...snapshot,...(!isDeepStrictEqual(initial.find(before=>before.id===snapshot.id),snapshot)?{dependency_changed:true}:{})}));
 }
+/** Nonlocking current read for projections that must not take locks beneath ordinary row owners. The same
+ * snapshot value, without a lock-then-reread, so a concurrent change is not itself detected here. */
+export async function manualPhoneSnapshotsUnlocked(ctx:RepositoryContext,rows:readonly ManualProspectRow[]):Promise<ManualPhoneSnapshot[]>{
+ return rows.length===0?[]:readPhoneSnapshots(ctx,rows,null);
+}
 /** Final reread cannot acquire new authority or wait on newly inserted evidence. */
 export async function recheckManualPhoneSnapshots(ctx:RepositoryContext,rows:readonly ManualProspectRow[],locked:readonly ManualPhoneSnapshot[]):Promise<ManualPhoneSnapshot[]>{
  return readPhoneSnapshots(ctx,rows,locked.flatMap(snapshot=>snapshot.evidence_authorities?.map(item=>item.id)??[]));

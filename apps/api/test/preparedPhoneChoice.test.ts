@@ -48,9 +48,9 @@ it.each([['labelled',labelled],['standalone',standalone]])('shows and keeps a pr
  const kept=await request(feedback,{candidateId:id,expectedRevision:1,state:'kept',phoneChoice:choice,commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION});
  expect(kept.body).toMatchObject({status:'accepted',result:{candidateId:id,state:'kept',phoneChoice:choice}});
  expect((await exact(id)).manualPhone).toMatchObject({value:'+16147253059',choice,sourceUrl:final});
- // Choosing never prepares a company, route, ticket or job; Calling preparation keeps its own checks and refuses this source.
+ // Choosing never prepares a company, route, ticket or job; the read-only preparation preview offers it without binding anything.
  const prep=await request('/calling/preparation/read',{candidateId:id,expectedCandidateRevision:1,choice});
- expect(prep.body).toMatchObject({state:'refused',reason:'source_withdrawn'});
+ expect(prep.body).toMatchObject({state:'available',binding:null,phone:{value:'+16147253059'},contactAuthority:'not_granted'});
  expect(await counts()).toBe(before);
 });
 it('refuses a stale prepared choice with the existing refusal and keeps nothing',async()=>{

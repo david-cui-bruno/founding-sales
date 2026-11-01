@@ -113,12 +113,12 @@ it('refuses a stale or foreign choice and saves nothing',async()=>{
   expect(await keep(f.candidateId,{...choice,...change})).toMatchObject({ok:false,reason:'phone_source_changed'});
  expect((await runtime.query('SELECT 1 FROM sourcing_manual_prospect_states WHERE candidate_id=$1 AND manual_phone_choice IS NOT NULL',[f.candidateId])).rows).toEqual([]);
 });
-it('leaves Calling preparation to its own checks: a prepared-page choice creates no company, route or call',async()=>{
+it('reads Calling preparation for a prepared-page choice read-only: choosing and previewing create no company, route or call',async()=>{
  const f=await captured('<p>Office phone: (614) 725-3059</p>');
  const choice=choiceFrom(await only(f.candidateId));await keep(f.candidateId,choice);
  const counts=async()=>(await runtime.query<{n:string}>(`SELECT (SELECT count(*) FROM calling_preparations)+(SELECT count(*) FROM firms)+(SELECT count(*) FROM phone_routes)+(SELECT count(*) FROM dial_tickets) AS n`)).rows[0]!.n;
  const before=await counts();
- expect(await tx(()=>readCallingPreparation(ctx(),{candidateId:f.candidateId,expectedCandidateRevision:1,choice},async()=>true))).toMatchObject({state:'refused',reason:'source_withdrawn'});
+ expect(await tx(()=>readCallingPreparation(ctx(),{candidateId:f.candidateId,expectedCandidateRevision:1,choice},async()=>true))).toMatchObject({state:'available',binding:null,phone:{value:'+16147253059'},contactAuthority:'not_granted'});
  expect(await counts()).toBe(before);
 });
 it('attaches the earliest retained-evidence expiry of each permitted page from the shared prepared-source collection',async()=>{

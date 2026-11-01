@@ -2,7 +2,7 @@ import type {CallingPreparationProfile} from '@fss/contracts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {FIRM_ZONE_RULE_VERSION} from '../src/rules/statePosture.ts';
 export interface PreparationRow extends Record<string,unknown>{
- id:string;candidate_ref:string;candidate_revision:number;discovery_run_ref:string;source_creator_ref:string;prepared_by_ref:string;
+ id:string;candidate_ref:string;candidate_revision:number;discovery_run_ref:string;source_kind:'phone_discovery'|'prepared_capture';source_creator_ref:string;prepared_by_ref:string;
  firm_ref:string;route_ref:string;revision:number;route_version:number;state:'live'|'erased';choice:unknown;
  source_expires_at:Date;profile_hash:string|null;
 }

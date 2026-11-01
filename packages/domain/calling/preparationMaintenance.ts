@@ -24,12 +24,16 @@ export async function changePreparedCallingMemberAuthority(ctx:RepositoryContext
  return {ok:true};
 }
 /** Existing research-evidence maintenance owns physical expiry; clock-based current
- * execution denial already applies before this bounded cleanup reaches the row.
+ * execution denial already applies before this bounded cleanup reaches the row. A prepared-capture company is also
+ * withdrawn once a newer qualification run supersedes its source (current reads already refuse it meanwhile).
  */
 export async function sweepCallingPreparations(ctx:RepositoryContext,input:{limit:number}):Promise<number>{
  await lockPreparationCleanup(ctx);
- const rows=(await ctx.db.query<{id:string}>(`SELECT id FROM calling_preparations WHERE workspace_id=$1 AND state='live'
-  AND source_expires_at<=clock_timestamp() ORDER BY source_expires_at,id LIMIT $2`,[ctx.scope.workspaceId,input.limit])).rows;
- for(const row of rows)await ctx.db.query("SELECT erase_calling_preparation($1,$2,'source_expired')",[ctx.scope.workspaceId,row.id]);
+ const rows=(await ctx.db.query<{id:string;reason:string}>(`SELECT p.id,CASE WHEN p.source_expires_at<=clock_timestamp() THEN 'source_expired' ELSE 'source_changed' END reason
+  FROM calling_preparations p WHERE p.workspace_id=$1 AND p.state='live' AND (p.source_expires_at<=clock_timestamp() OR p.source_kind='prepared_capture'
+  AND EXISTS(SELECT 1 FROM sourcing_qualification_runs q JOIN sourcing_qualification_runs n ON n.workspace_id=q.workspace_id AND n.candidate_id=q.candidate_id
+   AND (n.requested_at,n.id)>(q.requested_at,q.id) WHERE q.workspace_id=p.workspace_id AND q.id=p.discovery_run_ref))
+  ORDER BY p.source_expires_at,p.id LIMIT $2`,[ctx.scope.workspaceId,input.limit])).rows;
+ for(const row of rows)await ctx.db.query('SELECT erase_calling_preparation($1,$2,$3)',[ctx.scope.workspaceId,row.id,row.reason]);
  return rows.length;
 }
