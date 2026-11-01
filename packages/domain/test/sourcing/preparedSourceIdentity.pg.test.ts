@@ -4,6 +4,8 @@ import type {QualificationFact,SourceObservation} from '@fss/contracts';
 import {preparedSourceIdentityPgFixture} from './preparedSourceIdentityPgFixture.ts';
 import {preparedIdentityCitationRoles,PREPARED_IDENTITY_PRODUCER,LEGACY_QUALIFICATION_PRODUCER} from '../../sourcing/preparedIdentity.ts';
 import {finishQualification} from '../../sourcing/qualificationStore.ts';
+import {QUALIFICATION_PROMPT_VERSION} from '../../sourcing/qualificationVersions.ts';
+import {QUALIFICATION_MODEL_NAME} from '../../sourcing/qualificationModel.ts';
 import {withTransaction} from '../../db/queryable.ts';
 import {repositoryContext} from '../../db/workspaceScope.ts';
 import {advanceAutomaticResearchFirm,readAutomaticResearchFirm} from '../../sourcing/automaticResearch.ts';
@@ -34,7 +36,7 @@ it('reuses a same-day legacy fingerprint before choosing a producer, without min
  expect(before.producer_version).toBe(LEGACY_QUALIFICATION_PRODUCER);
  expect(await f.request()).toBe(old);expect(await f.run(old)).toEqual(before);
  const at=(await f.runtime.query<{utc_date:string}>("SELECT to_char(now() AT TIME ZONE 'UTC','YYYY-MM-DD') AS utc_date")).rows[0]!.utc_date;
- expect(before.fingerprint).toBe(createHash('sha256').update(JSON.stringify([1,'qualification-context-v7','qualification-v5','claude-haiku-4-5',at])).digest('hex'));
+ expect(before.fingerprint).toBe(createHash('sha256').update(JSON.stringify([1,QUALIFICATION_PROMPT_VERSION,'qualification-v5',QUALIFICATION_MODEL_NAME,at])).digest('hex'));
  expect((await f.runtime.query('SELECT id FROM sourcing_qualification_runs WHERE workspace_id=$1',[f.workspace])).rows).toHaveLength(1);
  expect((await f.runtime.query('SELECT id FROM provider_reservations WHERE workspace_id=$1',[f.workspace])).rows).toHaveLength(0);
 });

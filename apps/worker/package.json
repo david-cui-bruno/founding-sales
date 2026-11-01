@@ -14,8 +14,10 @@
     "@aws-sdk/client-bedrock-runtime": "^3.1149.0",
     "@aws-sdk/client-s3": "^3.1149.0",
     "@aws-sdk/client-transcribe": "^3.1149.0",
+    "@aws-sdk/credential-provider-node": "^3.972.85",
     "@fss/contracts": "*",
     "@fss/domain": "*",
+    "google-auth-library": "^11.3.2",
     "pg": "^8.23.1"
   },
   "devDependencies": {

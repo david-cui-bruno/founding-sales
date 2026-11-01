@@ -69,7 +69,7 @@ it('qualifies an Apollo draft only with internal origin and current owner attest
   const registry=new HandlerRegistry().register(sourcingQualificationHandler({pageFetch:{providerKey:'fixture',fetchPages:async input=>{
    fetches++;expect(input.firmWebsite).toBe('https://apollo-suggested.test/');
    return {ok:true,costCents:0,value:{pages:[{url:'https://apollo-suggested.test/',contentHash:'a'.repeat(64),contentType:'text/html',body:new TextEncoder().encode('<p>Apollo Suggested PM provides residential property management in Dallas, Texas.</p>'),retrievedAt:new Date().toISOString(),firstParty:false}],skipped:{}}};
-  }},extraction:{providerKey:'aws_bedrock.sourcing_qualification',countInputTokens:async()=>{extractions++;return 100;},extract:async()=>{throw new Error('Non-first-party observations cannot invoke extraction');}}}));
+  }},extraction:{providerKey:'google_vertex.sourcing_qualification',countInputTokens:async()=>{extractions++;return 100;},extract:async()=>{throw new Error('Non-first-party observations cannot invoke extraction');}}}));
   expect(await runOnce(f.session,{registry,owner:'apollo-first-party-test',limit:5})).toMatchObject({failed:0});
   expect(fetches).toBe(1);expect(extractions).toBe(0);
   expect((await f.session.query('SELECT reason FROM sourcing_qualification_runs')).rows).toEqual([{reason:'source_incomplete_or_unverified'}]);
@@ -259,7 +259,7 @@ it('settles an orphaned paid qualification even with all new research scheduling
  const {reserveAttempt,markCalling}=await import('@fss/domain/research/reservations.ts');
  const {randomUUID}=await import('node:crypto');
  const ctx=repositoryContext(workspaceScope(workspaceId,{kind:'system',component:'worker'}),db.session);
- const reservation=await withTransaction(db.session,async()=>{const held=await reserveAttempt(ctx,{subjectKind:'sourcing_qualification',subjectId:randomUUID(),attempt:1,providerKey:'aws_bedrock.sourcing_qualification',at:new Date().toISOString(),businessTimeZone:'America/New_York',cents:2,modelName:'claude-haiku-4-5',maxInputTokens:100,maxOutputTokens:2048});await markCalling(ctx,held.id);return held;});
+ const reservation=await withTransaction(db.session,async()=>{const held=await reserveAttempt(ctx,{subjectKind:'sourcing_qualification',subjectId:randomUUID(),attempt:1,providerKey:'google_vertex.sourcing_qualification',at:new Date().toISOString(),businessTimeZone:'America/New_York',cents:2,modelName:'gemini-3.8-flash',maxInputTokens:100,maxOutputTokens:2048});await markCalling(ctx,held.id);return held;});
  await db.session.query("UPDATE provider_reservations SET created_at=now()-interval '31 minutes' WHERE id=$1",[reservation.id]);
  expect(await withTransaction(db.session,()=>sourcingQualificationSource(false).find(db.session,new Date().toISOString()))).toEqual([]);
  expect((await db.session.query('SELECT state,settled_cents FROM provider_reservations WHERE id=$1',[reservation.id])).rows[0]).toEqual({state:'estimated',settled_cents:2});

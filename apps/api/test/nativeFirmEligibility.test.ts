@@ -5,6 +5,7 @@ import {dispatch,type ApiRequest} from '../src/server.ts';
 import {localNoopSuppressionJournal} from '../src/journal/index.ts';
 import {createAuthFixture,CURRENT_CLIENT_VERSION,type AuthFixture} from './support/authFixture.ts';
 import {issueSessionFor} from './support/sessionFixture.ts';
+import {QUALIFICATION_PROMPT_VERSION} from '@fss/domain/sourcing/qualificationVersions.ts';
 import {readFirmQualification} from '@fss/domain/sourcing/qualificationStore.ts';
 import {workspaceScope} from '@fss/domain/db/workspaceScope.ts';
 import type {Queryable,QueryResultRowLike} from '@fss/domain/db/queryable.ts';
@@ -31,7 +32,7 @@ async function run(r:Awaited<ReturnType<typeof linked>>,changes:{state?:string;r
  const text=`${r.name} provides residential property management in Dallas, TX.`;
  const observations:SourceObservation[]=[{id:randomUUID(),url:r.website,contentHash:'a'.repeat(64),relevantTextHash:'b'.repeat(64),retrievedAt:new Date(now.getTime()-(changes.age??0)).toISOString(),publishedAt:null,publishedAtBlockId:null,firstParty:true,truncated:false,blocks:[{id:'native',text}]}];
  const facts:QualificationFact[]=(['firm_identity','service_area','residential_management'] as const).map(kind=>({kind,value:changes.full===false&&kind==='firm_identity'?r.name:text,observationId:observations[0]!.id,blockId:'native'}));
- await f.db.query(`INSERT INTO sourcing_qualification_runs(workspace_id,id,candidate_id,candidate_revision,fingerprint,prompt_version,policy_version,model_name,state,reason,observations,facts,requested_at) VALUES($1,$2,$3,$4,$5,$6,$7,'synthetic-no-provider',$8,$9,$10::jsonb,$11::jsonb,clock_timestamp())`,[f.alpha.workspaceId,runId,r.candidateId,changes.revision??1,createHash('sha256').update(randomUUID()).digest('hex'),changes.prompt??'qualification-context-v7',changes.policy??'qualification-v5',changes.state??'review',changes.reason??null,JSON.stringify(observations),JSON.stringify(facts)]);
+ await f.db.query(`INSERT INTO sourcing_qualification_runs(workspace_id,id,candidate_id,candidate_revision,fingerprint,prompt_version,policy_version,model_name,state,reason,observations,facts,requested_at) VALUES($1,$2,$3,$4,$5,$6,$7,'synthetic-no-provider',$8,$9,$10::jsonb,$11::jsonb,clock_timestamp())`,[f.alpha.workspaceId,runId,r.candidateId,changes.revision??1,createHash('sha256').update(randomUUID()).digest('hex'),changes.prompt??QUALIFICATION_PROMPT_VERSION,changes.policy??'qualification-v5',changes.state??'review',changes.reason??null,JSON.stringify(observations),JSON.stringify(facts)]);
  return {runId,observations,facts};
 }
 const read=async(firmId:string,token=admin)=>post('/sourcing/qualification/firm',{firmId},token);

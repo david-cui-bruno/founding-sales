@@ -7,11 +7,11 @@ import {repositoryContext,workspaceScope} from '../../db/workspaceScope.ts';
 import {seedTwoWorkspaces,type TwoWorkspaces} from '../db/support/fixtures.ts';
 import {saveCandidate} from '../../sourcing/candidates.ts';
 import {requestQualification,QUALIFICATION_PROMPT_VERSION,QUALIFICATION_POLICY_VERSION} from '../../sourcing/qualificationStore.ts';
+import {QUALIFICATION_MODEL_NAME} from '../../sourcing/qualificationModel.ts';
 import {runQualification} from '../../sourcing/qualificationRun.ts';
 import {readPreparedProspect,listPreparedProspects} from '../../sourcing/preparedProspects.ts';
 import {manualPhoneSnapshots,projectManualPhone} from '../../sourcing/manualProspectPhone.ts';
 import {readManualProspectSubject} from '../../sourcing/manualProspectRows.ts';
-import {readResearchSettings} from '../../research/settings.ts';
 import {lockDiscoveryReviewSources} from '../../sourcing/discoveryReviewVisibility.ts';
 import {PREPARED_CAPTURE_V1} from '../../sourcing/preparedCapture.ts';
 import {databaseNow} from '../../policy/clock.ts';
@@ -37,10 +37,10 @@ async function pending(legacy=false){
  await runtime.query('INSERT INTO research_settings(workspace_id,enabled,max_pages_per_firm) VALUES($1,true,1)',[seed.alpha.workspaceId]);
  let runId:string;
  {
-  const now=await databaseNow(ctx()),settings=await readResearchSettings(ctx());
-  const fingerprint=createHash('sha256').update(JSON.stringify([1,QUALIFICATION_PROMPT_VERSION,QUALIFICATION_POLICY_VERSION,settings.modelName,now.slice(0,10)])).digest('hex');
+  const now=await databaseNow(ctx());
+  const fingerprint=createHash('sha256').update(JSON.stringify([1,QUALIFICATION_PROMPT_VERSION,QUALIFICATION_POLICY_VERSION,QUALIFICATION_MODEL_NAME,now.slice(0,10)])).digest('hex');
   runId=(await runtime.query<{id:string}>(`INSERT INTO sourcing_qualification_runs(workspace_id,candidate_id,candidate_revision,fingerprint,prompt_version,policy_version,model_name,capture_policy_version)
-   VALUES($1,$2,1,$3,$4,$5,$6,$7) RETURNING id`,[seed.alpha.workspaceId,candidateId,fingerprint,QUALIFICATION_PROMPT_VERSION,QUALIFICATION_POLICY_VERSION,settings.modelName,legacy?'legacy':PREPARED_CAPTURE_V1])).rows[0]!.id;
+   VALUES($1,$2,1,$3,$4,$5,$6,$7) RETURNING id`,[seed.alpha.workspaceId,candidateId,fingerprint,QUALIFICATION_PROMPT_VERSION,QUALIFICATION_POLICY_VERSION,QUALIFICATION_MODEL_NAME,legacy?'legacy':PREPARED_CAPTURE_V1])).rows[0]!.id;
  }
  return {candidateId,candidateRevision:1,runId,website,sourceUrl,url};
 }
@@ -58,7 +58,7 @@ async function capture(f:Awaited<ReturnType<typeof pending>>,options:{denyAfterF
   }
   return {statusCode:404,headers:{},body:null,abortedOverCap:false};
  }});
- await runQualification(ctx(true),f,{pageFetch:provider,extraction:{providerKey:'aws_bedrock.sourcing_qualification',countInputTokens:async input=>{modelInputs.push(JSON.stringify(input));return 100;},extract:async input=>{modelInputs.push(JSON.stringify(input));return {ok:false,failureCode:'invalid_evidence',costCents:1};}}});
+ await runQualification(ctx(true),f,{pageFetch:provider,extraction:{providerKey:'google_vertex.sourcing_qualification',countInputTokens:async input=>{modelInputs.push(JSON.stringify(input));return 100;},extract:async input=>{modelInputs.push(JSON.stringify(input));return {ok:false,failureCode:'invalid_evidence',costCents:1};}}});
  return {sent,modelInputs};
 }
 

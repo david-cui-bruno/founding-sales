@@ -30,6 +30,10 @@ export const PROVIDER_KIND_FUNDING: Readonly<Record<string, ProviderFunding>> = 
   // `aws_bedrock.call_summary`, `aws_bedrock.extraction` (`classification/modelTransport.ts`).
   // Cost Explorer shows AWS credits applied to Claude on Bedrock (1 Sep – 2 Oct 2026).
   aws_bedrock: 'credits',
+  // Prepared-prospect qualification through Google Vertex AI (`google_vertex.sourcing_qualification`,
+  // `sourcing/qualificationModel.ts`), paid from the GCP credits on the "Framewise Health Main"
+  // billing account (David, 1 November 2026). Counted by the credit ceilings, never the cash one.
+  google_vertex: 'credits',
 });
 
 /** The kind a `provider_key` names: everything before its first dot. */

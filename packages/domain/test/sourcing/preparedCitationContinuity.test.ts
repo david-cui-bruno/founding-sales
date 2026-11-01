@@ -6,6 +6,7 @@ import {readPhoneOfficeProof} from '../../dial/phoneOfficeProof.ts';
 import {officeHash} from '../../research/officeAssessmentTarget.ts';
 import {repositoryContext,workspaceScope} from '../../db/workspaceScope.ts';
 import {qualifyEmailCandidate} from '../../outreach/selection.ts';
+import {QUALIFICATION_PROMPT_VERSION} from '../../sourcing/qualificationVersions.ts';
 
 function fixture(locality='Boston',region:CandidateInput['region']='MA',state='Massachusetts',weak=`${locality}, ${state} Welcome Home`){
  const candidate={firmName:'Harbor Example Management',website:'https://harbor.example.test/',locality,region};
@@ -59,7 +60,7 @@ it('preserves the actual retained strict phone reader at thirty facts while refu
   let rows:unknown[]=[];
   if(sql.startsWith('SELECT name,website'))rows=[{name:f.candidate.firmName,website:f.candidate.website,locality:f.candidate.locality,region_code:f.candidate.region}];
   else if(sql.includes('SELECT known_personal_cell_at'))rows=[{known_personal_cell_at:null}];
-  else if(sql.includes('SELECT q.id,c.payload'))rows=[{id,payload:f.candidate,observations:[f.source],facts:f.facts,policy_version:'qualification-v5',prompt_version:'qualification-context-v7'}];
+  else if(sql.includes('SELECT q.id,c.payload'))rows=[{id,payload:f.candidate,observations:[f.source],facts:f.facts,policy_version:'qualification-v5',prompt_version:QUALIFICATION_PROMPT_VERSION}];
   else if(!sql.includes('sourcing_candidates')&&!sql.includes('SELECT q.observations')&&!sql.includes('firm_office_assessments')&&!sql.includes('SELECT s.observation'))throw Error('Unexpected query');
   return {rows:rows as Row[],rowCount:rows.length};
  }});

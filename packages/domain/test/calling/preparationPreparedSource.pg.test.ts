@@ -36,7 +36,7 @@ const provider=(sourceUrl:string,middle:string,final:string,phone:string)=>resea
 const run=async(page:ReturnType<typeof provider>,candidateId:string)=>{
  const requested=await tx(()=>requestQualification(ctx(runtime,true),{candidateId,expectedRevision:1},{enqueue:false}));if(!requested.ok)throw Error(requested.reason);
  const target={candidateId,candidateRevision:1,runId:requested.value.runId};
- await runQualification(ctx(runtime,true),target,{pageFetch:page,extraction:{providerKey:'aws_bedrock.sourcing_qualification',countInputTokens:async()=>100,extract:async()=>({ok:false,failureCode:'invalid_evidence',costCents:1})}});
+ await runQualification(ctx(runtime,true),target,{pageFetch:page,extraction:{providerKey:'google_vertex.sourcing_qualification',countInputTokens:async()=>100,extract:async()=>({ok:false,failureCode:'invalid_evidence',costCents:1})}});
  return requested.value.runId;
 };
 /** A real redirected own-site capture, a kept phone choice, and the reviewed Calling input. */

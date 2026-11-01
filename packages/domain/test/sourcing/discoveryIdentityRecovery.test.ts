@@ -29,7 +29,7 @@ const name='Example Residential Group, LLC';
 const description=`${name} manages apartments in Boston, MA.`;
 const card=[name,'221 Main Avenue','Suite 402','Boston, MA 02115','Contact Information','(617) 424-0775','(617) 424-0771','info@example.test',description];
 const pages:PageFetchProvider={providerKey:'company_page',fetchPages:async()=>({ok:true,costCents:0,value:{pages:[{url:'https://example.test/contact',contentHash:'a'.repeat(64),contentType:'text/html',body:new TextEncoder().encode(card.map(t=>`<p>${t}</p>`).join('')),retrievedAt:new Date().toISOString(),firstParty:true}],skipped:{}}})};
-const extraction:QualificationExtractionProvider={providerKey:'aws_bedrock.sourcing_qualification',countInputTokens:async()=>300,extract:async input=>{
+const extraction:QualificationExtractionProvider={providerKey:'google_vertex.sourcing_qualification',countInputTokens:async()=>300,extract:async input=>{
  const source=input.observations.find(s=>s.url==='https://example.test/contact')!;
  const block=source.blocks.find(b=>b.text===description)!;
  const email=source.blocks.find(b=>b.text==='info@example.test')!;
@@ -185,7 +185,7 @@ it('recovers the recorded BRG office locality missed by extraction and requires 
  await withTransaction(db.session,()=>requestQualification(ctx(),{candidateId:candidate.id,expectedRevision:candidate.revision}));
  const initial=await readQualification(ctx(),{candidateId:candidate.id});if(!initial)throw Error('missing run');
  const pageFetch:PageFetchProvider={providerKey:'company_page',fetchPages:async()=>({ok:true,costCents:0,value:{pages:recordedBrg.observations.map(source=>({url:source.url,contentHash:'a'.repeat(64),contentType:'text/html',firstParty:source.firstParty,retrievedAt:new Date().toISOString(),body:new TextEncoder().encode(source.blocks.map(b=>`<p>${b.text}</p>`).join('')+(source.truncated?'<p>Excluded overflow block</p>':''))})),skipped:{}}})};
- const recordedExtraction:QualificationExtractionProvider={providerKey:'aws_bedrock.sourcing_qualification',countInputTokens:async()=>300,extract:async input=>({ok:true,costCents:1,value:{facts:recordedBrg.facts.map(f=>{
+ const recordedExtraction:QualificationExtractionProvider={providerKey:'google_vertex.sourcing_qualification',countInputTokens:async()=>300,extract:async input=>({ok:true,costCents:1,value:{facts:recordedBrg.facts.map(f=>{
   const old=recordedBrg.observations.find(source=>source.id===f.observationId)!;
   const source=input.observations.find(source=>source.url===old.url)!;
   const block=source.blocks.find(block=>block.id===f.blockId&&block.text===f.value)!;

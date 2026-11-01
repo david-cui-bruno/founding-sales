@@ -20,7 +20,7 @@ async function pending(firmName='Example PM'){const candidate=await tx(()=>saveC
 const pages:PageFetchProvider={providerKey:'company_page',fetchPages:async request=>{
  expect(request.urls).toEqual(['https://example.test/']);expect(request.maxPagesPerFirm).toBe(4);expect(await request.shouldContinue?.()).toBe(true);
  return {ok:true,costCents:0,value:{pages:[{url:'https://example.test/',contentHash:'a'.repeat(64),contentType:'text/html',body:new TextEncoder().encode('<p>Example PM manages residential homes in Dallas.</p><p>We need help with maintenance coordination.</p>'),retrievedAt:new Date().toISOString(),firstParty:true}],skipped:{}}};}};
-const extractor=(runId:string):QualificationExtractionProvider=>({providerKey:'aws_bedrock.sourcing_qualification',countInputTokens:async input=>{expect(input.candidate).toEqual({firmName:'Example PM',locality:'Dallas',region:'TX',website:'https://example.test/'});return 300;},extract:async input=>{
+const extractor=(runId:string):QualificationExtractionProvider=>({providerKey:'google_vertex.sourcing_qualification',countInputTokens:async input=>{expect(input.candidate).toEqual({firmName:'Example PM',locality:'Dallas',region:'TX',website:'https://example.test/'});return 300;},extract:async input=>{
  expect(input.candidate).toEqual({firmName:'Example PM',locality:'Dallas',region:'TX',website:'https://example.test/'});
  const second=await db.appRuntimeSession();expect((await second.query('SELECT state FROM provider_reservations WHERE subject_id=$1',[runId])).rows).toEqual([{state:'calling'}]);
  return {ok:true,costCents:1,value:{facts:[],openingQuestion:null}};
@@ -94,7 +94,7 @@ it('settles expired spend even after a wrong-firm correction or candidate deleti
  const {recordSourcingFeedback}=await import('../../sourcing/feedback.ts');
  for(const removed of [false,true]){
   const ids=await pending();
-  const reservation=await tx(async()=>{const r=await reserveAttempt(ctx(),{subjectKind:'sourcing_qualification',subjectId:ids.runId,attempt:1,providerKey:'aws_bedrock.sourcing_qualification',at:new Date().toISOString(),businessTimeZone:'America/New_York',cents:2,modelName:'claude-haiku-4-5',maxInputTokens:100,maxOutputTokens:2048});await markCalling(ctx(),r.id);return r;});
+  const reservation=await tx(async()=>{const r=await reserveAttempt(ctx(),{subjectKind:'sourcing_qualification',subjectId:ids.runId,attempt:1,providerKey:'google_vertex.sourcing_qualification',at:new Date().toISOString(),businessTimeZone:'America/New_York',cents:2,modelName:'gemini-3.8-flash',maxInputTokens:100,maxOutputTokens:2048});await markCalling(ctx(),r.id);return r;});
   const user=(await db.session.query<{user_id:string}>("SELECT user_id FROM workspace_memberships WHERE workspace_id=$1 AND role='admin'",[workspaceId])).rows[0]!.user_id;
   const admin=repositoryContext(workspaceScope(workspaceId,{kind:'user',role:'admin',userId:user}),db.session);
   await tx(()=>recordSourcingFeedback(admin,{candidateId:ids.candidateId,qualificationRunId:ids.runId,code:'wrong_firm'}));
@@ -164,4 +164,42 @@ it('research channel pauses discovery and kept-candidate checks, then release re
  expect(await tx(()=>monitorCandidateSources(ctx()))).toEqual({queued:1});
  await runDiscovery(ctx(),{providerKey:'tavily_basic',discover:async()=>{searches++;return {ok:true,credits:1,requestId:'released-fixture',hits:[]};}},refusingPageFetch);
  expect(searches).toBe(1);
+});
+
+it('reserves and settles qualification as credit-funded Vertex spend at the Gemini price, never as cash',async()=>{
+ const {readCreditSpend,readSpend}=await import('../../research/ledger.ts');
+ const ids=await pending();
+ await runQualification(ctx(),ids,{pageFetch:pages,extraction:extractor(ids.runId)});
+ // 300 counted input tokens and the 4,096-token output ceiling: ceil((300*75 + 4096*375) / 1M) = 2 cents.
+ expect((await db.session.query('SELECT provider_key,model_name,cents,max_input_tokens,max_output_tokens,state,settled_cents FROM provider_reservations')).rows).toEqual([{provider_key:'google_vertex.sourcing_qualification',model_name:'gemini-3.8-flash',cents:2,max_input_tokens:300,max_output_tokens:4096,state:'settled',settled_cents:1}]);
+ const at=new Date().toISOString(),input={at,businessTimeZone:'America/New_York'};
+ expect(await readCreditSpend(ctx(),input)).toMatchObject({todayCents:1});
+ expect(await readSpend(ctx(),input)).toMatchObject({todayCents:0});
+});
+it('counts Vertex qualification spend against the same research ceilings as Bedrock credit spend',async()=>{
+ const ids=await pending();let calls=0;
+ const {recordProviderCall}=await import('../../research/ledger.ts');
+ await tx(()=>recordProviderCall(ctx(),{providerKey:'google_vertex.sourcing_qualification',at:new Date().toISOString(),businessTimeZone:'America/New_York',costCents:1000}));
+ await runQualification(ctx(),ids,{pageFetch:pages,extraction:{...extractor(ids.runId),extract:async()=>{calls++;throw new Error('must not spend beyond credit ceiling');}}});
+ expect(calls).toBe(0);
+ expect(await readQualification(ctx(),ids)).toMatchObject({status:'unavailable',reason:'research_budget_or_hold'});
+});
+it('finishes credit_route_unavailable without dispatch when no Vertex port exists, the port is the old Bedrock one, or the run names another model',async()=>{
+ const pageCalls={count:0};const fetching:PageFetchProvider={...pages,fetchPages:async input=>{pageCalls.count++;return pages.fetchPages(input);}};
+ for(const variant of ['missing','bedrock','claude'] as const){
+  await db.session.query('DELETE FROM sourcing_candidates');await db.session.query('DELETE FROM provider_reservations');
+  const ids=await pending();let calls=0;const base=extractor(ids.runId);
+  const counting={...base,extract:async(input:Parameters<typeof base.extract>[0])=>{calls++;return base.extract(input);}};
+  if(variant==='claude')await db.session.query("UPDATE sourcing_qualification_runs SET model_name='claude-haiku-4-5' WHERE id=$1",[ids.runId]);
+  await runQualification(ctx(),ids,{pageFetch:fetching,extraction:variant==='missing'?null:variant==='bedrock'?{...counting,providerKey:'aws_bedrock.sourcing_qualification'}:counting});
+  expect(calls).toBe(0);expect(await readQualification(ctx(),ids)).toMatchObject({status:'unavailable',reason:'credit_route_unavailable'});
+  expect((await db.session.query('SELECT id FROM provider_reservations')).rows).toHaveLength(0);
+ }
+ expect(pageCalls.count).toBe(0);
+});
+it('records the Gemini model, not the research extraction model, on a new run',async()=>{
+ const ids=await pending();
+ await db.session.query("INSERT INTO research_settings(workspace_id,enabled) VALUES($1,true) ON CONFLICT(workspace_id) DO NOTHING",[workspaceId]);
+ expect((await db.session.query('SELECT model_name,prompt_version FROM sourcing_qualification_runs WHERE id=$1',[ids.runId])).rows).toEqual([{model_name:'gemini-3.8-flash',prompt_version:'qualification-context-v8'}]);
+ expect((await db.session.query('SELECT model_name FROM research_settings WHERE workspace_id=$1',[workspaceId])).rows).toEqual([{model_name:'claude-haiku-4-5'}]);
 });

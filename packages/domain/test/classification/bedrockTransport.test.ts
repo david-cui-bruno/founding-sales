@@ -332,7 +332,7 @@ describe('who pays, and at what price', () => {
       // The ledger's key shape (`provider_ledger_provider_key_shape`).
       expect(modelProviderKey(purpose, 'bedrock')).toMatch(/^[a-z][a-z0-9_.-]{1,63}$/u);
     }
-    expect(CREDIT_FUNDED_PROVIDER_KINDS).toEqual(['aws_bedrock', 'aws_transcribe']);
+    expect(CREDIT_FUNDED_PROVIDER_KINDS).toEqual(['aws_bedrock', 'aws_transcribe', 'google_vertex']);
   });
 
   it('prices each Bedrock call at the Bedrock rate and each direct call at the first-party rate', () => {

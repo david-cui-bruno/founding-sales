@@ -48,7 +48,8 @@ it('accepts completed exact source native + independent email without phone or p
 it('retains the exact pre-US legacy proof fingerprint and native interpretation',async()=>{
  const proof=await automaticResearchProof(ctx,id);
  expect(proof?.nativePolicyVersion).toBe('native-firm-eligibility-v1');
- expect(proof?.fingerprint).toBe('498de84eaf596510b8043ee55cdaca0be3799bac41a57963f1f6c9735973df49');
+ // The proof fingerprint covers the run's prompt version, so this pin moves with qualification-context-v8 (Gemini 3.8 Flash on Vertex).
+ expect(proof?.fingerprint).toBe('0e0dffc19929ae6b2ec42e5b4bb4816e5beb20c20c1a25c67516d9236a78cf6d');
 });
 it('accepts current CA preparation only from full-state native evidence and its exact already-approved query/source',async()=>{
  const payload={...candidate,region:'CA' as const,locality:'Los Angeles',discoveryQuery:'Los Angeles California residential property management'};
@@ -62,7 +63,7 @@ it('accepts current CA preparation only from full-state native evidence and its 
  f.run.observations[0]!.blocks[0]!.text=native;f.run.observations[1]!.blocks[0]!.text=email;
  const proof=await automaticResearchProof(ctx,id);
  expect(proof).toMatchObject({nativePolicyVersion:'native-firm-eligibility-us-v1',route:{address:'info@harbor.example.test'}});
- expect(proof?.fingerprint).not.toBe('498de84eaf596510b8043ee55cdaca0be3799bac41a57963f1f6c9735973df49');
+ expect(proof?.fingerprint).not.toBe('0e0dffc19929ae6b2ec42e5b4bb4816e5beb20c20c1a25c67516d9236a78cf6d');
  mocks.policy.mockResolvedValue({version:'targeting-v1',queries:[query],rankOrder:[]});
  expect(await automaticResearchProof(ctx,id)).toBeNull();
 });

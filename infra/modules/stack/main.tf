@@ -44,6 +44,31 @@ locals {
   api_task_role_name    = "${var.name_prefix}-api-task"
   worker_task_role_name = "${var.name_prefix}-worker-task"
 
+  # Prepared-prospect qualification calls Gemini on Google Vertex AI, paid by the GCP credits on
+  # the "Framewise Health Main" billing account (David, 1 November 2026); every other model call
+  # stays on Bedrock. The worker task role is exchanged for the `callie-qualification` service
+  # account through the workload identity pool that `infra/scripts/gcp-vertex-qualification-setup.sh`
+  # creates, so nothing here is a secret: these are public identifiers, the same names the script
+  # holds (test/ops/terraformCrossChecks.check.ts keeps them equal). Production only: a rehearsal
+  # has no Google credential and its worker composes no qualification
+  # (`apps/worker/src/sourcing/vertexGemini.ts`, `readVertexConfig`).
+  vertex_project_id      = "colormyworld-prod-dc824"
+  vertex_project_number  = "873586425850"
+  vertex_pool_id         = "fss-prod-aws"
+  vertex_provider_id     = "fss-prod-worker"
+  vertex_service_account = "callie-qualification@colormyworld-prod-dc824.iam.gserviceaccount.com"
+  vertex_qualification_environment = local.is_production ? {
+    FSS_VERTEX_PROJECT  = local.vertex_project_id
+    FSS_VERTEX_LOCATION = "global"
+    FSS_VERTEX_CREDENTIAL_CONFIG = jsonencode({
+      type                              = "external_account"
+      audience                          = "//iam.googleapis.com/projects/${local.vertex_project_number}/locations/global/workloadIdentityPools/${local.vertex_pool_id}/providers/${local.vertex_provider_id}"
+      subject_token_type                = "urn:ietf:params:aws:token-type:aws4_request"
+      token_url                         = "https://sts.googleapis.com/v1/token"
+      service_account_impersonation_url = "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${local.vertex_service_account}:generateAccessToken"
+    })
+  } : {}
+
   # One CloudWatch namespace per environment, derived here and nowhere else: the
   # metric filters (observability), the worker's FSS_METRIC_NAMESPACE and the task
   # roles' `cloudwatch:namespace` conditions (cluster), and every alarm (alerts)
@@ -331,14 +356,14 @@ module "cluster" {
 
   # The worker's alone. The operations task definition is built from the worker's
   # environment and ignores a variable it does not read.
-  worker_environment = {
+  worker_environment = merge({
     FSS_WORKER_CONCURRENCY = tostring(var.worker_concurrency)
     # Slice C3a: Amazon Transcribe is the transcription engine, its audio staged in the
     # call-audio bucket. No secret: the worker task role is the credential.
     FSS_TRANSCRIPTION_PROVIDER = "aws_transcribe"
     FSS_CALL_AUDIO_BUCKET      = module.recordings.bucket_name
     FSS_SOCIAL_ASSETS_BUCKET   = module.social_assets.bucket_name
-  }
+  }, local.vertex_qualification_environment)
 
   environment = merge({
     FSS_ENVIRONMENT = var.environment
