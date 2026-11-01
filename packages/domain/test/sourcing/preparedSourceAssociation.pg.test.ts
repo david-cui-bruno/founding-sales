@@ -17,6 +17,7 @@ import {PREPARED_CAPTURE_V1} from '../../sourcing/preparedCapture.ts';
 import {databaseNow} from '../../policy/clock.ts';
 import {preparedProspectsBusinessSnapshot} from './preparedProspectsPgFixture.ts';
 import {researchPageFetch,type RawResponse} from '../../../../apps/worker/src/research/companyPageFetch.ts';
+import {residentialFacts} from './support/modelSelections.ts';
 
 let db:TestDatabase,seed:TwoWorkspaces,runtime:SessionQueryable;
 const ctx=(system=false)=>repositoryContext(workspaceScope(seed.alpha.workspaceId,system?{kind:'system',component:'worker'}:{kind:'user',role:'admin',userId:seed.alpha.admin.userId}),runtime);
@@ -58,7 +59,7 @@ async function capture(f:Awaited<ReturnType<typeof pending>>,options:{denyAfterF
   }
   return {statusCode:404,headers:{},body:null,abortedOverCap:false};
  }});
- await runQualification(ctx(true),f,{pageFetch:provider,extraction:{providerKey:'aws_bedrock.sourcing_qualification',countInputTokens:async input=>{modelInputs.push(JSON.stringify(input));return 100;},extract:async input=>{modelInputs.push(JSON.stringify(input));return {ok:false,failureCode:'invalid_evidence',costCents:1};}}});
+ await runQualification(ctx(true),f,{pageFetch:provider,extraction:{providerKey:'aws_bedrock.sourcing_qualification',countInputTokens:async input=>{modelInputs.push(JSON.stringify(input));return 100;},extract:async input=>{modelInputs.push(JSON.stringify(input));return {ok:true,costCents:1,value:{facts:residentialFacts(input.observations),openingQuestion:null}};}}});
  return {sent,modelInputs};
 }
 
@@ -67,7 +68,7 @@ it('carries an actual adapter slash redirect through an existing queued v1 captu
  expect(calls.sent).toEqual([f.website+'robots.txt',f.sourceUrl,f.url]);expect(calls.modelInputs).toHaveLength(2);
  for(const input of calls.modelInputs)expect(input).not.toMatch(/redirectTrace|redirectUrls|prepared_capture|capture_policy_version/u);
  const stored=(await runtime.query('SELECT capture_policy_version,prepared_capture,state,reason FROM sourcing_qualification_runs WHERE id=$1',[f.runId])).rows[0]!;
- expect(stored).toMatchObject({capture_policy_version:PREPARED_CAPTURE_V1,state:'unavailable',reason:'invalid_evidence',prepared_capture:{sourceUrl:f.sourceUrl,pages:[{url:f.url,redirectUrls:[f.sourceUrl,f.url]}]}});
+ expect(stored).toMatchObject({capture_policy_version:PREPARED_CAPTURE_V1,state:'review',reason:null,prepared_capture:{sourceUrl:f.sourceUrl,pages:[{url:f.url,redirectUrls:[f.sourceUrl,f.url]}]}});
  const before=await preparedProspectsBusinessSnapshot(ctx()),answer=await read(f);if(!answer.ok)throw Error(answer.reason);
  expect(answer.value).toMatchObject({state:'prepared',contactAuthority:'not_granted',coverage:'complete_retained_pages'});
  expect(answer.value.passages).toContainEqual(expect.objectContaining({kind:'business',url:f.url,quote:'Our property management team manages residential homes for owners and coordinates tenant maintenance requests.'}));

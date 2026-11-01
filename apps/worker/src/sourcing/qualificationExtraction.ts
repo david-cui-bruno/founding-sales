@@ -3,6 +3,7 @@ import {routeOfTransport} from '@fss/domain/classification/routedTransport.ts';
 import {providerErrorOf} from '@fss/domain/classification/providerError.ts';
 import {centsOf} from '@fss/domain/research/pricing.ts';
 import {preparedIdentityCitationRoles} from '@fss/domain/sourcing/preparedIdentity.ts';
+import {preparedOffSiteSelection} from '@fss/domain/sourcing/qualificationCitationRoles.ts';
 import {qualificationRequest,qualificationSelectionSchema,type QualificationExtractionProvider} from '@fss/domain/sourcing/qualificationPrompt.ts';
 import {normalizeQualificationExtractionDiagnostic,type QualificationExtractionDiagnostic} from '@fss/domain/sourcing/qualificationDiagnostics.ts';
 
@@ -59,8 +60,11 @@ export function qualificationExtraction(transport:AnthropicMessagesTransport):Qu
    if(block.text.length>2000)return rejected('invalid_evidence',{...detail,code:'block_over_bound'});
    facts.push({...selected,value:block.text});
   }
-  const roles=preparedIdentityCitationRoles(input.candidate,facts,input.observations,input.producerVersion);
+  // A moved company site's pages (ADR0034) are no citation host: their residential_management selections are kept
+  // for the prepared brief only, other kinds there are dropped; every remaining selection keeps the citation rules.
+  const offSite=facts.filter(fact=>preparedOffSiteSelection(input.candidate,fact,input.observations));
+  const roles=preparedIdentityCitationRoles(input.candidate,facts.filter(fact=>!offSite.includes(fact)),input.observations,input.producerVersion);
   if(!roles.ok)return rejected(roles.reason,{...roles.diagnostic,stopReason});
-  return {ok:true,value:{facts:roles.facts,openingQuestion:parsed.data.openingQuestion,...(roles.preparedIdentity?{preparedIdentity:roles.preparedIdentity}:{})},...cost};
+  return {ok:true,value:{facts:[...roles.facts,...offSite.filter(fact=>fact.kind==='residential_management')],openingQuestion:parsed.data.openingQuestion,...(roles.preparedIdentity?{preparedIdentity:roles.preparedIdentity}:{})},...cost};
  }};
 }

@@ -11,6 +11,7 @@ import {readPreparedProspect} from '../../sourcing/preparedProspects.ts';
 import {researchPageFetch,type RawResponse} from '../../../../apps/worker/src/research/companyPageFetch.ts';
 import {lockDiscoveryReviewSources} from '../../sourcing/discoveryReviewVisibility.ts';
 import {rememberExpiredManualSources} from '../../sourcing/manualProspectSourceLoss.ts';
+import {selectingExtraction} from './support/modelSelections.ts';
 
 let db:TestDatabase,seed:TwoWorkspaces,runtime:SessionQueryable;
 const ctx=(worker=false)=>repositoryContext(workspaceScope(seed.alpha.workspaceId,worker?{kind:'system',component:'worker'}:{kind:'user',role:'admin',userId:seed.alpha.admin.userId}),runtime);
@@ -39,7 +40,7 @@ async function capture(options:{maxPages?:number;source?:(site:string)=>string;e
  };
  const requests:string[]=[];
  const provider=researchPageFetch({lookup:async()=>['93.184.216.34'],request:async input=>{requests.push(input.url);if(input.url.endsWith('/robots.txt'))return {statusCode:404,headers:{},body:null,abortedOverCap:false};const moved=options.redirects?.(site)[input.url];if(moved)return {statusCode:301,headers:{location:moved},body:null,abortedOverCap:false};const body=pages[input.url];return body===undefined?{statusCode:404,headers:{},body:null,abortedOverCap:false}:html(body);}});
- await runQualification(ctx(true),{runId:requested.value.runId},{pageFetch:provider,extraction:{providerKey:'aws_bedrock.sourcing_qualification',countInputTokens:async()=>100,extract:async()=>({ok:false,failureCode:'invalid_evidence',costCents:1})}});
+ await runQualification(ctx(true),{runId:requested.value.runId},{pageFetch:provider,extraction:selectingExtraction()});
  const stored=async()=>(await runtime.query<{prepared_capture:{pages:{url:string;redirectUrls:string[]}[]}|null;observations:{url:string}[]}>('SELECT prepared_capture,observations FROM sourcing_qualification_runs WHERE id=$1',[requested.value.runId])).rows[0]!;
  return {site,landing,requests,stored,target:{candidateId:saved.value.id,candidateRevision:1,runId:requested.value.runId}};
 }
