@@ -8,6 +8,7 @@ import {seedTwoWorkspaces,type TwoWorkspaces} from '../db/support/fixtures.ts';
 import {listPreparedProspects,readPreparedProspect} from '../../sourcing/preparedProspects.ts';
 import {saveProspectPriority} from '../../sourcing/prospectPriority.ts';
 import {seedPreparedProspect,preparedProspectsBusinessSnapshot} from './preparedProspectsPgFixture.ts';
+import {residentialFacts} from './support/modelSelections.ts';
 let db:TestDatabase,seed:TwoWorkspaces,runtime:SessionQueryable;
 const ctx=(workspace:'alpha'|'beta'='alpha',role:'admin'|'salesperson'='admin')=>repositoryContext(workspaceScope(seed[workspace].workspaceId,{kind:'user',userId:seed[workspace][role].userId,role}),runtime);
 const list=(offset=0,viewRevision?:string)=>withTransaction(runtime,()=>listPreparedProspects(ctx(),{offset,...(viewRevision?{viewRevision}:{})}));
@@ -57,11 +58,11 @@ it('shows dated people and published contact context without converting them to 
 it.each([
  'Our software helps property managers manage residential homes and tenant requests more efficiently.',
  'Property management is the operation and oversight of residential homes by professional property managers.',
-])('does not treat vendor or educational context as the observed company managing homes: %s',async businessText=>{
+])('needs research when the model selects no residential management from vendor or educational context: %s',async businessText=>{
  const f=await seedPreparedProspect(ctx(),1,{businessText,omitBrand:true});
  // This negative has no independent positive operations passage from the shared fixture.
  const observations=f.observations.map(source=>{const blocks=source.blocks.filter(block=>block.id!=='workflow');const hash=createHash('sha256').update(JSON.stringify(blocks)).digest('hex');return {...source,blocks,contentHash:hash,relevantTextHash:hash};});
- await runtime.query('UPDATE sourcing_qualification_runs SET observations=$2::jsonb WHERE id=$1',[f.runId,JSON.stringify(observations)]);
+ await runtime.query("UPDATE sourcing_qualification_runs SET observations=$2::jsonb,facts='[]' WHERE id=$1",[f.runId,JSON.stringify(observations)]);
  expect(await read(f)).toMatchObject({ok:true,value:{state:'needs_research',contactAuthority:'not_granted'}});
 });
 
@@ -164,7 +165,7 @@ it.each(['observation','block'] as const)('rejects duplicate %s IDs rather than 
  const privatePage={...home,url:`${f.website}private-detail`,blocks,relevantTextHash:createHash('sha256').update(JSON.stringify(blocks)).digest('hex')};
  const duplicateBlocks=[...home.blocks,{...blocks[0]!,id:'residential'}];
  const observations=kind==='observation'?[home,privatePage]:[{...home,blocks:duplicateBlocks,relevantTextHash:createHash('sha256').update(JSON.stringify(duplicateBlocks)).digest('hex')}];
- await runtime.query('UPDATE sourcing_qualification_runs SET observations=$2::jsonb WHERE id=$1',[f.runId,JSON.stringify(observations)]);
+ await runtime.query('UPDATE sourcing_qualification_runs SET observations=$2::jsonb,facts=$3::jsonb WHERE id=$1',[f.runId,JSON.stringify(observations),JSON.stringify(residentialFacts(observations))]);
  const before=await preparedProspectsBusinessSnapshot(ctx()),answer=await read(f);if(!answer.ok)throw Error(answer.reason);
  expect(answer.value).toMatchObject({state:'needs_research',passages:[],coverage:'no_usable_retained_pages'});
  expect(JSON.stringify(answer.value)).not.toContain('private-page-only');expect(await preparedProspectsBusinessSnapshot(ctx())).toEqual(before);

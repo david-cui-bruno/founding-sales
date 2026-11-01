@@ -1,9 +1,10 @@
 import {createHash} from 'node:crypto';
 import {expect,it} from 'vitest';
-import {preparedProspectBriefSchema,type CandidateInput,type PreparedProspectBrief,type SourceObservation} from '@fss/contracts';
+import {preparedProspectBriefSchema,type CandidateInput,type PreparedProspectBrief,type QualificationFact,type SourceObservation} from '@fss/contracts';
 import {projectPreparedProspect} from '../../sourcing/preparedProspectProjection.ts';
 import type {ManualProspectRow} from '../../sourcing/manualProspectProjection.ts';
 import type {ManualPhoneSnapshot} from '../../sourcing/manualProspectPhone.ts';
+import {residentialFacts} from './support/modelSelections.ts';
 const id='10000000-0000-4000-8000-000000000001',other='10000000-0000-4000-8000-000000000002',run='10000000-0000-4000-8000-000000000003';
 it('binds a derived research gap to the earlier lifetime of an undisplayed contrary source',()=>{
  const now=Date.parse('2026-10-30T20:00:00Z'),website='https://cedar.example.test/',aux=website+'scope';
@@ -12,7 +13,7 @@ it('binds a derived research gap to the earlier lifetime of an undisplayed contr
  const positive=page(id,website,'Cedar Property Management manages residential homes for owners across Boston, Massachusetts.'),negative=page(other,aux,'We do not manage residential homes. '+ 'Retained scope explanation. '.repeat(90));
  expect(negative.blocks[0]!.text.length).toBeGreaterThan(2000);expect(negative.blocks[0]!.text.length).toBeLessThanOrEqual(4000);
  const row:ManualProspectRow={id,revision:1,payload:candidate,origins:[],created_at:new Date(now-2000),manual_state:'new',duplicate_count:0};
- const snapshot:ManualPhoneSnapshot={id:run,candidate_id:id,candidate_revision:1,payload:candidate,origins:[],observations:[positive,negative],facts:[],permitted_urls:[website,aux],evidence_authorities:[{id:other,url:aux,contentHash:negative.contentHash,retrievedAt:negative.retrievedAt}]};
+ const snapshot:ManualPhoneSnapshot={id:run,candidate_id:id,candidate_revision:1,payload:candidate,origins:[],observations:[positive,negative],facts:residentialFacts([positive,negative]),permitted_urls:[website,aux],evidence_authorities:[{id:other,url:aux,contentHash:negative.contentHash,retrievedAt:negative.retrievedAt}]};
  const early=now+10000,late=now+60000;
  const brief=projectPreparedProspect(row,snapshot,{id:run,candidate_revision:1},now,new Map([[website,late],[aux,early]]));
  expect(brief).toMatchObject({state:'needs_research',validUntil:new Date(early).toISOString()});
@@ -24,13 +25,13 @@ const callableNow=Date.parse('2026-10-31T20:00:00Z'),peakWebsite='https://peak.e
 const peakBusiness='Peak Property Management manages rental properties for landlords and investors throughout the Richmond area.';
 const peakPhone='Questions about your rental? Call us at (804) 555-0142.';
 const peakPerson='Jordan Reyes, Owner';
-function callableBrief(texts:string[],firmName='Peak Property Management',peakSite=peakWebsite){
+function callableBrief(texts:string[],firmName='Peak Property Management',peakSite=peakWebsite,selections:(page:SourceObservation)=>QualificationFact[]=page=>residentialFacts([page]),expirations:Map<string,number>=new Map()){
  const candidate:CandidateInput={firmName,website:peakSite,locality:'Richmond',region:'VA',signal:'fit_only',evidence:'Retained discovery context',sourceUrl:peakSite,observedOn:'2026-10-31',preparedBy:'Fictional retained acceptance'};
  const blocks=texts.map((text,index)=>({id:`b${index}`,text}));
  const page:SourceObservation={id,url:peakSite,blocks,contentHash:'a'.repeat(64),relevantTextHash:createHash('sha256').update(JSON.stringify(blocks)).digest('hex'),retrievedAt:new Date(callableNow-1000).toISOString(),publishedAt:null,publishedAtBlockId:null,firstParty:true,truncated:false};
  const row:ManualProspectRow={id,revision:1,payload:candidate,origins:[],created_at:new Date(callableNow-2000),manual_state:'new',duplicate_count:0};
- const snapshot:ManualPhoneSnapshot={id:run,candidate_id:id,candidate_revision:1,payload:candidate,origins:[],observations:[page],facts:[],permitted_urls:[peakSite]};
- return preparedProspectBriefSchema.parse(projectPreparedProspect(row,snapshot,{id:run,candidate_revision:1},callableNow));
+ const snapshot:ManualPhoneSnapshot={id:run,candidate_id:id,candidate_revision:1,payload:candidate,origins:[],observations:[page],facts:selections(page),permitted_urls:[peakSite]};
+ return preparedProspectBriefSchema.parse(projectPreparedProspect(row,snapshot,{id:run,candidate_revision:1},callableNow,expirations));
 }
 const callableOf=(brief:PreparedProspectBrief)=>brief.policyVersion==='prepared-prospect-v2'?brief.callable:null;
 it('marks an own-site prepared company with business context and a published US phone callable, without contact authority',()=>{
@@ -75,4 +76,25 @@ it('takes the callable person only from a person passage included in the brief',
  expect(callableOf(brief)).toMatchObject({state:'callable',person:peakPerson});
  expect(brief.passages.filter(p=>p.kind==='person').map(p=>p.quote)).toContain(peakPerson);
  expect(brief.policyVersion==='prepared-prospect-v2'&&brief.companyHost).toBe('peak.example.test');
+});
+
+// Business context is the run's model selection (David, Nov 1), resolved only through admitted pages.
+it('takes business context and residential fit from a residential_management selection, and none without one',()=>{
+ const label='Full Property Management';
+ const selected=callableBrief([label,peakPhone],undefined,undefined,page=>[{kind:'residential_management',value:label,observationId:page.id,blockId:'b0'}]);
+ expect(callableOf(selected)).toMatchObject({state:'callable',missing:[],residential:true});
+ expect(selected.passages.filter(p=>p.kind==='business').map(p=>p.quote)).toEqual([label]);
+ expect(callableOf(callableBrief([peakBusiness,peakPhone],undefined,undefined,()=>[]))).toMatchObject({state:'not_callable',missing:['needs_research','no_business_context'],residential:false});
+ // firm_identity and service_area selections are not business context.
+ expect(callableOf(callableBrief([peakBusiness,peakPhone],undefined,undefined,page=>[{kind:'firm_identity',value:'Peak Property Management',observationId:page.id,blockId:'b0'},{kind:'service_area',value:'Richmond',observationId:page.id,blockId:'b0'}]))?.missing).toContain('no_business_context');
+});
+it('ignores a selection that does not resolve to an admitted page block: foreign observation, unknown block or expired page',()=>{
+ for(const selections of [()=>[{kind:'residential_management' as const,value:peakBusiness,observationId:other,blockId:'b0'}],(page:SourceObservation)=>[{kind:'residential_management' as const,value:peakBusiness,observationId:page.id,blockId:'missing'}]])
+  expect(callableOf(callableBrief([peakBusiness,peakPhone],undefined,undefined,selections))?.missing).toContain('no_business_context');
+ expect(callableOf(callableBrief([peakBusiness,peakPhone],undefined,undefined,undefined,new Map([[peakWebsite,callableNow-1]])))).toMatchObject({state:'not_callable',missing:expect.arrayContaining(['no_business_context'])});
+});
+it('keeps contrary wording blocking callable even when the model selected the block',()=>{
+ const contrary='Peak Property Management does not manage residential homes or apartments in Richmond.';
+ const brief=callableBrief([contrary,peakPhone],undefined,undefined,page=>[{kind:'residential_management',value:contrary,observationId:page.id,blockId:'b0'}]);
+ expect(callableOf(brief)).toMatchObject({state:'not_callable',missing:expect.arrayContaining(['needs_research','contrary_context'])});
 });

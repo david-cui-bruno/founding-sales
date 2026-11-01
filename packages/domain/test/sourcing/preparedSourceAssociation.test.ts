@@ -6,6 +6,7 @@ import {originalAuthorities} from '../../sourcing/manualProspectOriginalAuthorit
 import type {ManualProspectRow} from '../../sourcing/manualProspectProjection.ts';
 import type {ManualPhoneSnapshot} from '../../sourcing/manualProspectPhone.ts';
 import {buildPreparedCapture,PREPARED_CAPTURE_V1} from '../../sourcing/preparedCapture.ts';
+import {residentialFacts} from './support/modelSelections.ts';
 
 const candidateId='10000000-0000-4000-8000-000000000001',observationId='10000000-0000-4000-8000-000000000002',runId='10000000-0000-4000-8000-000000000003';
 function fixture(){
@@ -15,7 +16,7 @@ function fixture(){
  const source:SourceObservation={id:observationId,url,blocks,contentHash:'a'.repeat(64),relevantTextHash:createHash('sha256').update(JSON.stringify(blocks)).digest('hex'),retrievedAt:new Date(now-1000).toISOString(),publishedAt:null,publishedAtBlockId:null,firstParty:true,truncated:false};
  const row:ManualProspectRow={id:candidateId,revision:1,payload,origins:[],created_at:new Date(now-2000),manual_state:'new',duplicate_count:0};
  const manifest={version:'prepared-source-association-v1',candidateId,candidateRevision:1,sourceUrl,pages:[{observationId,url,contentHash:source.contentHash,relevantTextHash:source.relevantTextHash,retrievedAt:source.retrievedAt,redirectUrls:[sourceUrl,url]}]};
- const snapshot:ManualPhoneSnapshot={id:runId,candidate_id:candidateId,candidate_revision:1,payload,origins:[],observations:[source],facts:[],permitted_urls:[url],capture_policy_version:'prepared-source-association-v1',capture_state:'unavailable',prepared_capture:manifest};
+ const snapshot:ManualPhoneSnapshot={id:runId,candidate_id:candidateId,candidate_revision:1,payload,origins:[],observations:[source],facts:residentialFacts([source]),permitted_urls:[url],capture_policy_version:'prepared-source-association-v1',capture_state:'unavailable',prepared_capture:manifest};
  const read=()=>projectPreparedProspect(row,snapshot,{id:runId,candidate_revision:1},now);
  return {now,sourceUrl,url,payload,source,row,manifest,snapshot,read};
 }

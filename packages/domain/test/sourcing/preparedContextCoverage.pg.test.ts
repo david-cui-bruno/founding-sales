@@ -6,6 +6,7 @@ import {repositoryContext,workspaceScope} from '../../db/workspaceScope.ts';
 import {seedTwoWorkspaces,type TwoWorkspaces} from '../db/support/fixtures.ts';
 import {listPreparedProspects,readPreparedProspect} from '../../sourcing/preparedProspects.ts';
 import {seedPreparedProspect,preparedProspectsBusinessSnapshot} from './preparedProspectsPgFixture.ts';
+import {residentialFacts} from './support/modelSelections.ts';
 
 let db:TestDatabase,seed:TwoWorkspaces,runtime:SessionQueryable;
 const ctx=()=>repositoryContext(workspaceScope(seed.alpha.workspaceId,{kind:'user',userId:seed.alpha.admin.userId,role:'admin'}),runtime);
@@ -20,7 +21,7 @@ it.each([
  const f=await seedPreparedProspect(ctx());
  const blocks=[{id:'workflow-only',text},{id:'office',text:'Office: 42 Fictional Street, Boston MA 02108. General office: (617) 555-0123.'}];
  const observations=f.observations.map(page=>({...page,blocks,relevantTextHash:createHash('sha256').update(JSON.stringify(blocks)).digest('hex')}));
- await runtime.query('UPDATE sourcing_qualification_runs SET observations=$2::jsonb WHERE id=$1',[f.runId,JSON.stringify(observations)]);
+ await runtime.query('UPDATE sourcing_qualification_runs SET observations=$2::jsonb,facts=$3::jsonb WHERE id=$1',[f.runId,JSON.stringify(observations),JSON.stringify(residentialFacts(observations))]);
  const before=await preparedProspectsBusinessSnapshot(ctx());
  expect((await runtime.query('SELECT current_user')).rows).toEqual([{current_user:'app_runtime'}]);
  const page=await withTransaction(runtime,()=>listPreparedProspects(ctx(),{offset:0}));if(!page.ok)throw Error(page.reason);
@@ -28,8 +29,8 @@ it.each([
  const brief=await withTransaction(runtime,()=>readPreparedProspect(ctx(),page.value.prospects[0]!.target));if(!brief.ok)throw Error(brief.reason);
  expect(brief.value).toMatchObject({state:'prepared',contactAuthority:'not_granted',coverage:'complete_retained_pages'});
  expect(brief.value.passages).toContainEqual(expect.objectContaining({kind:'workflow',blockId:'workflow-only',quote:text,url:f.website}));
- // Step1.6/ADR0034: resident/tenant operations are residential context; callable still needs business context and a published phone.
- expect(brief.value.unknowns.join(' ')).not.toMatch(/residential.*unknown/iu);expect(brief.value.unknowns.join(' ')).toMatch(/publisher.*identity.*not independently verified/iu);
- expect(brief.value.callable).toMatchObject({state:'not_callable',residential:true,missing:['no_business_context','no_published_phone']});
+ // Residential fit is the model's residential-management selection; operations alone leave it unknown.
+ expect(brief.value.unknowns.join(' ')).toMatch(/residential.*unknown/iu);expect(brief.value.unknowns.join(' ')).toMatch(/publisher.*identity.*not independently verified/iu);
+ expect(brief.value.callable).toMatchObject({state:'not_callable',residential:false,missing:['no_business_context','no_published_phone']});
  expect(brief.value.summary).not.toMatch(/first.party/iu);expect(await preparedProspectsBusinessSnapshot(ctx())).toEqual(before);
 });

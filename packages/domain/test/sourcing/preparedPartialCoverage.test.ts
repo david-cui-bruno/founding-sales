@@ -5,6 +5,7 @@ import {projectPreparedProspect} from '../../sourcing/preparedProspectProjection
 import type {ManualProspectRow} from '../../sourcing/manualProspectProjection.ts';
 import type {ManualPhoneSnapshot} from '../../sourcing/manualProspectPhone.ts';
 import {parsePageText} from '../../research/pageText.ts';
+import {residentialFacts} from './support/modelSelections.ts';
 
 const id='20000000-0000-4000-8000-000000000001',run='20000000-0000-4000-8000-000000000002',pageId='20000000-0000-4000-8000-000000000003';
 const description='Cedar Property Management manages residential homes for owners across Boston, Massachusetts.';
@@ -14,7 +15,7 @@ function fixture(){
  const parsed=parsePageText(new TextEncoder().encode('<p>'+description+'</p>'+'<p>Additional source context.</p>'.repeat(100)),'text/html',{omitNavigation:true,includeArticles:true});
  const source:SourceObservation={id:pageId,url:website,blocks:[...parsed.blocks],contentHash:'a'.repeat(64),relevantTextHash:'',retrievedAt:new Date(now-1000).toISOString(),publishedAt:null,publishedAtBlockId:null,firstParty:true,truncated:parsed.truncated};
  const row:ManualProspectRow={id,revision:1,payload,origins:[],created_at:new Date(now-2000),manual_state:'new',duplicate_count:0};
- const snapshot:ManualPhoneSnapshot={id:run,candidate_id:id,candidate_revision:1,payload,origins:[],observations:[source],facts:[],permitted_urls:[website]};
+ const snapshot:ManualPhoneSnapshot={id:run,candidate_id:id,candidate_revision:1,payload,origins:[],observations:[source],facts:residentialFacts([source]),permitted_urls:[website]};
  const rehash=()=>{source.relevantTextHash=createHash('sha256').update(JSON.stringify(source.blocks)).digest('hex');};rehash();
  const read=(expirations:ReadonlyMap<string,number>=new Map())=>projectPreparedProspect(row,snapshot,{id:run,candidate_revision:1},now,expirations)!;
  return {source,row,snapshot,now,website,read,rehash};

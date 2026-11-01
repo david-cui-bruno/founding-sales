@@ -16,6 +16,7 @@ import {databaseNow} from '../../policy/clock.ts';
 import {preparedProspectsBusinessSnapshot} from './preparedProspectsPgFixture.ts';
 import {rememberExpiredManualSources} from '../../sourcing/manualProspectSourceLoss.ts';
 import {deleteManualActivityEvidence} from '../../retention/manualActivityEvidenceDeletion.ts';
+import {residentialFacts} from './support/modelSelections.ts';
 
 let db:TestDatabase,seed:TwoWorkspaces,runtime:SessionQueryable;
 const ctx=(session=runtime,worker=false)=>repositoryContext(workspaceScope(seed.alpha.workspaceId,worker?{kind:'system',component:'worker'}:{kind:'user',role:'admin',userId:seed.alpha.admin.userId}),session);
@@ -41,7 +42,7 @@ async function fixture(policy?:'legacy'|'prepared-source-association-v1'){
 async function capture(f:Awaited<ReturnType<typeof fixture>>,afterExtract:()=>Promise<void>=async()=>{}){
  const requests:string[]=[],inputs:string[]=[];
  const provider=researchPageFetch({lookup:async()=>['93.184.216.34'],request:async input=>{requests.push(input.url);if(input.url.endsWith('/robots.txt'))return response('User-agent: *\nDisallow:\n','text/plain');if(input.url===f.sourceUrl)return {statusCode:301,headers:{location:f.middle},body:null,abortedOverCap:false};if(input.url===f.middle)return {statusCode:302,headers:{location:f.final},body:null,abortedOverCap:false};if(input.url===f.final)return response('<main><p>Our property management company manages residential homes for owners and coordinates tenant maintenance requests.</p></main>');return {statusCode:404,headers:{},body:null,abortedOverCap:false};}});
- await runQualification(ctx(runtime,true),f.target,{pageFetch:provider,extraction:{providerKey:'aws_bedrock.sourcing_qualification',countInputTokens:async input=>{inputs.push(JSON.stringify(input));return 100;},extract:async input=>{inputs.push(JSON.stringify(input));await afterExtract();return {ok:false,failureCode:'invalid_evidence',costCents:1};}}});
+ await runQualification(ctx(runtime,true),f.target,{pageFetch:provider,extraction:{providerKey:'aws_bedrock.sourcing_qualification',countInputTokens:async input=>{inputs.push(JSON.stringify(input));return 100;},extract:async input=>{inputs.push(JSON.stringify(input));await afterExtract();return {ok:true,costCents:1,value:{facts:residentialFacts(input.observations),openingQuestion:null}};}}});
  return {requests,inputs};
 }
 

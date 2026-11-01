@@ -17,6 +17,7 @@ import {rememberExpiredManualSources} from '../../sourcing/manualProspectSourceL
 import {withPreparedSourceDeadlines} from '../../sourcing/preparedSourceDeadlines.ts';
 import type {ManualPhoneSnapshot} from '../../sourcing/manualProspectPhone.ts';
 import type {ManualProspectRow} from '../../sourcing/manualProspectProjection.ts';
+import {residentialFacts,selectingExtraction} from './support/modelSelections.ts';
 
 let db:TestDatabase,seed:TwoWorkspaces,runtime:SessionQueryable;
 const ctx=(session=runtime,worker=false)=>repositoryContext(workspaceScope(seed.alpha.workspaceId,worker?{kind:'system',component:'worker'}:{kind:'user',role:'admin',userId:seed.alpha.admin.userId}),session);
@@ -47,7 +48,7 @@ async function captured(page:string,options:{moved?:boolean}={}){
   return {statusCode:404,headers:{},body:null,abortedOverCap:false};
  }});
  const target={candidateId:saved.value.id,candidateRevision:1,runId:requested.value.runId};
- await runQualification(ctx(runtime,true),target,{pageFetch:provider,extraction:{providerKey:'aws_bedrock.sourcing_qualification',countInputTokens:async()=>100,extract:async()=>({ok:false,failureCode:'invalid_evidence',costCents:1})}});
+ await runQualification(ctx(runtime,true),target,{pageFetch:provider,extraction:selectingExtraction()});
  return {target,candidateId:saved.value.id,final};
 }
 const list=(candidateId:string,includeManualPhone=true)=>tx(()=>listManualProspects(ctx(),{state:'all',offset:0,candidateId,expectedRevision:1,...(includeManualPhone?{includeManualPhone:true}:{})}));
@@ -138,7 +139,7 @@ it('offers and keeps the phone of an incomplete own-source page the brief cites 
  const requested=await tx(()=>requestQualification(ctx(runtime,true),{candidateId:saved.value.id,expectedRevision:1},{enqueue:false}));if(!requested.ok)throw Error(requested.reason);
  const blocks=[{id:'b1',text:'(614) 725-3059 info@rlpmg.test'},{id:'b2',text:'Our property management company manages residential homes for owners and coordinates tenant maintenance requests.'},{id:'b83',text:'(614) 725-3059'}];
  const page={id:randomUUID(),url:website,contentHash:'a'.repeat(64),relevantTextHash:createHash('sha256').update(JSON.stringify(blocks)).digest('hex'),retrievedAt:new Date(Date.now()-60_000).toISOString(),publishedAt:null,publishedAtBlockId:null,firstParty:true,truncated:true,blocks};
- await runtime.query("UPDATE sourcing_qualification_runs SET state='review',observations=$3::jsonb WHERE workspace_id=$1 AND id=$2",[seed.alpha.workspaceId,requested.value.runId,JSON.stringify([page])]);
+ await runtime.query("UPDATE sourcing_qualification_runs SET state='review',observations=$3::jsonb,facts=$4::jsonb WHERE workspace_id=$1 AND id=$2",[seed.alpha.workspaceId,requested.value.runId,JSON.stringify([page]),JSON.stringify(residentialFacts([page]))]);
  const id=saved.value.id;
  expect(await tx(()=>readPreparedProspect(ctx(),{candidateId:id,candidateRevision:1,runId:requested.value.runId}))).toMatchObject({ok:true,value:{callable:{state:'callable',phone:'(614) 725-3059'},coverage:'partial_retained_pages'}});
  const prospect=await only(id);
