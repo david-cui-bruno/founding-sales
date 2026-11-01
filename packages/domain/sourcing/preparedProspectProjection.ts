@@ -3,6 +3,7 @@ import {projectManualProspect,type ManualProspectRow} from './manualProspectProj
 import type {ManualPhoneSnapshot} from './manualProspectPhone.ts';
 import {originalLineage} from './manualProspectOriginalAuthority.ts';
 import {admitPreparedPages,type PreparedSourceExpirations} from './preparedPageAdmission.ts';
+import {preparedCaptureManifest} from './preparedCapture.ts';
 import {classifyPreparedPassage,type PreparedPassageClassification} from './preparedProspectFields.ts';
 import {blockPhoneLabels} from './manualProspectLiteralPhone.ts';
 import {classifyDiscoveryPage,companyHost} from './discoveryIdentity.ts';
@@ -18,9 +19,14 @@ export function projectPreparedProspect(row:ManualProspectRow,snapshot:ManualPho
  const target:PreparedProspectTarget={candidateId:row.id,candidateRevision:row.revision,runId:latest?.id??null};
  const passages:Passage[]=[],all:{passage:Passage;classification:PreparedPassageClassification;phone:string|null}[]=[],usedSourceDeadlines:number[]=[];
  let usablePages=0,partialPages=0,unshown=false,contraryBeyondBound=false;
+ const linked=new Set<string>();
  if(snapshot&&!snapshot.dependency_changed&&snapshot.id===latest?.id&&snapshot.candidate_revision===row.revision&&originalLineage(snapshot)){
   const admitted=admitPreparedPages(snapshot,now,expirations);
   unshown=admitted.unshown;
+  // A linked own-site page is captured through another admitted page's URL (the landing's);
+  // the landing itself, whatever its path, is not linked.
+  const admittedUrls=new Set(admitted.pages.map(page=>page.source.url));
+  for(const page of preparedCaptureManifest(snapshot)?.pages??[])if(admitted.capturedIds.has(page.observationId)&&page.redirectUrls.slice(0,-1).some(url=>url!==page.url&&admittedUrls.has(url)))linked.add(page.observationId);
   for(const {source,captured,expires} of admitted.pages){
    usablePages++;if(source.truncated)partialPages++;
    if(captured&&admitted.captureDeadline!==null)usedSourceDeadlines.push(admitted.captureDeadline);
@@ -39,10 +45,10 @@ export function projectPreparedProspect(row:ManualProspectRow,snapshot:ManualPho
  // concatenating blocks. A category is presentation, not a replacement fact.
  // Identical quote text from another block is shown once: the first is kept whole.
  for(const [kind,limit]of [['contrary',2],['business',4],['contact',2],['person',2],['location',3],['workflow',3]] as const){
-  // ADR0034: a linked own-site page leads the section it was fetched for, so landing-page
-  // blocks cannot fill the bound before the contact, about or team page is cited.
-  const page=OWN_SITE_SECTION[kind],own=(entry:typeof all[number])=>page!==undefined&&ownSitePageKind(entry.passage.url)===page;
-  const ordered=page===undefined?all:[...all].sort((a,b)=>Number(own(b))-Number(own(a)));
+  // ADR0034: linked own-site pages lead these sections, the page fetched for the section first,
+  // so landing-page blocks cannot fill the bound before a linked page is cited.
+  const page=OWN_SITE_SECTION[kind],rank=(entry:typeof all[number])=>linked.has(entry.passage.observationId)?1+Number(ownSitePageKind(entry.passage.url)===page):0;
+  const ordered=page===undefined?all:[...all].sort((a,b)=>rank(b)-rank(a));
   // Phone- and short person-bearing blocks lead their bounded sections so callable facts stay traceable.
   const entries=kind==='workflow'?[...ordered].sort((a,b)=>Number(b.classification.usefulOperations)-Number(a.classification.usefulOperations)):kind==='contact'?[...ordered].sort((a,b)=>Number(b.phone!==null)-Number(a.phone!==null))
    :kind==='person'?[...ordered].sort((a,b)=>Number(b.passage.quote.length<=200)-Number(a.passage.quote.length<=200)):ordered;

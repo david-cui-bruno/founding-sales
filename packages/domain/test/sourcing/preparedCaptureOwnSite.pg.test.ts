@@ -22,8 +22,8 @@ afterAll(async()=>db?.drop());
 
 /** A landing page (the exact candidate source) that links to its own contact, about,
  * team and service pages, a second contact page and another company's site. */
-async function capture(options:{maxPages?:number;extra?:(site:string)=>Record<string,string>;redirects?:(site:string)=>Record<string,string>}={}){
- const host=`ownsite-${randomUUID()}.example.test`,site=`https://${host}`,landing=`${site}/`;
+async function capture(options:{maxPages?:number;source?:(site:string)=>string;extra?:(site:string)=>Record<string,string>;redirects?:(site:string)=>Record<string,string>}={}){
+ const host=`ownsite-${randomUUID()}.example.test`,site=`https://${host}`,landing=options.source?.(site)??`${site}/`;
  const saved=await tx(()=>saveCandidate(ctx(),{firmName:'Fictional Harbor Property Management',website:landing,sourceUrl:landing,locality:'Boston',region:'MA',signal:'fit_only',evidence:'Fictional search label only',observedOn:new Date().toISOString().slice(0,10),preparedBy:'Tavily Basic search · not verified'}));
  if(!saved.ok)throw Error(saved.reason);
  await runtime.query('INSERT INTO research_settings(workspace_id,enabled,max_pages_per_firm) VALUES($1,true,$2)',[seed.alpha.workspaceId,options.maxPages??5]);
@@ -102,4 +102,14 @@ it('cites the linked contact page even when the landing page already fills the b
  // Phone-bearing blocks still lead; among them the linked contact page's comes first.
  expect(brief.value.passages.filter(p=>p.kind==='contact').map(p=>[p.url,p.quote])).toEqual([[`${f.site}/contact/`,'(617) 555-0101'],[f.landing,'(617) 555-0102']]);
  expect(brief.value.callable).toMatchObject({state:'callable',phone:'(617) 555-0101'});
+});
+
+it('ranks a linked page ahead of a non-root landing of the same kind: a /contact source with two phones still cites its linked /contact-us phone',async()=>{
+ const f=await capture({source:site=>`${site}/contact`,extra:site=>({[`${site}/contact`]:'<nav><a href="/contact-us">Contact us</a></nav><main><p>Our property management company manages residential homes for owners in Boston.</p><p>(617) 555-0111</p><p>(617) 555-0112</p></main>',
+  [`${site}/contact-us`]:'<main><p>(617) 555-0113</p></main>'})});
+ const stored=await f.stored();
+ expect(stored.prepared_capture?.pages.map(p=>[p.url,p.redirectUrls])).toEqual([[`${f.site}/contact-us`,[f.landing,`${f.site}/contact-us`]]]);
+ const brief=await tx(()=>readPreparedProspect(ctx(),f.target));if(!brief.ok)throw Error(brief.reason);
+ expect(brief.value.passages.filter(p=>p.kind==='contact').map(p=>[p.url,p.quote])).toEqual([[`${f.site}/contact-us`,'(617) 555-0113'],[f.landing,'(617) 555-0111']]);
+ expect(brief.value.callable).toMatchObject({state:'callable',phone:'(617) 555-0113'});
 });
