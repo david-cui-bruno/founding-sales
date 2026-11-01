@@ -26,11 +26,13 @@ const explicitManagementService=/\b(?:property|rental|real estate|community|asso
 const nonServiceBusiness=/\b(?:investment portfolios?|investment funds?|financial returns|securities|wealth management|investment education|management training|real estate (?:investment )?(?:funds?|portfolios?|assets|capital|investment trusts?)|REITs?)\b|\b(?:investments|assets|funds?|capital|securities) for (?:institutional |accredited )?investors\b/iu;
 // A whole-block tagline names the publisher's own residential service without a verb:
 // "Franchise-owner-operated residential property management offices in New Mexico, Colorado, and Arizona."
-// Only a short lead, the service phrase and a place tail: any further clause ("… love our app") or a
-// product/customer word in the lead is no self-description. Sentences with a subject use the verb path.
-const residentialTagline=/^(?:[\p{L}\d&'’-]+[\s-]+){0,6}(?:[Rr]esidential|[Ss]ingle.[Ff]amily|[Mm]ulti.?[Ff]amily)\s+(?:[Pp]roperty|[Rr]ental)\s+[Mm]anagement\s+(?:[Cc]ompany|[Ff]irm|[Oo]ffices?|[Tt]eam|[Ss]ervices)(?:\s+(?:in|across|serving|throughout)\s+(?:the\s+)?\p{Lu}[\p{L}.'’-]*(?:(?:,\s*|\s+|,?\s+and\s+|\s+&\s+)(?:the\s+)?\p{Lu}[\p{L}.'’-]*)*)?\.?$/u;
-const taglineLead=/\b(?:for|to|with|software|platforms?|tools?|apps?|solutions?|systems?|products?|we|our|is|are)\b/iu;
-const residentialSelfTagline=(text:string)=>{const trimmed=text.trim(),match=residentialTagline.exec(trimmed);return match!==null&&!taglineLead.test(trimmed.slice(0,trimmed.search(/\b(?:residential|single.family|multi.?family)\s+(?:property|rental)\s+management\b/iu)));};
+// Only an ownership/quality lead, the service phrase and a place tail: a lead word outside the
+// allowlist ("Directory of", "Jobs at") or any further clause ("… love our app") is no self-description.
+// Sentences with a subject use the verb path.
+const residentialTagline=/(?:[Rr]esidential|[Ss]ingle.[Ff]amily|[Mm]ulti.?[Ff]amily)\s+(?:[Pp]roperty|[Rr]ental)\s+[Mm]anagement\s+(?:[Cc]ompany|[Ff]irm|[Oo]ffices?|[Tt]eam|[Ss]ervices?)(?:\s+(?:in|across|serving|throughout)\s+(?:the\s+)?\p{Lu}[\p{L}.'’-]*(?:(?:,\s*|\s+|,?\s+and\s+|\s+&\s+)(?:the\s+)?\p{Lu}[\p{L}.'’-]*)*)?\.?$/u;
+const leadToken="(?:(?:\\p{L}+-)*\\p{L}+-(?:owned|operated|based)|full-service|local|trusted|professional|premier|boutique|experienced|independent|family|locally|owned|operated|award-winning|leading|dedicated|reliable)";
+const taglineLead=new RegExp(`^(?:an?\\s+)?(?:${leadToken}(?:(?:,?\\s+(?:&|and)\\s+|,\\s*|\\s+)${leadToken}){0,3}\\s+)?$`,'iu');
+const residentialSelfTagline=(text:string)=>{const trimmed=text.trim(),match=residentialTagline.exec(trimmed);return match!==null&&taglineLead.test(trimmed.slice(0,match.index));};
 const substantive=(text:string)=>text.length>=50&&text.trim().split(/\s+/u).length>=8;
 const question=(text:string)=>/\?\s*$/u.test(text)||/^\s*(?:why|how|what|when|where|who|which|do|does|did|can|could|should|would|is|are)\b[^.!?\n]*$/iu.test(text);
 function business(text:string):boolean {

@@ -175,6 +175,8 @@ it.each([
  'If we manage your real estate investment, sign in to view your statements and account notes.',
  'Family-owned single-family rental management services throughout Grand Rapids, Kentwood & Wyoming.',
  'Residential Property Management Services in Spokane, Liberty Lake and the Spokane Valley.',
+ 'Family-owned residential property management service throughout Boston and Cambridge.',
+ 'A locally-owned & award-winning residential property management company serving Spokane, WA.',
  'We manage rental homes for institutional investors across the Boston metropolitan area.',
 ])('recognizes a residential self-description or own real-estate management as business: %s',text=>{
  expect(classifyPreparedPassage(text,'')).toMatchObject({usefulBusiness:true,contrary:false,kinds:expect.arrayContaining(['business'])});
@@ -188,6 +190,8 @@ it.each([
  'Built for any residential property management company that wants faster owner statements and reports.',
  'We manage real estate funds for institutional investors across the United States.',
  'Residential property management offices love our app for faster owner statements.',
+ 'Directory of residential property management services in Boston and Cambridge.',
+ 'Jobs at a residential property management company in Boston and Cambridge.',
  'Residential property management offices in Boston use our platform for owner statements.',
  'Our firm manages real estate assets and capital for institutional investors in core markets nationwide.',
 ])('still refuses vendor, denial, short or investment-fund text: %s',text=>{
