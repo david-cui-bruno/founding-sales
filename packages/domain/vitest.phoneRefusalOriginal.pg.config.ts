@@ -14,6 +14,16 @@ export function requirePhoneRefusalOriginalPgAuthority(env:NodeJS.ProcessEnv=pro
  throw Error('Fresh Root exclusive PG grant required outside canonical hosted greenfield');
 }
 
+/** The general `vitest run` includes the retained-original PG suite, but a local run
+ * without the explicit grant must not fail a whole domain run for a guard that is working
+ * as designed. Defer only outside GitHub Actions: a hosted run that loses its canonical
+ * authority still fails. A bare `CI=true` (agent shells and IDE terminals export it) is
+ * not hosted evidence, so it defers like any other local run. */
+export function phoneRefusalOriginalPgDeferredLocally(env:NodeJS.ProcessEnv=process.env,platform:NodeJS.Platform=process.platform):boolean{
+ if(env['GITHUB_ACTIONS']==='true')return false;
+ try{requirePhoneRefusalOriginalPgAuthority(env,platform);return false;}catch{return true;}
+}
+
 // This isolated local entrypoint remains stricter than the hosted canonical suite.
 // Vitest evaluates the factory before it can invoke globalSetup or allocate PG.
 export default defineConfig(()=>{

@@ -1,5 +1,5 @@
 import {afterEach,expect,it,vi} from 'vitest';
-import config,{requirePhoneRefusalOriginalPgAuthority} from '../../vitest.phoneRefusalOriginal.pg.config.ts';
+import config,{phoneRefusalOriginalPgDeferredLocally,requirePhoneRefusalOriginalPgAuthority} from '../../vitest.phoneRefusalOriginal.pg.config.ts';
 const service='postgresql://postgres@127.0.0.1:5432/postgres';
 const hosted=():NodeJS.ProcessEnv=>({CI:'true',GITHUB_ACTIONS:'true',RUNNER_ENVIRONMENT:'github-hosted',RUNNER_OS:'Linux',GITHUB_JOB:'greenfield',FSS_TEST_REQUIRE_PGVECTOR:'1',FSS_TEST_POSTGRES_URL:service,FSS_TEST_CLUSTER_URL:service,FSS_TEST_TEMPLATE_DATABASE:`fss_template_${'a'.repeat(32)}`});
 afterEach(()=>vi.unstubAllEnvs());
@@ -26,4 +26,13 @@ it('retained isolated config still refuses before globalSetup without local gran
  expect(()=>config({command:'serve',mode:'test'})).toThrow('Fresh Root');
  vi.stubEnv('FSS_PHONE_REFUSAL_ORIGINAL_PG_GRANT','retained-only');
  expect(await config({command:'serve',mode:'test'})).toMatchObject({test:{include:['test/sourcing/prospectPhoneRefusalOriginal.pg.test.ts'],globalSetup:['db/testing/globalSetup.ts'],maxWorkers:1}});
+});
+it('general local runs defer the PG suite without a grant, but hosted-looking runs and granted runs do not',()=>{
+ expect(phoneRefusalOriginalPgDeferredLocally({},'darwin')).toBe(true);
+ expect(phoneRefusalOriginalPgDeferredLocally({FSS_TEST_POSTGRES_URL:service},'darwin')).toBe(true);
+ expect(phoneRefusalOriginalPgDeferredLocally({FSS_PHONE_REFUSAL_ORIGINAL_PG_GRANT:'retained-only'},'darwin')).toBe(false);
+ expect(phoneRefusalOriginalPgDeferredLocally({CI:'true'},'darwin')).toBe(true);
+ expect(phoneRefusalOriginalPgDeferredLocally({GITHUB_ACTIONS:'true'},'linux')).toBe(false);
+ expect(phoneRefusalOriginalPgDeferredLocally({...hosted(),GITHUB_JOB:'other'},'linux')).toBe(false);
+ expect(phoneRefusalOriginalPgDeferredLocally(hosted(),'linux')).toBe(false);
 });
