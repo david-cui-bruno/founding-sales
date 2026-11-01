@@ -9,7 +9,8 @@ import {recordProviderCall} from '@fss/domain/research/ledger.ts';
 import {ensureTargetingPolicy,readTargetingPolicy} from '@fss/domain/sourcing/targetingProposals.ts';
 import {readResearchSettings,updateResearchSettings} from '@fss/domain/research/settings.ts';
 import {targetingConfigureCommand} from '../src/tools/fss/targetingConfigure.ts';
-import {researchLowerCeilingsCommand} from '../src/tools/fss/researchLowerCeilings.ts';
+import {researchSetCeilingsCommand} from '../src/tools/fss/researchSetCeilings.ts';
+import {researchStatusCommand} from '../src/tools/fss/researchStatus.ts';
 let db:Awaited<ReturnType<typeof createTestDatabase>>,seed:Awaited<ReturnType<typeof seedTwoWorkspaces>>,ctx:ReturnType<typeof repositoryContext>;
 const launch={launchedBy:'arn:aws:iam::123456789012:user/operator',taskArn:'arn:aws:ecs:us-east-1:123456789012:task/cluster/fixture'};
 const common=()=>({'--workspace-id':seed.alpha.workspaceId,'--owner-user-id':seed.alpha.admin.userId});
@@ -32,7 +33,7 @@ beforeEach(async()=>{
 });
 afterEach(async()=>db?.drop());
 it.each(['targeting','research'] as const)('requires an audited ECS launcher for %s before any mutation',async kind=>{
- const before=await snapshot(),result=kind==='targeting'?await targetingConfigureCommand({session:ctx.db,options:await targetingOptions()}):await researchLowerCeilingsCommand({session:ctx.db,options:researchOptions()});
+ const before=await snapshot(),result=kind==='targeting'?await targetingConfigureCommand({session:ctx.db,options:await targetingOptions()}):await researchSetCeilingsCommand({session:ctx.db,options:researchOptions()});
  expect(result).toMatchObject({ok:false,reason:'launcher_unknown'});expect(await snapshot()).toEqual(before);
 });
 it.each(['foreign','salesperson','inactive'] as const)('requires the explicitly selected current active ADMIN, refusing %s',async mode=>{
@@ -43,24 +44,45 @@ it.each(['foreign','salesperson','inactive'] as const)('requires the explicitly 
  }
  const before=await snapshot();
  expect(await targetingConfigureCommand({session:ctx.db,launch,options:{...(await targetingOptions()),'--owner-user-id':owner}})).toMatchObject({ok:false,reason:'owner_inactive'});
- expect(await researchLowerCeilingsCommand({session:ctx.db,launch,options:{...researchOptions(),'--owner-user-id':owner}})).toMatchObject({ok:false,reason:'owner_inactive'});expect(await snapshot()).toEqual(before);
+ expect(await researchSetCeilingsCommand({session:ctx.db,launch,options:{...researchOptions(),'--owner-user-id':owner}})).toMatchObject({ok:false,reason:'owner_inactive'});expect(await snapshot()).toEqual(before);
 });
 it('lowers only daily/monthly money while preserving research model/scope/enabled and all search/sending flags, with launcher audit',async()=>{
  const before=await readResearchSettings(ctx),controls=await snapshot();
- expect(await researchLowerCeilingsCommand({session:ctx.db,launch,options:researchOptions()})).toEqual({ok:true,value:{dailyCents:1000,monthlyCents:20000}});
+ expect(await researchSetCeilingsCommand({session:ctx.db,launch,options:researchOptions()})).toEqual({ok:true,value:{dailyCents:1000,monthlyCents:20000,dailyFirms:400}});
  const after=await readResearchSettings(ctx);expect(after).toMatchObject({enabled:before.enabled,dailyFirmCeiling:before.dailyFirmCeiling,maxPagesPerFirm:before.maxPagesPerFirm,maxPageBytes:before.maxPageBytes,modelName:before.modelName,dailyCostCeilingCents:1000,monthlyCostCeilingCents:20000});
  const updated=await snapshot();for(const table of Object.keys(controls).filter(t=>!['research_settings','audit_events'].includes(t)))expect(updated[table]).toEqual(controls[table]);
- const audit=(await ctx.db.query<{detail:unknown;actor_user_id:string}>("SELECT detail,actor_user_id FROM audit_events WHERE action='research.ceilings_lowered'")).rows[0];
- expect(audit).toMatchObject({actor_user_id:seed.alpha.admin.userId,detail:{...launch,before:{dailyCents:4000,monthlyCents:38750},after:{dailyCents:1000,monthlyCents:20000}}});
- expect(await researchLowerCeilingsCommand({session:ctx.db,launch,options:researchOptions()})).toMatchObject({ok:true});
+ const audit=(await ctx.db.query<{detail:unknown;actor_user_id:string}>("SELECT detail,actor_user_id FROM audit_events WHERE action='research.ceilings_set'")).rows[0];
+ expect(audit).toMatchObject({actor_user_id:seed.alpha.admin.userId,detail:{...launch,approvalRef:null,before:{dailyCents:4000,monthlyCents:38750,dailyFirms:400},after:{dailyCents:1000,monthlyCents:20000,dailyFirms:400}}});
+ expect(await researchSetCeilingsCommand({session:ctx.db,launch,options:researchOptions()})).toMatchObject({ok:true});
 });
-it.each([['4001','20000'],['1000','38751']])('refuses any increase daily=%s/monthly=%s atomically',async(daily,monthly)=>{
- const before=await snapshot();expect(await researchLowerCeilingsCommand({session:ctx.db,launch,options:{...researchOptions(),'--daily-cents':daily,'--monthly-cents':monthly}})).toMatchObject({ok:false,reason:'ceiling_increase_refused'});expect(await snapshot()).toEqual(before);
+it.each([['4001','20000',{}],['1000','38751',{}],['1000','20000',{'--daily-firms':'401'}]])('refuses any unapproved increase daily=%s/monthly=%s %o atomically',async(daily,monthly,extra)=>{
+ const before=await snapshot();expect(await researchSetCeilingsCommand({session:ctx.db,launch,options:{...researchOptions(),'--daily-cents':daily,'--monthly-cents':monthly,...extra}})).toMatchObject({ok:false,reason:'ceiling_increase_unapproved'});expect(await snapshot()).toEqual(before);
+});
+it('raises money and firm ceilings only with an approval reference, auditing before/after, approval and launcher',async()=>{
+ const before=await readResearchSettings(ctx),controls=await snapshot();
+ const options={...researchOptions(),'--daily-cents':'5000','--monthly-cents':'60000','--daily-firms':'450','--approval-ref':'David approval 2026-11-01 supply raise'};
+ expect(await researchSetCeilingsCommand({session:ctx.db,launch,options})).toEqual({ok:true,value:{dailyCents:5000,monthlyCents:60000,dailyFirms:450}});
+ expect(await readResearchSettings(ctx)).toMatchObject({enabled:before.enabled,modelName:before.modelName,maxPagesPerFirm:before.maxPagesPerFirm,maxPageBytes:before.maxPageBytes,dailyCostCeilingCents:5000,monthlyCostCeilingCents:60000,dailyFirmCeiling:450});
+ const updated=await snapshot();for(const table of Object.keys(controls).filter(t=>!['research_settings','audit_events'].includes(t)))expect(updated[table]).toEqual(controls[table]);
+ expect((await ctx.db.query("SELECT detail,actor_user_id FROM audit_events WHERE action='research.ceilings_set'")).rows).toMatchObject([{actor_user_id:seed.alpha.admin.userId,
+  detail:{...launch,approvalRef:'David approval 2026-11-01 supply raise',ownerUserId:seed.alpha.admin.userId,before:{dailyCents:4000,monthlyCents:38750,dailyFirms:400},after:{dailyCents:5000,monthlyCents:60000,dailyFirms:450}}}]);
+});
+it('reports research settings, spend, firm runs, worst-case run cost, discovery and search account read-only, without a launcher',async()=>{
+ await ctx.db.query('UPDATE sourcing_discovery_settings SET searches_per_day=3 WHERE workspace_id=$1',[seed.alpha.workspaceId]);
+ const before=await snapshot();
+ const status=await researchStatusCommand({session:ctx.db,options:{'--workspace-id':seed.alpha.workspaceId},environment:{FSS_MODEL_TRANSPORT:'bedrock'}});
+ expect(status).toMatchObject({ok:true,value:{transport:'bedrock',
+  research:{configured:true,enabled:false,modelName:'claude-haiku-4-5',dailyFirmCeiling:400,firmRunsToday:0,dailyCostCeilingCents:4000,monthlyCostCeilingCents:38750,spend:{todayCents:0,monthToDateCents:0}},
+  discovery:{enabled:false,searches_per_day:3,last_result:'unknown',qualification_wait_reason:null},searchAccount:{halted:true,daily_used:7,monthly_used:123}}});
+ expect(status.ok&&(status.value as {research:{worstCaseRunCents:number}}).research.worstCaseRunCents).toBeGreaterThan(0);
+ expect(await snapshot()).toEqual(before);
+ expect(await researchStatusCommand({session:ctx.db,options:{'--workspace-id':seed.beta.workspaceId,'--unknown':'x'},environment:{}})).toMatchObject({ok:false,reason:'invalid_options'});
+ expect(await researchStatusCommand({session:ctx.db,options:{'--workspace-id':'99999999-9999-4999-8999-999999999999'},environment:{}})).toMatchObject({ok:false,reason:'workspace_unknown'});
 });
 it('refuses unconfigured settings without initializing defaults or changing audits',async()=>{
  await db.session.query('DELETE FROM research_settings WHERE workspace_id=$1',[seed.alpha.workspaceId]);
  const before=await snapshot();
- expect(await researchLowerCeilingsCommand({session:ctx.db,launch,options:{...researchOptions(),'--daily-cents':'0','--monthly-cents':'0'}})).toMatchObject({ok:false,reason:'settings_unconfigured'});
+ expect(await researchSetCeilingsCommand({session:ctx.db,launch,options:{...researchOptions(),'--daily-cents':'0','--monthly-cents':'0'}})).toMatchObject({ok:false,reason:'settings_unconfigured'});
  expect(await snapshot()).toEqual(before);
 });
 it('an actual queued Firm claim reads the committed lower ceiling and creates no reservation',async()=>{
@@ -77,7 +99,7 @@ it('an actual queued Firm claim reads the committed lower ceiling and creates no
  }};
  const claiming=await db.appRuntimeSession(),worker=repositoryContext(workspaceScope(seed.alpha.workspaceId,{kind:'system',component:'worker'}),claiming);
  const pid=(await claiming.query<{pid:number}>('SELECT pg_backend_pid() pid')).rows[0]!.pid;
- const lowering=researchLowerCeilingsCommand({session:delayed,launch,options:researchOptions()});
+ const lowering=researchSetCeilingsCommand({session:delayed,launch,options:researchOptions()});
  let claim:ReturnType<typeof beginFirmResearch>|undefined;
  try{
   await reachedCommit;

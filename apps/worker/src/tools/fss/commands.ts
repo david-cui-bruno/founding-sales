@@ -97,7 +97,9 @@ export const COMMAND_DEPENDENCIES: Readonly<Record<string, DependencyMode>> = Ob
   'discovery resume': 'database',
   'qualification configure': 'database',
   'targeting configure': 'database',
-  'research lower-ceilings': 'database',
+  'research set-ceilings': 'database',
+  // Research settings, spend, firm-run counter and discovery allowance, READ ONLY.
+  'research status': 'database',
   'qualification resolve-identity': 'database',
   // Lane M1: what the attendance correction (0039) will change, counts only, READ ONLY.
   'meetings attendance-report': 'database',
@@ -362,10 +364,16 @@ export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
     summary:'Apply an explicitly approved targeting proposal through existing CAS owners; audited ECS launcher and current admin required. No quota, budget, activation or sending change.',
   },
   {
-    path:['admin','research','lower-ceilings'],
-    valueFlags:['--workspace-id','--owner-user-id','--daily-cents','--monthly-cents',...REPORTABLE],
+    path:['admin','research','set-ceilings'],
+    valueFlags:['--workspace-id','--owner-user-id','--daily-cents','--monthly-cents','--daily-firms','--approval-ref',...REPORTABLE],
     booleanFlags:[],requiredFlags:['--workspace-id','--owner-user-id','--daily-cents','--monthly-cents'],
-    summary:'Lower existing research money ceilings only; audited ECS launcher and current admin required. Preserves model, enabled state, count, pages, search and sending controls.',
+    summary:'Set research daily/monthly money and optional daily firm ceilings; audited ECS launcher and current admin required, and any increase needs --approval-ref. Preserves model, enabled state, pages, search and sending controls.',
+  },
+  {
+    path:['admin','research','status'],
+    valueFlags:['--workspace-id',...REPORTABLE],
+    booleanFlags:[],requiredFlags:['--workspace-id'],
+    summary:'Read research settings, spend today/month, firm runs against the ceiling, worst-case run cost, discovery settings and search account. READ ONLY; changes nothing.',
   },
   {
     path:['admin','discovery','resume'],

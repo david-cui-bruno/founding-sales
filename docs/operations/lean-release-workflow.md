@@ -46,6 +46,36 @@ The source defines `fss-prod-ci-maintenance` and `fss-prod-ci-plan`. Earlier boo
 
 Required configuration includes main-only `production-maintenance`, `production-plan` and protected `production-release-review` environments, scoped role ARN secrets, `FSS_PRODUCTION_PLAN_PUBLIC_KEY_PEM` and protected `FSS_PRODUCTION_PLAN_PRIVATE_KEY_PEM` (RSA, at least3072 bits), plus existing origin/record settings. Only the reviewed saved-plan application environment receives its private decryption key. Configuration changes need applicable review and actual readback, not a new local production recipe or an assumption that source declarations are live.
 
+### Audited admin one-offs (Root)
+
+Commands marked "audited ECS launcher required" (`discovery configure`, `discovery resume`, `qualification configure`, `targeting configure`, `research set-ceilings`, …) refuse `launcher_unknown` unless they run as an ECS task on the production `operations` definition with `FSS_LAUNCHED_BY` set to the launching principal; the command reads its own task ARN from ECS metadata and audits both. Root runs them with the existing production role through `release_run_task` (`infra/scripts/lib.sh`) on the current normal operations definition: the latest ACTIVE `fss-prod-operations` revision, with the normal CLI shape (entryPoint `["node","apps/worker/src/tools/fss.ts"]`, command `["verify"]`, as the release operator's `normal_cli_changed` check requires), whose single `operations` image must equal the image every running `fss-prod-worker` task runs, while `/health` `build.commit` equals the expected deployed commit (the release operator's normal-definition check). Any mismatch is NO-GO, launching nothing. `fss admin research status --workspace-id <ws>` is read-only and needs no launcher; run it first for current research settings, spend, firm runs, worst-case run cost, discovery settings and search-account usage. Run the pattern below as a script or subshell from the repository root: the `lib.sh` helpers `exit` on refusal.
+
+```bash
+source infra/scripts/lib.sh
+release_read_root infra/roots/production fss-prod production "runs an audited admin one-off on production's database"
+expected=<deployed commit, from current-state>
+who=$(aws sts get-caller-identity --query Arn --output text)
+# Terraform's operations_task_definition_arn can name an older revision than hosted releases registered:
+# use the latest ACTIVE fss-prod-operations revision, held to the image the running worker tasks run.
+td=$(aws ecs describe-task-definition --task-definition fss-prod-operations --output json)
+ops=$(jq -r '.taskDefinition.taskDefinitionArn' <<<"$td")
+img=$(jq -er 'select(.taskDefinition.status=="ACTIVE" and (.taskDefinition.containerDefinitions|length)==1 and .taskDefinition.containerDefinitions[0].name=="operations"
+  and .taskDefinition.containerDefinitions[0].entryPoint==["node","apps/worker/src/tools/fss.ts"] and .taskDefinition.containerDefinitions[0].command==["verify"]) | .taskDefinition.containerDefinitions[0].image' <<<"$td") \
+  || { echo "NO-GO: not the normal operations CLI definition (a leftover OFF-reader revision replaces entryPoint and clears command)"; exit 1; }
+running=$(aws ecs describe-tasks --cluster "$CLUSTER_ARN" --tasks $(aws ecs list-tasks --cluster "$CLUSTER_ARN" --service-name fss-prod-worker --desired-status RUNNING --query 'taskArns' --output text) \
+  --query 'tasks[].containers[?name==`worker`].imageDigest[]' --output text | tr '\t' '\n' | sort -u)
+[ -n "$running" ] && [ "$(wc -l <<<"$running")" -eq 1 ] && [ "${img#*@}" = "$running" ] || { echo "NO-GO: operations image ${img#*@} is not the running worker image"; exit 1; }
+[ "$(curl -fsS --max-time 10 https://api.usecallie.com/health | jq -r '.build.commit')" = "$expected" ] || { echo "NO-GO: /health build.commit is not $expected"; exit 1; }
+release_run_task --step admin-<name> --environment "$ENVIRONMENT" --prefix "$PREFIX" --account "$ACCOUNT" --region "$REGION" \
+  --cluster "$CLUSTER_ARN" --task-definition "$ops" --container operations \
+  --network-plan "$NETWORK_PLAN" --image-digest "${img#*@}" --database-host "$DATABASE_HOST" --secret-arn "$RUNTIME_SECRET_ARN" \
+  --log-group "$LOG_GROUP" --log-stream-prefix operations --capture "/tmp/admin-<name>.log" --env "FSS_LAUNCHED_BY=$who" \
+  -- admin research set-ceilings --workspace-id <ws> --owner-user-id <active admin> --daily-cents <n> --monthly-cents <n> \
+     [--daily-firms <n>] [--approval-ref "<who approved, when>"] --report /tmp/fss-admin.json
+```
+
+Any increase of a research ceiling needs `--approval-ref`; the `research.ceilings_set` audit records before/after, approval, owner, launcher and task ARN. Record the task ARN and JSON answer, and reconcile a task whose outcome is unknown before any retry.
+
 ## Failure and recovery
 
 The shared hold controls automatic admission; it is not instantaneous revocation of a protected run already approved for exact execution. To stop it, reject its pending approval or cancel the exact owned hosted run through existing GitHub controls. Cancellation can leave provider/migration writes unknown. Contain sending, inspect actual state and fix forward, never blindly replay. Local observation failure is not hosted failure/cancellation. Final status must describe the actual job even while shared holds remain set. Current stored owner OFF stays OFF. Only a healthy release removes its own temporary block for already-authorized sending after fresh checks, preserving owner-disabled controls/newer stops. This is not per-release reapproval of unchanged consent, nor permission to enable a stored OFF switch.
