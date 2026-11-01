@@ -1,4 +1,4 @@
-import {randomUUID} from 'node:crypto';
+import {createHash,randomUUID} from 'node:crypto';
 import {afterAll,beforeAll,expect,it} from 'vitest';
 import type {CallingPreparationInput,ManualPhoneChoice,ManualProspect} from '@fss/contracts';
 import {createTestDatabase,type TestDatabase} from '../../db/testing/testDatabase.ts';
@@ -137,4 +137,40 @@ it('withdraws a prepared-source company once a newer qualification run supersede
  await expect(tx(async()=>{await lockPreparationCleanup(ctx());await requireCurrentCallingPreparation(ctx(),saved.firmId,async()=>true);})).rejects.toMatchObject({reason:'source_withdrawn'});
  expect(await tx(()=>sweepCallingPreparations(ctx(),{limit:10}))).toBeGreaterThanOrEqual(1);
  expect(await erased(saved.preparationId)).toMatchObject({state:'erased',reason:'source_changed'});
+});
+it('refuses to save against an in-flight run, and finishing that run neither fails nor is blocked by the loss guard',async()=>{
+ const website=`https://flight-${randomUUID()}.example.test/`,name='Zephyr Quartz Property Management';
+ const saved=await tx(()=>saveCandidate(ctx(),{firmName:name,website,sourceUrl:website,locality:'Columbus',region:'OH',signal:'fit_only',evidence:'Fictional search label only',observedOn:new Date().toISOString().slice(0,10),preparedBy:'Fixture'}));
+ if(!saved.ok)throw Error(saved.reason);const candidateId=saved.value.id;
+ const requested=await tx(()=>requestQualification(ctx(runtime,true),{candidateId,expectedRevision:1},{enqueue:false}));if(!requested.ok)throw Error(requested.reason);
+ const blocks=[{id:'b1',text:'Office phone: (614) 725-4411'},{id:'b2',text:'Our property management company manages residential homes for owners and coordinates tenant maintenance requests.'}];
+ const page={id:randomUUID(),url:website,contentHash:'a'.repeat(64),relevantTextHash:createHash('sha256').update(JSON.stringify(blocks)).digest('hex'),retrievedAt:new Date(Date.now()-60_000).toISOString(),publishedAt:null,publishedAtBlockId:null,firstParty:true,truncated:false,blocks};
+ // Observations are committed before extraction, so the run is still running while its page is already readable.
+ await runtime.query("UPDATE sourcing_qualification_runs SET state='running',observations=$3::jsonb WHERE workspace_id=$1 AND id=$2",[seed.alpha.workspaceId,requested.value.runId,JSON.stringify([page])]);
+ const answer=await tx(()=>listManualProspects(ctx(),{state:'all',offset:0,candidateId,expectedRevision:1,includeManualPhone:true}));if(!answer.ok)throw Error(answer.reason);
+ const evidence=answer.value.prospects.find(p=>p.candidateId===candidateId)?.phoneEvidence;if(evidence?.state!=='observed')throw Error('phone not offered');
+ const source=evidence.sources.find(item=>'method' in item&&item.normalizedValue!==null);if(!source||!('method' in source))throw Error('no literal');
+ const choice:ManualPhoneChoice={runId:source.runId,observationId:source.observationId,blockId:source.blockId,labelStart:source.labelStart,labelEnd:source.labelEnd,start:source.start,end:source.end,contentHash:source.contentHash,relevantTextHash:source.relevantTextHash};
+ expect(await tx(()=>recordManualProspectFeedback(ctx(),{candidateId,expectedRevision:1,state:'kept',phoneChoice:choice}))).toMatchObject({ok:true});
+ const input:CallingPreparationInput={selection:{candidateId,expectedCandidateRevision:1,choice},expected:{state:'absent'},reviewedProfile:{companyName:name,website,
+  addressLine:'10 Fictional Office Way',locality:'Columbus',regionCode:'OH',postalCode:'43004',countryCode:'US',timeZone:{kind:'reviewed',timeZone:'America/New_York'}},acknowledgeUnqualifiedSourceOwnership:true};
+ expect(await tx(()=>confirmCallingPreparation(ctx(),input,async()=>true))).toMatchObject({ok:false,reason:'source_withdrawn'});
+ expect(await tx(()=>readCallingPreparation(ctx(),input.selection,async()=>true))).toMatchObject({state:'refused',reason:'source_withdrawn'});
+ expect((await runtime.query('SELECT 1 FROM calling_preparations WHERE candidate_ref=$1',[candidateId])).rows).toEqual([]);
+ // Completion holds only the source lifecycle lock; with no bound preparation the loss guard cannot raise 40001.
+ await tx(async()=>{await runtime.query("UPDATE sourcing_qualification_runs SET state='review' WHERE workspace_id=$1 AND id=$2",[seed.alpha.workspaceId,requested.value.runId]);});
+ const done=await tx(()=>confirmCallingPreparation(ctx(),input,async()=>true));
+ expect(done).toMatchObject({ok:true});
+});
+it('refuses to save when a dependency the capture rests on was already lost, such as the website root, and caps expiry by the earliest dependency deadline',async()=>{
+ const f=await keptPrepared();
+ await tx(async()=>{await lockPreparationCleanup(ctx());await rememberExpiredManualSources(ctx(runtime,true),[f.website]);});
+ expect(await tx(()=>confirmCallingPreparation(ctx(),f.input,async()=>true))).toMatchObject({ok:false,reason:'source_withdrawn'});
+ expect((await runtime.query('SELECT 1 FROM calling_preparations WHERE candidate_ref=$1',[f.candidateId])).rows).toEqual([]);
+ const capped=await keptPrepared(),soon=new Date(Date.now()+90_000);
+ const firm=(await runtime.query<{id:string}>("INSERT INTO firms(workspace_id,name) VALUES($1,'Fictional deadline holder') RETURNING id",[seed.alpha.workspaceId])).rows[0]!.id;
+ await tx(async()=>{await lockPreparationCleanup(ctx());await runtime.query("INSERT INTO evidence_items(workspace_id,firm_id,provider,source_reference,content_hash,terms_allow_retention,retention_expires_at) VALUES($1,$2,'fixture',$3,$4,true,$5)",[seed.alpha.workspaceId,firm,capped.website,'c'.repeat(64),soon]);});
+ const saved=await save(capped);
+ const expires=((await row(saved.preparationId))['source_expires_at'] as Date).getTime();
+ expect(expires).toBeLessThanOrEqual(soon.getTime());expect(expires).toBeGreaterThan(Date.now());
 });

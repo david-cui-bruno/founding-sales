@@ -3,7 +3,7 @@ import {createHash} from 'node:crypto';
 import {manualPhoneChoiceSchema,type CallingPreparationSelection,type CallingPreparationProfile,type ManualPhoneChoice} from '@fss/contracts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {lockPhoneDiscoveryCandidate,phoneDiscoveryRun,validatePhoneDiscoveryRun} from '../sourcing/prospectPhoneDiscoveryStore.ts';
-import {phoneDiscoveryAdmin,phoneDiscoveryNow} from '../sourcing/prospectPhoneDiscoveryAuthority.ts';
+import {phoneDiscoveryAdmin,phoneDiscoveryNow,phoneDiscoverySourceLimit} from '../sourcing/prospectPhoneDiscoveryAuthority.ts';
 import {readManualProspectSubject} from '../sourcing/manualProspectRows.ts';
 import {projectManualProspect} from '../sourcing/manualProspectProjection.ts';
 import {projectManualPhoneChoice} from '../sourcing/manualProspectPhoneChoice.ts';
@@ -85,12 +85,19 @@ async function readPreparedSource(ctx:RepositoryContext,selection:CallingPrepara
  const read=await readPreparedPhoneChoice(ctx,{...row,duplicate_count:0},selection.choice,authority,{principal:true,lockless:snapshot});
  if(!read.ok)return {ok:false,reason:'authority_changed'};
  if(!read.matched||!read.phone||!read.snapshot)return {ok:false,reason:'source_withdrawn'};
+ // An in-flight run still writes its observations and capture; only a finished run can be a preparation's source.
+ if(!['review','unavailable','eligible','admitted'].includes(String(read.snapshot['capture_state'])))return {ok:false,reason:'source_withdrawn'};
  if(!await authority()||!await activeIdentityActor(ctx)||!await phoneDiscoveryAdmin(ctx,preparer,!snapshot))return {ok:false,reason:'authority_changed'};
  // Every URL whose loss withdraws this company: candidate website and sources, the chosen page, and each capture hop.
  const urls=[prospect.website,...row.source_urls,read.phone.sourceUrl,...(preparedCaptureManifest(read.snapshot)?.pages.flatMap(page=>page.redirectUrls)??[])].filter((url):url is string=>!!url);
  const sourceHashes=[...new Set(urls.map(hashUrl))].sort();
  if(sourceHashes.length>23)return {ok:false,reason:'source_withdrawn'};
- return {ok:true,value:{selection,kind:'prepared_capture',runId:selection.choice.runId,creatorUserId:preparer,phone:read.phone,sourceHashes,profile:preparationProfile(prospect)}};
+ // The same complete-dependency fence a discovery run is held to: a lost, unpermitted or expired dependency (website root included,
+ // even before any preparation exists) denies, and the earliest dependency deadline caps the saved expiry.
+ const limits=await phoneDiscoverySourceLimit(ctx,urls),now=await phoneDiscoveryNow(ctx);
+ if(limits.denied||limits.expiresAt&&limits.expiresAt<=now)return {ok:false,reason:'source_withdrawn'};
+ const expiresAt=limits.expiresAt&&limits.expiresAt.getTime()<Date.parse(read.phone.expiresAt)?limits.expiresAt.toISOString():read.phone.expiresAt;
+ return {ok:true,value:{selection,kind:'prepared_capture',runId:selection.choice.runId,creatorUserId:preparer,phone:{...read.phone,expiresAt},sourceHashes,profile:preparationProfile(prospect)}};
 }
 export function preparationSelection(candidateId:string,revision:number,choice:unknown):CallingPreparationSelection|null{
  const parsed=manualPhoneChoiceSchema.safeParse(choice);

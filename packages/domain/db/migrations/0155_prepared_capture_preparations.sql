@@ -77,7 +77,7 @@ BEGIN
     AND r.creator_ref=p.source_creator_ref AND r.creator_user_id=p.source_creator_ref AND r.expires_at>=p.source_expires_at)
    -- ADR0034: the chosen literal's exact retained observation and block, bound by hashes, in the qualification run the choice names.
    WHEN 'prepared_capture' THEN EXISTS(SELECT 1 FROM sourcing_qualification_runs q WHERE q.workspace_id=c.workspace_id AND q.candidate_id=c.id
-    AND q.id=p.discovery_run_ref AND q.candidate_revision=c.revision
+    AND q.id=p.discovery_run_ref AND q.candidate_revision=c.revision AND q.state NOT IN('pending','running')
     AND EXISTS(SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(q.observations)='array' THEN q.observations ELSE '[]'::jsonb END) o
      WHERE o->>'id'=p.choice->>'observationId' AND o->>'contentHash'=p.choice->>'contentHash' AND o->>'relevantTextHash'=p.choice->>'relevantTextHash'
      AND o->>'firstParty'='true' AND EXISTS(SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(o->'blocks')='array' THEN o->'blocks' ELSE '[]'::jsonb END) b
@@ -96,6 +96,8 @@ END $$;
 CREATE FUNCTION calling_preparation_prepared_run_guard() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE pid uuid;
 BEGIN
+ -- A preparation binds only a finished run (assertion above), so an in-flight run's own writes, including its completion, can never find one.
+ IF TG_OP='UPDATE' AND OLD.state IN('pending','running') THEN RETURN NEW; END IF;
  IF TG_OP='UPDATE' AND ROW(NEW.candidate_id,NEW.candidate_revision,NEW.observations,NEW.prepared_capture)
   IS NOT DISTINCT FROM ROW(OLD.candidate_id,OLD.candidate_revision,OLD.observations,OLD.prepared_capture) THEN RETURN NEW; END IF;
  FOR pid IN SELECT id FROM calling_preparations WHERE workspace_id=OLD.workspace_id AND source_kind='prepared_capture'
