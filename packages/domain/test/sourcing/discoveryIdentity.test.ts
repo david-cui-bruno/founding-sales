@@ -40,3 +40,21 @@ it('approximates the registrable domain and drops property-management portal and
  for(const url of ['https://evernest.appfolio.com/connect/users/sign_in','https://acme.managebuilding.com/Resident','https://www.rentcafe.com/x','https://app.doorloop.com/','https://www.macrotrends.net/global-metrics/cities/23159/tucson/population'])
   expect(classifyDiscoveryPage({url,title:'Acme Property Management'})).toBe('noise');
 });
+
+it('names the Spokane direct hits by their brand segment and never by a placeholder title',()=>{
+ for(const [title,url,name] of [
+  ['Commercial Real Estate, HOA & Facility Services | Kiemle Hagood','https://www.kiemlehagood.com/','Kiemle Hagood'],
+  ['Real Estate Investment Experts | Extant Realty - Spokane, WA','https://extantinvestment.com/','Extant Realty'],
+  ['Spokane Property Managers | Cobalt Property Management','https://rentcobalt.com/','Cobalt Property Management'],
+  ['Property Management Services in Spokane, Washington | Guenther Property Management','https://guenthermanagement.com/','Guenther Property Management'],
+  ['Company source','https://www.kiemlehagood.com/','kiemlehagood.com'],['  ','https://www.rentcobalt.com/x','rentcobalt.com'],
+  // A location-only last part is no brand.
+  ['Real Estate Experts | Spokane, WA','https://example.test/','Real Estate Experts | Spokane, WA'],
+ ] as const)expect(discoveryFirmName(title,url)).toBe(name);
+});
+it('routes directory hosts and /companies/<city-st> listing paths as lists',()=>{
+ expect(classifyDiscoveryPage({url:'https://ipropertymanagement.com/companies/spokane-wa',title:'Spokane Property Management'})).toBe('list');
+ expect(classifyDiscoveryPage({url:'https://unknown-aggregator.example.test/companies/boise-id/',title:'Boise property managers'})).toBe('list');
+ for(const url of ['https://acme-pm.example.test/companies','https://acme-pm.example.test/about/companies-we-serve','https://acme-pm.example.test/our-companies/acme'])
+  expect(classifyDiscoveryPage({url,title:'Acme Property Management'})).toBe('company');
+});
