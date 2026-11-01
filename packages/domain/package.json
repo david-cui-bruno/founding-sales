@@ -13,12 +13,12 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.133.0",
-    "@aws-sdk/client-bedrock-runtime": "^3.1149.0",
-    "@aws-sdk/client-cloudwatch": "^3.1149.0",
-    "@aws-sdk/client-ecs": "3.1149.0",
-    "@aws-sdk/client-kms": "^3.1149.0",
-    "@aws-sdk/client-rds": "3.1149.0",
-    "@aws-sdk/client-secrets-manager": "3.1149.0",
+    "@aws-sdk/client-bedrock-runtime": "^3.1159.0",
+    "@aws-sdk/client-cloudwatch": "^3.1159.0",
+    "@aws-sdk/client-ecs": "3.1159.0",
+    "@aws-sdk/client-kms": "^3.1159.0",
+    "@aws-sdk/client-rds": "3.1159.0",
+    "@aws-sdk/client-secrets-manager": "3.1159.0",
     "@fss/contracts": "*",
     "pg": "^8.23.1",
     "twitter-text": "3.1.0"
@@ -28,6 +28,6 @@
     "@types/twitter-text": "3.1.10",
     "embedded-postgres": "16.14.0-beta.17",
     "typescript": "^5.9.3",
-    "vitest": "^5.0.3"
+    "vitest": "^5.0.5"
   }
 }
