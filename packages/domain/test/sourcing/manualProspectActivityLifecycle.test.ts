@@ -6,7 +6,7 @@ import {repositoryContext,workspaceScope} from '../../db/workspaceScope.ts';
 import {seedTwoWorkspaces,type TwoWorkspaces} from '../db/support/fixtures.ts';
 import {seedCrm,type SeededCrm} from '../db/support/crmFixtures.ts';
 import {saveCandidate,reviewCandidate,deleteCandidate} from '../../sourcing/candidates.ts';
-import {saveDiscoveryCandidate} from '../../sourcing/discoveryIntake.ts';
+import {seedDiscoveryCandidate} from './support/discoverySeed.ts';
 import {manualOrdinaryFixture,manualDiscoveryFixture} from './support/manualProspectFixture.ts';
 import {saveManualProspectActivity,readManualProspectActivity} from '../../sourcing/manualProspectActivity.ts';
 import {manualPhoneFixture,seedManualPhoneRun} from './support/manualPhoneFixture.ts';
@@ -17,7 +17,7 @@ const context=(session=runtime)=>repositoryContext(workspaceScope(seed.alpha.wor
 const content={performedByUser:true as const,channel:'manual_phone' as const,occurrence:{kind:'unknown' as const},result:'unknown' as const,note:'Lifecycle synthetic private note',callback:null};
 async function setup(discovery=false){
  const input=manualOrdinaryFixture(++index),raw=manualDiscoveryFixture(randomUUID());
- const saved=discovery?await withTransaction(runtime,()=>saveDiscoveryCandidate(context(),raw)):await withTransaction(runtime,()=>saveCandidate(context(),input));if(!saved.ok)throw Error(saved.reason);
+ const saved=discovery?{ok:true as const,value:await withTransaction(runtime,()=>seedDiscoveryCandidate(context(),raw))}:await withTransaction(runtime,()=>saveCandidate(context(),input));if(!saved.ok)throw Error(saved.reason);
  const candidateId=saved.value.id,attemptId=randomUUID();expect(await withTransaction(runtime,()=>saveManualProspectActivity(context(),{...content,operation:'create',candidateId,expectedCandidateRevision:1,attemptId},async()=>true))).toMatchObject({ok:true});
  return {candidateId,attemptId,source:discovery?raw.row.source.sourceUrl:input.sourceUrl,base:{candidateId,expectedCandidateRevision:1,attemptId}};
 }

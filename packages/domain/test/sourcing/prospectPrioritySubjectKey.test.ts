@@ -5,7 +5,7 @@ import {withTransaction,type SessionQueryable} from '../../db/queryable.ts';
 import {repositoryContext,workspaceScope} from '../../db/workspaceScope.ts';
 import {seedTwoWorkspaces,type TwoWorkspaces} from '../db/support/fixtures.ts';
 import {saveCandidate} from '../../sourcing/candidates.ts';
-import {saveDiscoveryCandidate} from '../../sourcing/discoveryIntake.ts';
+import {seedDiscoveryCandidate} from './support/discoverySeed.ts';
 import {manualOrdinaryFixture,manualDiscoveryFixture} from './support/manualProspectFixture.ts';
 import {MANUAL_ACTIVITY_RAW_SQL,manualActivityRaw,currentManualActivityAuthority} from '../../sourcing/manualProspectActivityAccess.ts';
 import {prioritySourceKey} from '../../sourcing/prospectPriorityAccess.ts';
@@ -14,7 +14,7 @@ import {MANUAL_SOURCE_LOSS_ACTION} from '../../sourcing/manualProspectSourceLoss
 let db:TestDatabase,seed:TwoWorkspaces,runtime:SessionQueryable,serial=90000;
 const ctx=(session=runtime,workspace:'alpha'|'beta'='alpha')=>repositoryContext(workspaceScope(seed[workspace].workspaceId,{kind:'user',userId:seed[workspace].admin.userId,role:'admin'}),session);
 async function ordinary(){const input=manualOrdinaryFixture(++serial),saved=await withTransaction(runtime,()=>saveCandidate(ctx(),input));if(!saved.ok)throw Error(saved.reason);return {id:saved.value.id,input};}
-async function discovery(){const input=manualDiscoveryFixture(randomUUID());input.row.website='https://synthetic.example.test/';const saved=await withTransaction(runtime,()=>saveDiscoveryCandidate(ctx(),input));if(!saved.ok)throw Error(saved.reason);return {id:saved.value.id,input};}
+async function discovery(){const input=manualDiscoveryFixture(randomUUID());input.row.website='https://synthetic.example.test/';const saved=await withTransaction(runtime,()=>seedDiscoveryCandidate(ctx(),input));return {id:saved.id,input};}
 async function parity(id:string,revision=1,workspace:'alpha'|'beta'='alpha'){
  const context=ctx(runtime,workspace),values=[context.scope.workspaceId,'all',id,revision];
  const previous=(await runtime.query<ManualProspectRow>(`SELECT * FROM (${MANUAL_ACTIVITY_RAW_SQL}) p WHERE id=$3 AND revision=$4`,values)).rows[0];

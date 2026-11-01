@@ -1,13 +1,13 @@
 import {expect,it} from 'vitest';
-import {discoveryIntakeSaveInputSchema} from '@fss/contracts';
+import {discoveryIntakeRowV1Schema,discoveryOriginSchema} from '@fss/contracts';
 import {projectManualProspect,safeManualReference} from '../../sourcing/manualProspectProjection.ts';
 import {manualDiscoveryFixture} from './support/manualProspectFixture.ts';
 it('preserves every mandatory notice across the full sixteen-origin retained contract',()=>{
  const fixture=manualDiscoveryFixture(),first=fixture.origins[0]!;
  const origins=Array.from({length:16},(_,i)=>({...first,source:{...first.source,recordId:`notice-origin-${i}`},
   licenses:Array.from({length:16},(_,j)=>`License ${i}:${j}`),notices:Array.from({length:16},(_,j)=>({label:`Notice ${i}:${j}`,url:`https://source.example.test/license/${i}/${j}`,sha256:'a'.repeat(64)}))}));
- const input=discoveryIntakeSaveInputSchema.parse({row:{...fixture.row,source:origins[0]!.source,observations:origins.map(origin=>origin.source)},origins});
- const result=projectManualProspect({id:'00000000-0000-4000-8000-000000000001',revision:1,created_at:new Date('2026-10-24T00:00:00Z'),manual_state:'new',duplicate_count:0,payload:{kind:'discovery-v1',row:input.row},origins:input.origins});
+ const row=discoveryIntakeRowV1Schema.parse({...fixture.row,source:origins[0]!.source,observations:origins.map(origin=>origin.source)}),parsed=origins.map(origin=>discoveryOriginSchema.parse(origin));
+ const result=projectManualProspect({id:'00000000-0000-4000-8000-000000000001',revision:1,created_at:new Date('2026-10-24T00:00:00Z'),manual_state:'new',duplicate_count:0,payload:{kind:'discovery-v1',row},origins:parsed});
  expect(result?.sourceNotices).toHaveLength(512);expect(result?.sources).toHaveLength(16);
  expect(result?.sourceNotices.at(-1)).toEqual({label:'Notice 15:15',url:'https://source.example.test/license/15/15'});
 });
