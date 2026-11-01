@@ -50,11 +50,15 @@ it('names the Spokane direct hits by their brand segment and never by a placehol
   ['Company source','https://www.kiemlehagood.com/','kiemlehagood.com'],['  ','https://www.rentcobalt.com/x','rentcobalt.com'],
   // A location-only last part is no brand.
   ['Real Estate Experts | Spokane, WA','https://example.test/','Real Estate Experts | Spokane, WA'],
+  ['Real Estate Experts | Spokane WA','https://example.test/','Real Estate Experts | Spokane WA'],['Real Estate Experts | Washington','https://example.test/','Real Estate Experts | Washington'],
+  ['Real Estate Experts | WA','https://example.test/','Real Estate Experts | WA'],['Property Services | Spokane WA | Acme & Co','https://example.test/','Acme & Co'],
+  // Competing branded parts keep the whole title rather than picking the last.
+  ['Alpha Property Management | Beta Realty','https://example.test/','Alpha Property Management | Beta Realty'],
  ] as const)expect(discoveryFirmName(title,url)).toBe(name);
 });
 it('routes directory hosts and /companies/<city-st> listing paths as lists',()=>{
  expect(classifyDiscoveryPage({url:'https://ipropertymanagement.com/companies/spokane-wa',title:'Spokane Property Management'})).toBe('list');
  expect(classifyDiscoveryPage({url:'https://unknown-aggregator.example.test/companies/boise-id/',title:'Boise property managers'})).toBe('list');
- for(const url of ['https://acme-pm.example.test/companies','https://acme-pm.example.test/about/companies-we-serve','https://acme-pm.example.test/our-companies/acme'])
+ for(const url of ['https://acme-pm.example.test/companies','https://acme-pm.example.test/about/companies-we-serve','https://acme-pm.example.test/our-companies/acme','https://acme-pm.example.test/companies/acme-pm'])
   expect(classifyDiscoveryPage({url,title:'Acme Property Management'})).toBe('company');
 });
