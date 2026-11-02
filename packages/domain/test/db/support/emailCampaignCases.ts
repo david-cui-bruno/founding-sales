@@ -10,6 +10,8 @@ type Case = { constraint: string; run: (fixture: Fixture) => Promise<unknown> };
 const missing = '00000000-0000-4000-8000-000000000130';
 const insert = (f: Fixture, table: string, row: Row) => f.session.query(`INSERT INTO ${table}(${Object.keys(row).join(',')}) VALUES(${Object.keys(row).map((_, i) => `$${String(i + 1)}`).join(',')})`, Object.values(row));
 
+const verification = (f: Fixture): Row => ({ workspace_id: f.seeded.alpha.workspaceId, id: randomUUID(), address_key: 'b'.repeat(64), provider: 'dns_mx', result: 'valid', outcome: 'ok' });
+
 async function campaign(f: Fixture): Promise<Row> {
   const w = f.seeded.alpha.workspaceId, actor = f.seeded.alpha.admin.userId;
   const sequence = randomUUID(), version = randomUUID();
@@ -85,4 +87,18 @@ export const EMAIL_CAMPAIGN_CONSTRAINT_CASES: readonly Case[] = [
     }
     return insert(f, 'outreach_email_campaign_admissions', row);
   } })),
+  // Migration 0158: the recorded free address check. The valid row is the base; each case spoils one column.
+  ...([
+    ['email_verification_key', { address_key: 'not-a-sha256' }], ['email_verification_provider', { provider: 'paid_vendor' }],
+    ['email_verification_outcome', { result: 'valid', outcome: 'drop' }],
+  ] as const).map(([constraint, patch]) => ({ constraint, run: async (f: Fixture) => insert(f, 'outreach_email_verifications', { ...verification(f), ...patch }) })),
+  { constraint: 'email_verification_result', run: async f => {
+    // An unknown result also breaks the outcome pairing; the rolled-back harness isolates the result CHECK.
+    await f.session.query('ALTER TABLE outreach_email_verifications DROP CONSTRAINT email_verification_outcome');
+    return insert(f, 'outreach_email_verifications', { ...verification(f), result: 'unknown' });
+  } },
+  { constraint: 'email_verification_pkey', run: async f => {
+    const row = verification(f); await insert(f, 'outreach_email_verifications', row);
+    return insert(f, 'outreach_email_verifications', row);
+  } },
 ];
