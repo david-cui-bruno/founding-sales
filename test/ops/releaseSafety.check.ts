@@ -141,18 +141,18 @@ describe('backup and maintenance window guard', () => {
   const at = (time: string, day = '2026-11-02') => Date.parse(`${day}T${time}:00Z`);
   const instance = (backup: string, maintenance = 'wed:03:00-wed:04:00', status = 'available') => ({ DBInstanceStatus: status, PreferredBackupWindow: backup, PreferredMaintenanceWindow: maintenance });
   it.each([
-    ['07:30-08:00', '07:45', 'backup_window_near'], ['07:30-08:00', '07:30', 'backup_window_near'], ['07:30-08:00', '06:30', 'backup_window_near'],
-    ['07:30-08:00', '06:29', ''], ['07:30-08:00', '08:00', ''], ['07:30-08:00', '12:00', ''],
-    ['23:30-00:30', '23:45', 'backup_window_near'], ['23:30-00:30', '00:15', 'backup_window_near'], ['23:30-00:30', '22:30', 'backup_window_near'],
-    ['23:30-00:30', '22:29', ''], ['23:30-00:30', '00:30', ''],
-    ['00:15-00:45', '23:30', 'backup_window_near'], ['00:15-00:45', '23:14', ''],
+    ['07:30-08:00', '07:45', 'backup_window_near'], ['07:30-08:00', '07:30', 'backup_window_near'], ['07:30-08:00', '05:30', 'backup_window_near'],
+    ['07:30-08:00', '05:29', ''], ['07:30-08:00', '08:00', ''], ['07:30-08:00', '12:00', ''],
+    ['23:30-00:30', '23:45', 'backup_window_near'], ['23:30-00:30', '00:15', 'backup_window_near'], ['23:30-00:30', '21:30', 'backup_window_near'],
+    ['23:30-00:30', '21:29', ''], ['23:30-00:30', '00:30', ''],
+    ['00:15-00:45', '22:30', 'backup_window_near'], ['00:15-00:45', '22:14', ''],
   ])('backup window %s at %s -> %s', (window, time, reason) => {
     const check = () => safety.requireOutsideReleaseWindows(instance(window), at(time));
     if (reason) expect(check).toThrow(reason); else expect(check).not.toThrow();
   });
   it.each([
     ['mon:08:00-mon:09:00', '2026-11-02', '07:30', 'maintenance_window_near'], ['mon:08:00-mon:09:00', '2026-11-02', '08:30', 'maintenance_window_near'],
-    ['mon:08:00-mon:09:00', '2026-11-02', '06:59', ''], ['mon:08:00-mon:09:00', '2026-11-03', '07:30', ''],
+    ['mon:08:00-mon:09:00', '2026-11-02', '05:59', ''], ['mon:08:00-mon:09:00', '2026-11-03', '07:30', ''],
     ['sun:23:30-mon:00:30', '2026-11-01', '23:45', 'maintenance_window_near'], ['sun:23:30-mon:00:30', '2026-11-02', '00:10', 'maintenance_window_near'],
     ['sun:00:30-sun:01:30', '2026-11-07', '23:45', 'maintenance_window_near'], ['sat:23:00-sun:00:30', '2026-11-01', '00:10', 'maintenance_window_near'],
     ['sun:00:30-sun:01:30', '2026-11-07', '22:00', ''],

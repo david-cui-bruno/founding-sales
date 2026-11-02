@@ -340,6 +340,11 @@ export async function runRelease(io, environment) {
     if (state.targetSchema !== state.fromSchema) {
       phase('migration-authentication'); await authenticate(current.migration);
       phase('suppress-incompatible-rollback');
+      // Registrations and the release record are already written, but no service is touched yet. A
+      // fresh read: the window may have come within the job horizon since preflight.
+      const fresh = await aws('rds', 'describe-db-instances', ['--db-instance-identifier', 'fss-prod-pg']);
+      requireThat(fresh.DBInstances?.length === 1, 'database_unavailable');
+      requireOutsideReleaseWindows(fresh.DBInstances[0], io.now());
       // Configuration update must NOT switch service definitions before the stop.
       await configuration(false);
       const beforeStop = await services();

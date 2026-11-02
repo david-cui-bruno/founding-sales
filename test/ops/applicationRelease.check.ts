@@ -242,6 +242,15 @@ describe('RDS backup and maintenance window guard', () => {
     expect(h.calls.some(call => ['register-task-definition', 'run-task', 'update-service', 'describe-task-definition'].includes(call.args[1] ?? ''))).toBe(false);
     expect(h.states.every(state => state.writesStarted === false)).toBe(true);
   });
+  it('rechecks with a fresh read before the rollback suppression and leaves services untouched', async () => {
+    // Preflight at 18:00Z is 3h before a 21:00 window; the schema-changing path's registrations and
+    // checks advance the injected clock into the 120 minute margin before configuration(false).
+    const h = harness({ from: 118, to: 119, fault: 'window-after-preflight' });
+    const result = await h.run();
+    expect(result).toMatchObject({ outcome: 'repair-required', reason: 'backup_window_near', phase: 'suppress-incompatible-rollback' });
+    expect(h.calls.filter(call => call.args[1] === 'describe-db-instances')).toHaveLength(2);
+    expect(h.calls.some(call => call.args[1] === 'update-service')).toBe(false);
+  });
   it('proceeds when clear of both windows', async () => {
     expect((await harness().run()).outcome).toBe('completed');
   });

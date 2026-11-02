@@ -192,9 +192,16 @@ describe('preflight', () => {
     expect(stub.calls).toHaveLength(count);
   });
 
+  it.each([['backup-window-near', 'backup_window_near'], ['backing-up', 'backup_window_near'], ['maintenance-window-near', 'maintenance_window_near']])('refuses %s before saving, with only read-only cloud calls', async (fault, reason) => {
+    const directory = runDirectory({ 'release-bindings.json': bindings() }), stub = cloud(fault);
+    await expect(operator.createOperator({ directory, run: stub.run, fetchJson: stub.fetchJson, now: () => Date.parse('2026-10-31T21:48:12.586Z') }).preflight()).rejects.toThrow(reason);
+    expect(existsSync(join(directory, 'release-preflight.json'))).toBe(false);
+    expect(stub.calls.filter(c => c[0] === 'aws').every(c => /^(describe|list|get)-/u.test(c[2] ?? ''))).toBe(true);
+  });
+
   it('refuses unbound bindings, a schema-changing source, a candidate already live and a mixed runtime before saving', async () => {
     expect(await refused(runDirectory({ 'release-bindings.json': bindings({ prNumber: null }) }), 'preflight', 'release_source_ci_unbound')).toEqual([]);
-    for (const [fault, reason] of [['schema', 'same_schema_source_changed'], ['candidate-live', 'candidate_already_production'], ['mixed-digest', 'runtime_digest_changed'], ['backup-window-near', 'backup_window_near'], ['backing-up', 'backup_window_near'], ['maintenance-window-near', 'maintenance_window_near']]) {
+    for (const [fault, reason] of [['schema', 'same_schema_source_changed'], ['candidate-live', 'candidate_already_production'], ['mixed-digest', 'runtime_digest_changed']]) {
       const directory = runDirectory({ 'release-bindings.json': bindings() });
       await refused(directory, 'preflight', reason!, fault);
       expect(existsSync(join(directory, 'release-preflight.json'))).toBe(false);

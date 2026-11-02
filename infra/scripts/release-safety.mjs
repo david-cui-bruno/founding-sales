@@ -47,7 +47,10 @@ function windowNear(text, nowMs, marginMinutes, weekly) {
   return sinceStart < (end - start + period) % period || (period - sinceStart) % period <= marginMinutes;
 }
 
-export function requireOutsideReleaseWindows(db, nowMs, marginMinutes = 60) {
+// Must cover the whole application job: greenfield-deploy.yml application job `timeout-minutes: 110`.
+export const RELEASE_WINDOW_MARGIN_MINUTES = 120;
+
+export function requireOutsideReleaseWindows(db, nowMs, marginMinutes = RELEASE_WINDOW_MARGIN_MINUTES) {
   requireThat(db?.DBInstanceStatus !== 'backing-up', 'backup_window_near');
   for (const [name, text, weekly] of [['backup', db?.PreferredBackupWindow, false], ['maintenance', db?.PreferredMaintenanceWindow, true]]) {
     const near = windowNear(text, nowMs, marginMinutes, weekly);
