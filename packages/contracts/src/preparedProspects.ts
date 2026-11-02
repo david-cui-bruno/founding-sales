@@ -23,7 +23,9 @@ export const preparedProspectSummarySchema=z.strictObject({target:preparedProspe
  state:z.enum(['prepared','needs_research']),summary:z.string().min(1).max(400),
  unknowns:z.array(z.string().min(1).max(240)).max(12),validUntil:instant.nullable(),callable:preparedProspectCallableSchema,
  // ADR0034 company host (lowercase hostname without www.) of the website; grouping, never identity.
- companyHost:z.string().min(1).max(253).regex(/^[a-z0-9.:[\]-]+$/u).nullable()});
+ companyHost:z.string().min(1).max(253).regex(/^[a-z0-9.:[\]-]+$/u).nullable(),
+ // ADR0037: the company's current named decision-maker (its own site, or a people provider), for Calling's "Ask for <first name>"; read from the stored person row, never a contact permission.
+ namedPerson:z.strictObject({name:z.string().min(1).max(201),title:z.string().min(1).max(200)}).optional()});
 export const preparedProspectListInputSchema=z.strictObject({offset:z.number().int().min(0).max(1000000).default(0),viewRevision:z.string().regex(/^[a-f0-9]{64}$/u).optional(),
  order:z.enum(['priority','callable']).default('priority')})
  .refine(v=>v.offset===0||v.viewRevision!==undefined,'Continuation requires the current view revision');

@@ -17,7 +17,9 @@ import {preparedPriorityOrder} from './prospectPriorityStore.ts';
  * company page) and its business name (`resolveBusinessName`: the name the Firm carries). A company with no confident business name is
  * not read at all, so selection, enrichment, preview and admission refuse it by this one predicate. It carries no address: the person to
  * email comes from the provider (`outreach_people_contacts`). A read, never contact permission. */
-export interface PreparedEmailRead {candidateId:string;candidateRevision:number;runId:string;host:string;region:string;locality:string;businessName:string;/** ms epoch: the earliest admitted page, capture or source deadline of the prepared evidence (each page at most seven days after retrieval): the company stops being prepared then. */evidenceDeadline:number}
+/** One retained, admitted own-site page of the prepared capture: its observation, URL and whole text blocks (ADR0037 reads people from these; nothing else of the page is kept). */
+export interface PreparedPageText {observationId:string;url:string;blocks:readonly {id:string;text:string}[]}
+export interface PreparedEmailRead {candidateId:string;pages:readonly PreparedPageText[];candidateRevision:number;runId:string;host:string;region:string;locality:string;businessName:string;/** ms epoch: the earliest admitted page, capture or source deadline of the prepared evidence (each page at most seven days after retrieval): the company stops being prepared then. */evidenceDeadline:number}
 const BLOCKERS=new Set(['needs_research','contrary_context','no_business_context','list_page','not_company_page']);
 function emailRead(row:ManualProspectRow,snapshot:ManualPhoneSnapshot|undefined,now:number):PreparedEmailRead|null{
  const deadlines=snapshot&&preparedSnapshotDeadlines(snapshot);
@@ -28,7 +30,7 @@ function emailRead(row:ManualProspectRow,snapshot:ManualPhoneSnapshot|undefined,
  const evidenceDeadline=Math.min(...admitted.pages.map(page=>Math.min(Date.parse(page.source.retrievedAt)+PREPARED_PHONE_HORIZON_MS,admitted.captureDeadline??Infinity,page.expires??Infinity)));
  if(!Number.isFinite(evidenceDeadline)||evidenceDeadline<=now)return null;
  const businessName=payload&&resolveBusinessName({name:payload.firmName,source:payload.preparedBy===DISCOVERY_RESEARCH_PREPARED_BY?'place':'title',locality:brief.targetingLocality,query:payload.discoveryQuery,host:brief.companyHost,blocks:admitted.pages.flatMap(page=>page.source.blocks.map(block=>block.text))});
- return businessName?{candidateId:row.id,candidateRevision:row.revision,runId:snapshot.id,host:brief.companyHost,region:brief.targetingRegion,locality:brief.targetingLocality,businessName,evidenceDeadline}:null;
+ return businessName?{candidateId:row.id,pages:admitted.pages.map(page=>({observationId:page.source.id,url:page.source.url,blocks:page.source.blocks.map(block=>({id:block.id,text:block.text}))})),candidateRevision:row.revision,runId:snapshot.id,host:brief.companyHost,region:brief.targetingRegion,locality:brief.targetingLocality,businessName,evidenceDeadline}:null;
 }
 const clock=async(ctx:RepositoryContext)=>(await ctx.db.query<{at:Date}>('SELECT clock_timestamp() AS at')).rows[0]!.at.getTime();
 /** Authoritative current read. Caller holds the source lifecycle, candidate and campaign locks and supplies the owner authority

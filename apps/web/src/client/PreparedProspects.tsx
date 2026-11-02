@@ -32,7 +32,7 @@ function CallableFacts({callable}:{callable:PreparedProspectCallable}):JSX.Eleme
 }
 
 function ResearchRecord({row,busy,onOpen}:{row:PreparedProspectSummary;busy:boolean;onOpen:(row:PreparedProspectSummary)=>Promise<void>}):JSX.Element {
- return <><div><span className="prepared-company-state">{row.state==='prepared'?'Prepared brief':'Needs research'}</span> <CallableFacts callable={row.callable}/><h3>{row.displayName}</h3>
+ return <><div><span className="prepared-company-state">{row.state==='prepared'?'Prepared brief':'Needs research'}</span> <CallableFacts callable={row.callable}/>{row.namedPerson?<p className="prepared-company-callable-facts">Ask for {row.namedPerson.name.split(' ')[0]} — {row.namedPerson.title}</p>:null}<h3>{row.displayName}</h3>
   <p className="prepared-company-note">Discovery label; company identity is unverified.</p>
   {row.website&&sourceHref(row.website)?<p className="prepared-company-source">Website: <a href={sourceHref(row.website)} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer">{row.website}</a></p>:null}
   <p>{row.summary}</p>{row.unknowns.length?<p className="prepared-company-note">Still unknown: {row.unknowns.slice(0,2).join(' · ')}</p>:null}<SourceNotices notices={row.sourceNotices}/>

@@ -59,11 +59,15 @@ export const emailCampaignPreparedPreviewSchema = z.strictObject({
     locality: z.string().max(120), region: usBusinessRegionSchema,
     person: z.strictObject({
       firstName: z.string().max(100), lastName: z.string().max(100), title: z.string().max(200), email: z.string().max(320),
-      emailStatus: z.literal('verified'), matchConfidence: z.enum(['high', 'medium']), provider: z.string().max(32), observedAt: instant, creditsSpent: z.number().int().min(0).max(9),
+      emailStatus: z.enum(['verified', 'published']), matchConfidence: z.enum(['high', 'medium']), provider: z.string().max(32), observedAt: instant, creditsSpent: z.number().int().min(0).max(9),
+      /** An own-site person's citation (ADR0037): the company page and the words the name, title and address were read from. Null for a provider's person. */
+      source: z.strictObject({ url: z.string().max(2048), blockId: z.string().max(64), quote: z.string().max(600) }).nullable(),
     }),
     verification: z.strictObject({ result: z.enum(['valid', 'invalid']), outcome: z.enum(['ok', 'drop']), checkedAt: instant }).nullable(),
   })).max(50),
-  /** Prepared companies in the scan that the provider has not been asked about yet (the next passes enrich them, within the daily credit cap). */
+  /** Prepared companies in the scan that no people source has been asked about yet (the next passes enrich them; a paid source within the daily credit cap). */
   awaitingEnrichment: z.number().int().nonnegative(),
+  /** Companies with a current named decision-maker and no published address (ADR0037): shown to Calling, never admitted for email. */
+  namedWithoutEmail: z.number().int().nonnegative(),
 });
 export type EmailCampaignPreparedPreview = z.infer<typeof emailCampaignPreparedPreviewSchema>;

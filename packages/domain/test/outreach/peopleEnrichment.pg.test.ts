@@ -1,6 +1,6 @@
 import {afterAll,beforeAll,expect,it} from 'vitest';
 import {fakePeople,ownerAt,preparedEmailWorld} from './preparedEmailFixture.ts';
-import type {PeopleLookup} from '../../outreach/peopleProvider.ts';
+import type {PeopleLookup,PeopleLookupInput} from '../../outreach/peopleProvider.ts';
 import {withTransaction} from '../../db/queryable.ts';
 import {deleteCandidate} from '../../sourcing/candidates.ts';
 import {readPreparedEmail} from '../../sourcing/preparedEmailRead.ts';
@@ -20,7 +20,7 @@ it('reserves before the call, records the verified decision-maker, and never pay
  const company=await world.prepared('OH',()=>'Call our office.');
  let duringCall:Record<string,unknown>|undefined;
  const people=fakePeople(host=>ownerAt(host));
- const probe={...people.provider,findDecisionMaker:async(input:{domain:string;companyName:string})=>{duringCall=await rowFor(company.candidateId);return people.provider.findDecisionMaker(input);}};
+ const probe={...people.provider,findDecisionMaker:async(input:PeopleLookupInput)=>{duringCall=await rowFor(company.candidateId);return people.provider.findDecisionMaker(input);}};
  expect(await world.enrich({provider:probe})).toMatchObject({looked:1,found:1,none:0,credits:1,halted:null});
  // The reservation was committed (and counted as one credit) while the provider was still being asked.
  expect(duringCall).toMatchObject({state:'reserved',credits:1,host:company.domain,provider:'fake_people'});
@@ -144,7 +144,7 @@ it('re-reads and locks the enabled flag and the cap at each reservation, so a di
   await flush();
   const first=await world.prepared('OH',()=>'x'),second=await world.prepared('OH',()=>'x');
   const people=fakePeople();
-  const flipping={...people.provider,findDecisionMaker:async(input:{domain:string;companyName:string})=>{const answer=await people.provider.findDecisionMaker(input);await world.setPeople(change);return answer;}};
+  const flipping={...people.provider,findDecisionMaker:async(input:PeopleLookupInput)=>{const answer=await people.provider.findDecisionMaker(input);await world.setPeople(change);return answer;}};
   const pass=await world.enrich({provider:flipping});
   expect(pass,name).toMatchObject({looked:1,stopped});
   expect(people.calls,name).toHaveLength(1);
@@ -187,7 +187,7 @@ it('reads the prepared evidence deadline with the company: finite, in the future
 it('skips a candidate deleted between selection and reservation: nothing is reserved, no paid call is made, and the pass goes on',async()=>{
  await flush();
  const companies=[await world.prepared('OH',()=>'x'),await world.prepared('OH',()=>'x')],people=fakePeople();
- const deleting={...people.provider,findDecisionMaker:async(input:{domain:string;companyName:string})=>{
+ const deleting={...people.provider,findDecisionMaker:async(input:PeopleLookupInput)=>{
   const answer=await people.provider.findDecisionMaker(input);
   const other=companies.find(company=>company.domain!==input.domain)!;
   expect(await withTransaction(world.runtime,()=>deleteCandidate(world.ctx(),{id:other.candidateId,expectedRevision:1}))).toMatchObject({ok:true});

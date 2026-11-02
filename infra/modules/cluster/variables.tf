@@ -203,23 +203,6 @@ variable "worker_reads_classifier_key" {
   default     = false
 }
 
-variable "worker_reads_apollo_api_key" {
-  description = <<-EOT
-    Whether the worker task definition is handed the Apollo API key, as
-    FSS_APOLLO_API_KEY (named-person email enrichment, ADR0036).
-
-    ECS refuses to start a task whose `secrets` block names an entry with no value,
-    and with a minimum healthy percent of zero a worker whose replacement cannot start
-    leaves production with no worker. The `apollo-api-key` container is always created
-    (empty); this flag is the second stage. False, the default: the worker is not told
-    the secret exists and enriches nothing (no key, no job). The runbook's order is
-    apply with it false, install the value, then a separate one-line change flips it to
-    true and deploys (docs/greenfield/infra-apply-runbook.md, step 1.4).
-  EOT
-  type        = bool
-  default     = false
-}
-
 variable "worker_model_transport" {
   description = <<-EOT
     How the worker sends its Claude calls (slice BR1): "anthropic" (the direct API, with

@@ -230,9 +230,9 @@ export const meetingFollowThroughSettingSchema = z.strictObject({ sequenceVersio
 export const DEFAULT_MEETING_FOLLOW_THROUGH = { sequenceVersionId: null };
 
 /**
- * Named-person email enrichment (migration 0160, ADR0036): whether the worker may ask the people-data provider for a company's
- * decision-maker, and the most provider credits it may spend per business day (one enrichment costs at most one credit). Off, and 30,
- * until an admin changes it; the provider key must also be installed. 0 spends nothing.
+ * Named-person email enrichment (migrations 0160/0161, ADR0036/0037): whether the worker may look up a company's decision-maker (today only from the
+ * company's own pages: free), and the most credits a source that costs credits may spend per business day (one enrichment costs at most one credit;
+ * the cap does not apply to the free own-site source). Off, and 30, until an admin changes it. 0 spends nothing.
  */
 export const PEOPLE_ENRICHMENT_DAILY_CREDITS_MAX = 200;
 export const peopleEnrichmentSettingSchema = z.strictObject({ enabled: z.boolean(), dailyCredits: z.number().int().min(0).max(PEOPLE_ENRICHMENT_DAILY_CREDITS_MAX) });

@@ -29,7 +29,7 @@ it('lists the next pass in admission order with company, place, the provider per
  expect(shown.candidates).toHaveLength(2);
  expect(shown.candidates.map(row=>row.candidateId)).toEqual(admissionOrder);
  for(const row of shown.candidates)expect(row).toEqual({candidateId:row.candidateId,host:expect.any(String),companyName:expect.stringMatching(/ Property Management$/u),website:`https://${row.host}/`,locality:expect.any(String),region:expect.stringMatching(/^(OH|WA)$/u),
-  person:{firstName:'Jordan',lastName:'Blake',title:'Owner',email:`jordan.blake@${row.host}`,emailStatus:'verified',matchConfidence:'high',provider:'fake_people',observedAt:expect.any(String),creditsSpent:1},verification:null});
+  person:{firstName:'Jordan',lastName:'Blake',title:'Owner',email:`jordan.blake@${row.host}`,emailStatus:'verified',matchConfidence:'high',provider:'fake_people',observedAt:expect.any(String),creditsSpent:1,source:null},verification:null});
  expect((await preview(1))!.candidates).toHaveLength(1);
  const target=shown.candidates[0]!;
  expect((await preview(25,[target.region==='OH'?'WA':'OH']))!.candidates.some(row=>row.candidateId===target.candidateId)).toBe(false);
