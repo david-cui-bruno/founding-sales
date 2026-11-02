@@ -35,6 +35,20 @@ it('reads the whole mailbox token and never restarts inside it',()=>{
  expect(route([business,'Email a"b@peak.example.test or a..b@peak.example.test or ab@@peak.example.test'])).toBeNull();
  expect(route([business,'Email x"info@peak.example.test'])).toBeNull();
 });
+it('never strips a leading character the parser accepts, and still unwraps wrapping punctuation',()=>{
+ // `!` and `?` are legal local-part characters: the whole token is the address, never the stripped form.
+ expect(route([business,'Email !info@peak.example.test'])).toBe('!info@peak.example.test');
+ expect(route([business,'Email ?x@peak.example.test'])).toBe('?x@peak.example.test');
+ expect(route([business,'Email ?x@peak.example.test!'])).toBe('?x@peak.example.test');
+ expect(route([business,'Email (info@peak.example.test).'])).toBe('info@peak.example.test');
+ expect(route([business,'Email [info@peak.example.test];'])).toBe('info@peak.example.test');
+ expect(route([business,'Email <info@peak.example.test>,'])).toBe('info@peak.example.test');
+ expect(route([business,"Email 'info@peak.example.test'."])).toBe('info@peak.example.test');
+ expect(route([business,'Email ("?!@peak.example.test").'])).toBe('?!@peak.example.test');
+ // A token the parser refuses is refused whole, never restarted inside.
+ expect(route([business,'Email !(info@peak.example.test)'])).toBeNull();
+ expect(route([business,'Email ?[info@peak.example.test]'])).toBeNull();
+});
 it('prefers a role mailbox in a fixed order, then the first alphabetically',()=>{
  expect(route([business,'Sales: sales@peak.example.test | Office: office@peak.example.test | General: info@peak.example.test'])).toBe('info@peak.example.test');
  expect(route([business,'Reach zed@peak.example.test or amy@peak.example.test'])).toBe('amy@peak.example.test');

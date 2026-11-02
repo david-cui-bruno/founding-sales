@@ -18,13 +18,13 @@ Why: the strict-publication Firms of ADR0013/0016 are empty, so no company was c
 
 **Copy.** The first email and every follow-up end with one composed footer: the approved signature, `Callie, AI maintenance coordination · <postal address>` and `If this isn't relevant, just reply and I won't email again.` The postal address is required (a send without one holds); opt-out links stay forbidden. `{booking_link}` is filled from the admin-set `booking_link` workspace setting (https only).
 
-**Whole mailbox, not a suffix.** An address is a whole whitespace-delimited token under the reviewed email parser; a token the parser refuses is refused whole, never re-scanned inside (`a(b@host` is not `b@host`).
+**Whole mailbox, not a suffix.** An address is a whole whitespace-delimited token under the reviewed email parser; a token the parser refuses is refused whole, never re-scanned inside (`a(b@host` is not `b@host`). Only characters that cannot belong to an address are trimmed from its ends (brackets, quotes, parens, trailing sentence punctuation); a leading `!`, `?` or `'` is a legal local-part character and is kept (`!info@host` is never read as `info@host`).
 
 **Prepared run, not research run.** A prepared candidate is valid by its prepared brief whatever its qualification run's `reason` (most real ones carry `invalid_evidence`). The admission row (`source_kind='prepared_capture'`, naming the exact enrollment, plan, candidate revision and run) is the proof execution eligibility and attribution accept in place of `reason IS NULL`; research sources keep the strict test.
 
 **Openings.** A prepared admission has no opening-copy source, so a campaign with an opening policy would hold every one. The two exclude each other: the pass skips (and admission refuses, `opening_policy_configured`) a campaign that has an opening policy, and opening approval refuses (`prepared_admissions_present`, control `approvalState: unavailable`) once a prepared admission exists.
 
-**No starvation.** The pass excludes candidates with a current invalid check and everything already tried before the list's limit, and lists again (at most eight lists of room+10 per campaign) until room is filled. The check and its record commit on their own; each admission is its own transaction, because the `outbound_fence` runner provides none.
+**No starvation.** The pass excludes candidates with a current invalid check, candidates admission would refuse deterministically (a Firm already carrying the company's name or host other than the Firm admission created from this candidate, same predicate as `assessPreparedEmail`; an unresolvable time zone), and everything already tried, all before the list's limit and the scan window, and lists again (at most eight lists of room+10 per campaign) until room is filled. The check and its record commit on their own; each admission is its own transaction, because the `outbound_fence` runner provides none.
 
 ## Consequences and limits
 

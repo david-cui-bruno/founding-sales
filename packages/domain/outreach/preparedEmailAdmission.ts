@@ -8,6 +8,7 @@ import {enrollContact} from '../sequences/enrollments.ts';
 import {admitEmailCandidate} from './emailAdmission.ts';
 import {createOutreachPlan} from './plans.ts';
 import {assessEmailCandidate} from './selection.ts';
+import {preparedAdmissionRefusedInAdvance} from './preparedEmailAssessment.ts';
 import type {PreparedEmailTarget} from './emailCampaignSource.ts';
 import {admissionStop,campaignAdmissionCounts,campaignCapacityAvailable,lockEmailCampaignAdmissionGates} from './emailCampaignAdmission.ts';
 import {campaignAuthorityCurrent,campaignCandidateProvenance,campaignDatabaseNow,type EmailCampaignRow} from './emailCampaignAuthority.ts';
@@ -63,7 +64,8 @@ const ROUNDS=8;
 /** The worker's pass for a workspace: for each unrevoked, unexpired campaign without an opening policy and with room, take prepared
  * companies in the prepared list's order (one per host), check each published address once (syntax, real MX, no consumer/disposable
  * domain; no SMTP, no third party) and admit the valid ones. A resolver error records nothing and the address is asked again next
- * pass. A recorded invalid answer is excluded before the list's limit, and what was tried this pass is skipped by the next list, so
+ * pass. A recorded invalid answer, an existing Firm with the company's name or website host and an unresolvable time zone (the refusals
+ * admission would repeat on every pass) are excluded before the list's limit and scan window, and what was tried this pass is skipped by the next list, so
  * refused or invalid companies never starve later valid ones. The check and reads run in autocommit before any admission lock; each
  * admission is its own transaction (the caller must not already hold one), so a check commits whatever an admission does. */
 export async function runPreparedEmailAdmission(ctx:RepositoryContext,deps:{verifier:EmailVerifier}):Promise<PreparedEmailPass>{
@@ -74,9 +76,15 @@ export async function runPreparedEmailAdmission(ctx:RepositoryContext,deps:{veri
   if(room<=0)continue;
   const tried=new Set((await ctx.db.query<{candidate_id:string}>('SELECT candidate_id FROM outreach_email_campaign_admissions WHERE workspace_id=$1',[w])).rows.map(row=>row.candidate_id));
   const dropped=await droppedEmailAddressKeys(ctx);
+  const refusedInAdvance=new Map<string,boolean>();
   let admitted=0;
   for(let round=0;round<ROUNDS&&admitted<room;round++){
-   const batch=await listPreparedEmailCandidates(ctx,{limit:room+10,regions:campaign.regions,skip:tried,accept:read=>!dropped.has(emailVerificationKey(read.route.address))});
+   const batch=await listPreparedEmailCandidates(ctx,{limit:room+10,regions:campaign.regions,skip:tried,accept:async read=>{
+    if(dropped.has(emailVerificationKey(read.route.address)))return false;
+    let refused=refusedInAdvance.get(read.candidateId);
+    if(refused===undefined){refused=await preparedAdmissionRefusedInAdvance(ctx,campaign.id,read);refusedInAdvance.set(read.candidateId,refused);}
+    return !refused;
+   }});
    if(!batch.length)break;
    for(const company of batch){
     if(admitted>=room)break;

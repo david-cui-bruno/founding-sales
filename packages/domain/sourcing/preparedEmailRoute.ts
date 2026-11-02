@@ -6,12 +6,14 @@ import {parseEmailAddress} from '../crm/routeValidation.ts';
 
 /** One exact address a company published on its own admitted pages (ADR0035). Evidence, never contact permission. */
 export interface PreparedEmailRoute {address:string;observationId:string;blockId:string;url:string;/** ms epoch: earliest page/capture/source deadline, at most seven days after retrieval. */expiresAt:number}
-/** A mailbox is a whole whitespace-delimited token: only wrapping punctuation is trimmed from its ends (a quote pair, brackets, sentence
- * punctuation, `mailto:`), and the token must be a complete address under the reviewed parser. A token the parser refuses is refused
- * whole; the scan never restarts inside it, so `a(b@host.com` never yields `b@host.com`. */
+/** A mailbox is a whole whitespace-delimited token. Only characters that cannot belong to an address are trimmed from its ends: leading
+ * brackets, parens, quotes and `.,;:` (never a leading `!`, `?` or `'`, which `parseEmailAddress` accepts in a local part), trailing
+ * punctuation of any of those kinds including `!?'` (none can end a domain), a `'…'` quote pair, and `mailto:`. The token must then be a
+ * complete address under the reviewed parser; a token it refuses is refused whole, so the scan never restarts inside it:
+ * `a(b@host.com` never yields `b@host.com`, and `!info@host.com` is never read as `info@host.com`. */
 const mailboxes=(text:string):string[]=>text.split(/\s+/u).flatMap(raw=>{
  if(!raw.includes('@'))return [];
- const token=raw.replace(/^'(.*)'[.,;:!?)]*$/u,'$1').replace(/^[<>()[\]",.;:!?]+|[<>()[\]",.;:!?']+$/gu,'').replace(/^mailto:/iu,''),parsed=parseEmailAddress(token);
+ const token=raw.replace(/^'(.*)'[.,;:!?)]*$/u,'$1').replace(/^[<>()[\]",.;:]+|[<>()[\]",.;:!?']+$/gu,'').replace(/^mailto:/iu,''),parsed=parseEmailAddress(token);
  return parsed?[`${parsed.localPart}@${parsed.domain}`.toLowerCase()]:[];
 });
 /** Wording that makes an address someone else's, an example or a suggestion, as supportedBusinessEmail refuses it. */

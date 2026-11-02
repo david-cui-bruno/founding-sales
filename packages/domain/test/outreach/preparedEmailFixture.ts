@@ -30,7 +30,8 @@ const page=(website:string,contact:string)=>researchPageFetch({lookup:async()=>[
 export const goodMx:MailDomainResolver={resolveMx:async()=>[{exchange:'mx.mail-host.net',priority:10}],resolve4:async()=>[],resolve6:async()=>[]};
 export const verifier=dnsEmailVerifier(goodMx,50);
 export const BOOKING_LINK='https://cal.com/david-cui-yrp9dm/demo',POSTAL_ADDRESS='339 Thayer Street, Providence, RI 02906';
-export async function preparedEmailWorld(options:{opening?:boolean}={}){
+/** `manyCaptures` lifts the workspace's daily research ceilings so a test can make more than the default number of real captures. */
+export async function preparedEmailWorld(options:{opening?:boolean;regions?:string[];manyCaptures?:boolean}={}){
  const db=await createTestDatabase(),seed=await seedTwoWorkspaces(db.session),runtime:SessionQueryable=await db.appRuntimeSession(),ws=seed.alpha.workspaceId;
  const ctx=(worker=false)=>repositoryContext(workspaceScope(ws,worker?{kind:'system',component:'worker'}:{kind:'user',role:'admin',userId:seed.alpha.admin.userId}),runtime);
  const tx=<T>(fn:()=>Promise<T>)=>withTransaction(runtime,fn);
@@ -47,7 +48,8 @@ export async function preparedEmailWorld(options:{opening?:boolean}={}){
  }
  const admissions=async()=>(await runtime.query<{address:string;source_kind:string;region:string}>("SELECT r.address,a.source_kind,c.payload->>'region' AS region FROM outreach_email_campaign_admissions a JOIN email_addresses r ON r.workspace_id=a.workspace_id AND r.id=a.route_id JOIN sourcing_candidates c ON c.workspace_id=a.workspace_id AND c.id=a.candidate_id WHERE a.workspace_id=$1 ORDER BY r.address",[ws])).rows;
  const pass=(v:EmailVerifier=verifier)=>runPreparedEmailAdmission(ctx(true),{verifier:v});
- await runtime.query('INSERT INTO research_settings(workspace_id,enabled,max_pages_per_firm) VALUES($1,true,1)',[ws]);
+ if(options.manyCaptures)await runtime.query('INSERT INTO research_settings(workspace_id,enabled,max_pages_per_firm,daily_firm_ceiling,daily_cost_ceiling_cents,monthly_cost_ceiling_cents) VALUES($1,true,1,10000,1000000,10000000)',[ws]);
+ else await runtime.query('INSERT INTO research_settings(workspace_id,enabled,max_pages_per_firm) VALUES($1,true,1)',[ws]);
  const mailbox=(await runtime.query<{id:string}>("INSERT INTO mailboxes(workspace_id,owner_user_id,email_address,provider_account_id,status,sync_state,history_id,history_id_updated_at,baseline_from_at,baseline_completed_at,coverage_watermark_at) VALUES($1,$2,$3,$4,'connected','ready','1000',now(),now()-interval '30 days',now(),now()) RETURNING id",[ws,seed.alpha.admin.userId,`campaign-${randomUUID()}@example.test`,`local-${randomUUID()}`])).rows[0]!.id;
  await runtime.query("INSERT INTO workspace_settings(workspace_id,setting_key,version,value,change_note,changed_by_user_id) VALUES($1,'postal_address',1,$2::jsonb,'fixture',$3)",[ws,JSON.stringify({address:POSTAL_ADDRESS}),seed.alpha.admin.userId]);
  await runtime.query("INSERT INTO workspace_settings(workspace_id,setting_key,version,value,change_note,changed_by_user_id) VALUES($1,'booking_link',1,$2::jsonb,'fixture',$3)",[ws,JSON.stringify({url:BOOKING_LINK}),seed.alpha.admin.userId]);
@@ -60,7 +62,7 @@ export async function preparedEmailWorld(options:{opening?:boolean}={}){
  const sequence=await tx(()=>createSequence(ctx(),{name:`Campaign ${randomUUID()}`}));if(!sequence.ok)throw Error(sequence.reason);
  const version=await tx(()=>createDraftVersion(ctx(),{sequenceId:sequence.value.id,steps:ids.map((templateVersionId,index)=>({ordinal:index+1,channel:'email',delay:{unit:'elapsed',hours:[0,72,168,312,480][index]!},templateVersionId}))}));if(!version.ok)throw Error(version.reason);
  const published=await tx(()=>publishVersion(ctx(),{sequenceVersionId:version.value.sequenceVersionId}));if(!published.ok)throw Error(published.reason);
- const policy:EmailCampaignPolicy={mailboxId:mailbox,authorizationRevision:authorization.value.revision,sequenceVersionId:version.value.sequenceVersionId,regions:['OH','WA'],maxEnrollments:25,dailyAdmissionLimit:5,expiresAt:new Date(Date.now()+86_400_000).toISOString()};
+ const policy:EmailCampaignPolicy={mailboxId:mailbox,authorizationRevision:authorization.value.revision,sequenceVersionId:version.value.sequenceVersionId,regions:(options.regions??['OH','WA']) as EmailCampaignPolicy['regions'],maxEnrollments:25,dailyAdmissionLimit:5,expiresAt:new Date(Date.now()+86_400_000).toISOString()};
  const approved=await tx(()=>approveEmailCampaign(ctx(),policy));if(!approved.ok)throw Error(approved.reason);
  const campaignId=approved.value.campaignId,allow=async()=>true;
  const openingInput=async()=>{const baseline=(await readCampaignOpeningControl(ctx(),{campaignId},allow))!.baseline!;return {campaignId,expectedCampaignRevision:1,templateVersionId:baseline.templateVersionId,templateContentHash:baseline.templateContentHash,variants:[{id:'local',text:'I noticed {{firm_name}} serves {{firm_locality}}, {{firm_region}}.'}],expiresAt:policy.expiresAt};};
