@@ -40,7 +40,7 @@ export async function campaignAuthorityCurrent(ctx:RepositoryContext,row:EmailCa
  return !!current&&current.owner_user_id===row.owner_user_id&&current.mailbox_id===row.mailbox_id&&current.sequence_version_id===row.sequence_version_id&&current.authorization_revision===row.authorization_revision&&current.revision===row.revision&&!current.revoked_at&&current.expires_at.getTime()>Date.parse(await campaignDatabaseNow(ctx))&&await actorCurrent();
 }
 /** No caller-supplied reviewed flag can manufacture this provenance. */
-export async function campaignCandidateProvenance(ctx:RepositoryContext,input:{campaignId:string;candidateId:string;qualificationRunId:string},automaticSource?:InternalCampaignTarget):Promise<{firmId:string|null;campaign:EmailCampaignRow;route:EmailEvidenceRoute}|null>{
+export async function campaignCandidateProvenance(ctx:RepositoryContext,input:{campaignId:string;candidateId:string;qualificationRunId:string},automaticSource?:InternalCampaignTarget):Promise<{firmId:string|null;campaign:EmailCampaignRow;route:EmailEvidenceRoute;/** Prepared own-site companies only. */businessName?:string}|null>{
  const campaign=await currentEmailCampaign(ctx,input.campaignId);if(!campaign||!await campaignAuthorityCurrent(ctx,campaign,automaticSource))return null;
  if(automaticSource?.kind==='prepared_capture'){
   // ADR0035: the company's Firm exists only once admission creates it, from this very candidate.
@@ -48,7 +48,7 @@ export async function campaignCandidateProvenance(ctx:RepositoryContext,input:{c
   const proof=await preparedEmailProof(ctx,campaign,automaticSource);
   if(!proof||!await campaignAuthorityCurrent(ctx,campaign,automaticSource)||Date.parse(await campaignDatabaseNow(ctx))>=proof.validUntil)return null;
   const firm=(await ctx.db.query<{firm_id:string}>('SELECT firm_id FROM outreach_email_sources WHERE workspace_id=$1 AND candidate_id=$2 AND run_id=$3',[ctx.scope.workspaceId,input.candidateId,input.qualificationRunId])).rows[0];
-  return {firmId:firm?.firm_id??null,campaign,route:proof.route};
+  return {firmId:firm?.firm_id??null,campaign,route:proof.route,businessName:proof.businessName};
  }
  if(automaticSource){
   if(input.candidateId!==automaticSource.candidateId||input.qualificationRunId!==automaticSource.runId)return null;

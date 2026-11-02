@@ -72,7 +72,7 @@ export function qualifyEmailCandidate(input: Parameters<typeof qualifyCandidate>
 // Database assessment is repeated inside admission/plan creation under the shared
 // send/identity locks. It does not itself create a prospect or authorize contact.
 
-export interface EmailAssessment {firmId:string|null;route:EmailEvidenceRoute;lane:'call_first'|'email_first';rank:'help_request'|'operational_burden'|'investigation'|'fit_only';emailRank:'help_request'|'operational_burden'|'investigation'|'fit_only';reviewRequired:boolean;verifiedFit:boolean}
+export interface EmailAssessment {firmId:string|null;/** Prepared own-site companies: the resolved business name the new Firm carries. */firmName?:string;route:EmailEvidenceRoute;lane:'call_first'|'email_first';rank:'help_request'|'operational_burden'|'investigation'|'fit_only';emailRank:'help_request'|'operational_burden'|'investigation'|'fit_only';reviewRequired:boolean;verifiedFit:boolean}
 export async function assessEmailCandidate(ctx:RepositoryContext,input:{candidateId:string;qualificationRunId:string;campaignId?:string},automaticSource?:InternalCampaignTarget):Promise<{ok:true;value:EmailAssessment}|{ok:false;reason:string}>{
  if(automaticSource?.kind==='prepared_capture')return assessPreparedEmail(ctx,input,automaticSource);
  if(!decideAdminOnly(ctx).permitted)return {ok:false,reason:'admin_required'};

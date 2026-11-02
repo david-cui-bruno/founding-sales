@@ -52,7 +52,7 @@ async function admit(ctx:RepositoryContext,input:Input,automaticSource?:Internal
  if(existing){if(existing.association_review_required)return {ok:false,reason:'identity_review_required'};return {ok:true,value:{firmId:existing.firm_id,contactId:existing.contact_id,routeId:existing.route_id,identityKind:existing.identity_kind,alreadyAdmitted:true}};}
  if(!(await ctx.db.query("SELECT user_id FROM workspace_memberships WHERE workspace_id=$1 AND user_id=$2 AND status='active' FOR SHARE",[w,input.expectedOwnerUserId])).rows.length)return {ok:false,reason:'owner_inactive'};
  const zone=automaticSource?.kind==='prepared_capture'?preparedEmailTimeZone(payload.region,payload.locality):sourcingTimeZone(payload.region,payload.locality);if(!zone)return {ok:false,reason:'zone_unresolved'};
- if(!firm){const made=await createFirm(ctx,{name:payload.firmName,website:payload.website,locality:payload.locality,regionCode:payload.region,assignedUserId:input.expectedOwnerUserId});if(!made.ok)return made;firm=made.value;}
+ if(!firm){const made=await createFirm(ctx,{name:assessment.value.firmName??payload.firmName,website:payload.website,locality:payload.locality,regionCode:payload.region,assignedUserId:input.expectedOwnerUserId});if(!made.ok)return made;firm=made.value;}
  if(firm.assigned_user_id!==input.expectedOwnerUserId||firm.status==='merged')return {ok:false,reason:'firm_changed'};
  const route=assessment.value.route;
  const prior=await existingEmailRoute(ctx,firm.id,route.address);if(!prior.ok)return prior;
