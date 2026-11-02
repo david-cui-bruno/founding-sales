@@ -36,10 +36,10 @@ export async function preparedEmailWorld(options:{opening?:boolean;regions?:stri
  const ctx=(worker=false)=>repositoryContext(workspaceScope(ws,worker?{kind:'system',component:'worker'}:{kind:'user',role:'admin',userId:seed.alpha.admin.userId}),runtime);
  const tx=<T>(fn:()=>Promise<T>)=>withTransaction(runtime,fn);
  let serial=0;
- /** A real own-site capture: the page publishes `contact(domain)`. */
- async function prepared(region:string,contact:(domain:string)=>string,locality='Columbus',invalid=false){
+ /** A real own-site capture: the page publishes `contact(domain)`; `name` is the stored company name (default: a branded label). */
+ async function prepared(region:string,contact:(domain:string)=>string,locality='Columbus',invalid=false,name?:string){
   const domain=`peak-${randomUUID().slice(0,8)}.org`,website=`https://${domain}/`;
-  const saved=await tx(()=>saveCandidate(ctx(),{firmName:`Peak${String(serial++)} Property Management`,website,sourceUrl:website,locality,region:region as never,signal:'fit_only',evidence:'Fictional search label only',observedOn:new Date().toISOString().slice(0,10),preparedBy:'Controlled test'} as never));
+  const saved=await tx(()=>saveCandidate(ctx(),{firmName:name??`Peak${String(serial++)} Property Management`,website,sourceUrl:website,locality,region:region as never,signal:'fit_only',evidence:'Fictional search label only',observedOn:new Date().toISOString().slice(0,10),preparedBy:'Controlled test'} as never));
   if(!saved.ok)throw Error(saved.reason);
   const requested=await tx(()=>requestQualification(ctx(true),{candidateId:saved.value.id,expectedRevision:1},{enqueue:false}));if(!requested.ok)throw Error(requested.reason);
   const target={candidateId:saved.value.id,candidateRevision:1,runId:requested.value.runId};

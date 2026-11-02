@@ -15,7 +15,7 @@ export async function previewPreparedEmailAdmission(ctx:RepositoryContext,input:
   const candidate=(await ctx.db.query<{payload:unknown}>('SELECT payload FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2',[ctx.scope.workspaceId,read.candidateId])).rows[0],payload=candidate&&preparedCandidatePayload(candidate.payload);
   if(!payload)continue;
   const recorded=await latestEmailVerification(ctx,read.route.address);
-  candidates.push({candidateId:read.candidateId,host:read.host,companyName:payload.firmName,website:payload.website,locality:read.locality,region:read.region as EmailCampaignPreparedPreview['candidates'][number]['region'],address:read.route.address,verification:recorded&&{result:recorded.result,outcome:recorded.outcome,checkedAt:recorded.checkedAt.toISOString()}});
+  candidates.push({candidateId:read.candidateId,host:read.host,companyName:read.businessName,website:payload.website,locality:read.locality,region:read.region as EmailCampaignPreparedPreview['candidates'][number]['region'],address:read.route.address,verification:recorded&&{result:recorded.result,outcome:recorded.outcome,checkedAt:recorded.checkedAt.toISOString()}});
  }
  return {candidates};
 }

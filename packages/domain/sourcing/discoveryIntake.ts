@@ -4,7 +4,7 @@ import {US_BUSINESS_REGIONS} from '../../contracts/src/usBusinessGeography.ts';
 /** ADR0034: a raw Overture observation with its own website is researched as the ordinary seed it implies. The seed is
  * only ever built in memory (the stored candidate keeps its raw payload) and is not authority beyond own-site research:
  * the website is the only source and an http reference is read as https. A bare host is not a website reference here, as in manual projection. */
-const DISCOVERY_RESEARCH_PREPARED_BY='Overture Maps place · not verified';
+export const DISCOVERY_RESEARCH_PREPARED_BY='Overture Maps place · not verified';
 export function discoveryResearchSeed(value:unknown):CandidateInput|null {
  const raw=discoveryCandidatePayloadSchema.safeParse(value);if(!raw.success)return null;
  const row=raw.data.row,site=row.website?.trim();
