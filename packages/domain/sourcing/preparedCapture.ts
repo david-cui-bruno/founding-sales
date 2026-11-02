@@ -12,7 +12,9 @@ export type PreparedCapturePolicy=typeof PREPARED_CAPTURE_V1|typeof PREPARED_CAP
 export const isPreparedCapturePolicy=(value:unknown):value is PreparedCapturePolicy=>value===PREPARED_CAPTURE_V1||value===PREPARED_CAPTURE_POLICY;
 const digest=z.string().regex(/^[a-f0-9]{64}$/u);
 const captureTime=instant.refine(value=>/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u.test(value));
-const pageSchema=z.strictObject({observationId:uuid,url:sourcingUrlSchema,contentHash:digest,relevantTextHash:digest,retrievedAt:captureTime,redirectUrls:z.array(sourcingUrlSchema).min(2).max(6)});
+/** `selectionOnly`: a linked page of no own-site section kind (e.g. /services, /owner-faq). The brief cites it only for a
+ * business-judgment run's residential_management selection, never for phones, people or other passages. */
+const pageSchema=z.strictObject({observationId:uuid,url:sourcingUrlSchema,contentHash:digest,relevantTextHash:digest,retrievedAt:captureTime,redirectUrls:z.array(sourcingUrlSchema).min(2).max(6),selectionOnly:z.literal(true).optional()});
 const manifestSchema=z.strictObject({version:z.enum([PREPARED_CAPTURE_V1,PREPARED_CAPTURE_POLICY]),candidateId:uuid,candidateRevision:z.number().int().positive(),sourceUrl:sourcingUrlSchema,pages:z.array(pageSchema).min(1).max(8)});
 export type PreparedCapture=z.infer<typeof manifestSchema>;
 export interface PreparedCaptureBinding {candidateId:string;candidateRevision:number;sourceUrl:string;observations:readonly SourceObservation[]}
@@ -58,7 +60,7 @@ export function validatePreparedCapture(value:unknown,binding:PreparedCaptureBin
  * V2 also associates at most one homepage (a deeper landing page's own host root), contact, about and team page that the traced landing
  * page led to (ADR0034): its lineage is the landing page's request chain from
  * the exact source followed by the linked page's own chain, so every URL the association
- * depends on keeps its own loss/expiry/denial check. Any other auxiliary page stays unassociated. */
+ * depends on keeps its own loss/expiry/denial check. Any other linked page is associated the same way but `selectionOnly`. */
 export interface PreparedCaptureLineage {url:string;trace:FetchedPage['redirectTrace'];linkedFrom?:string|undefined;firstParty:boolean}
 /** `fetched` is every page the adapter returned, including one with no citable text: a
  * landing page's request chain is lineage for its linked pages whether or not it is cited. */
@@ -73,9 +75,10 @@ export function buildPreparedCapture(binding:Omit<PreparedCaptureBinding,'observ
    const landing=fetched.find(page=>page.url===linkedFrom&&page.linkedFrom===undefined&&page.firstParty&&page.trace?.version==='page-redirect-trace-v1'&&traced(page.trace.urls,linkedFrom));
    // A requested site root is the homepage wherever it redirected on its site (/home, /en/, /index.html).
    const kind=trace.urls[0]!==undefined&&isSiteRootUrl(trace.urls[0])?'home':ownSitePageKind(source.url);
-   if(!landing||kind===null||kinds.has(kind))return [];
+   if(!landing||kind!==null&&kinds.has(kind))return [];
    urls=[...landing.trace!.urls,...trace.urls];
    if(!tracedRedirects(urls,binding.sourceUrl,source.url,policy))return [];
+   if(kind===null)return [{observationId:source.id,url:source.url,contentHash:source.contentHash,relevantTextHash:source.relevantTextHash,retrievedAt:source.retrievedAt,redirectUrls:[...urls],selectionOnly:true as const}];
    kinds.add(kind);
   }
   return tracedRedirects(urls,binding.sourceUrl,source.url,policy)?[{observationId:source.id,url:source.url,contentHash:source.contentHash,relevantTextHash:source.relevantTextHash,retrievedAt:source.retrievedAt,redirectUrls:[...urls]}]:[];

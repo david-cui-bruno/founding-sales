@@ -2,11 +2,13 @@ import {createHash} from 'node:crypto';
 import {sourceObservationSchema,type SourceObservation} from '@fss/contracts';
 import type {ManualPhoneSnapshot} from './manualProspectPhone.ts';
 import {originalAuthorities} from './manualProspectOriginalAuthority.ts';
-import {preparedCaptureAuthority} from './preparedCapture.ts';
+import {preparedCaptureAuthority,preparedCaptureManifest} from './preparedCapture.ts';
 
 export type PreparedSourceExpirations=ReadonlyMap<string,number>;
-/** `moved`: captured on the company site's moved host (ADR0034), cited through its manifest lineage, not the website host. */
-export interface AdmittedPreparedPage {source:SourceObservation;captured:boolean;moved:boolean;expires:number|undefined}
+/** `moved`: captured on the company site's moved host (ADR0034), cited through its manifest lineage, not the website host.
+ * `selectionOnly`: admitted only through a selection-only capture association, so citable solely for a business-judgment
+ * run's residential_management selection, never for a phone, person or any other passage. */
+export interface AdmittedPreparedPage {source:SourceObservation;captured:boolean;moved:boolean;selectionOnly:boolean;expires:number|undefined}
 export interface AdmittedPreparedPages {pages:AdmittedPreparedPage[];unshown:boolean;captureDeadline:number|null;capturedIds:ReadonlySet<string>;website:string|null}
 const host=(value:string|null)=>{try{const url=new URL(value??'');return ['http:','https:'].includes(url.protocol)&&!url.username&&!url.password?url.hostname.toLowerCase().replace(/^www\./u,''):null;}catch{return null;}};
 
@@ -23,6 +25,7 @@ export function admitPreparedPages(snapshot:ManualPhoneSnapshot,now:number,expir
  const grants=originalAuthorities(snapshot),capture=preparedCaptureAuthority(snapshot),expectedHost=host(grants.website);
  const captureDeadline=capture.validUntil===null?null:Date.parse(capture.validUntil);
  const captured=captureDeadline===null||Number.isFinite(captureDeadline)&&captureDeadline>now?capture.observationIds:new Set<string>();
+ const selectionOnly=new Set((preparedCaptureManifest(snapshot)?.pages??[]).flatMap(page=>page.selectionOnly?[page.observationId]:[]));
  const result:AdmittedPreparedPages={pages:[],unshown:!unique,captureDeadline,capturedIds:captured,website:grants.website};
  for(const value of unique?raw:[]){
   const parsed=sourceObservationSchema.safeParse(value);
@@ -30,7 +33,7 @@ export function admitPreparedPages(snapshot:ManualPhoneSnapshot,now:number,expir
   const source=parsed.data,expires=expirations.get(source.url);
   // A captured page keeps its own host: its manifest lineage may follow the company site's move (ADR0034).
   if((!snapshot.permitted_urls.includes(source.url)&&!captured.has(source.id))||new Set(source.blocks.map(block=>block.id)).size!==source.blocks.length||(!grants.authorities[source.id]&&!captured.has(source.id))||!expectedHost||host(source.url)!==expectedHost&&!captured.has(source.id)||!source.firstParty||Date.parse(source.retrievedAt)>now||expires!==undefined&&expires<=now||createHash('sha256').update(JSON.stringify(source.blocks)).digest('hex')!==source.relevantTextHash){result.unshown=true;continue;}
-  result.pages.push({source,captured:captured.has(source.id),moved:host(source.url)!==expectedHost,expires});
+  result.pages.push({source,captured:captured.has(source.id),moved:host(source.url)!==expectedHost,selectionOnly:selectionOnly.has(source.id)&&!snapshot.permitted_urls.includes(source.url),expires});
  }
  return result;
 }

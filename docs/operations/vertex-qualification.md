@@ -21,6 +21,12 @@ Source: https://cloud.google.com/vertex-ai/generative-ai/pricing (Gemini 3 table
 3. Leave `FSS_CLASSIFIER` on: `off` stops qualification too, with or without a classifier transport (start log `qualification_model: FSS_CLASSIFIER`).
 4. Smoke from a workstation with application-default credentials: `node --experimental-transform-types scripts/vertexQualificationSmoke.ts "Firm|City|ST|https://site/,https://site/about"` (two real billed calls of a cent or two each). After deploy, confirm one real run ends `selected` with `provider_key=google_vertex.sourcing_qualification`.
 
+## Business judgment re-qualification
+
+Gemini qualification is asked for a business judgment on every company (`QUALIFICATION_JUDGMENT_SYSTEM_TEXT`): is the publisher a property-management company managing residential properties, with the supporting blocks selected as `residential_management` (self-descriptions, about/services text or the company's own service heading). A run whose `model_name` is in `BUSINESS_JUDGMENT_MODELS` takes the prepared brief's business context and residential fit from those selections only; every other run keeps the passage rules, so nothing callable drops before it is re-qualified. Prompt and policy versions do not move. A rejected answer keeps its resolved `residential_management` selections on the unavailable run (prepared brief only); a moved company site's selection is kept the same way. Native/publication citation readers never count either.
+
+After the release that carries this, Root re-qualifies the current prepared candidates once with the audited launcher ([lean release workflow](lean-release-workflow.md#audited-admin-one-offs-root)): `admin qualification requeue-prepared --workspace-id <ws> --approval-ref "<who approved, when>" --dry-run` to count, then without `--dry-run`. It requests candidates whose latest prepared run lacks the judgment through `requestQualification`, so research holds, the daily firm ceiling (1,000) and the money ceilings ($25/day) bound it exactly like the scheduler; it stops at the first ceiling or hold. Rerun on later days until `eligible` is 0. Expect about 1-2 cents a company at the 2026 price (two to four pages); the scheduler's own new candidates share the same ceilings.
+
 ## Rollback
 
 Set `FSS_CLASSIFIER=off`, remove the three `FSS_VERTEX_*` variables, or release the previous image, each through the same reviewed procedure: qualification stops cleanly. Reverting to Bedrock needs a code change; there is deliberately no switch.

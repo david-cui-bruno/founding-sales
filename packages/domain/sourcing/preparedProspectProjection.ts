@@ -1,4 +1,4 @@
-import type {PreparedProspectCallable,PreparedProspectCurrentBrief,PreparedProspectTarget} from '@fss/contracts';
+import {qualificationFactSchema,type PreparedProspectCallable,type PreparedProspectCurrentBrief,type PreparedProspectTarget} from '@fss/contracts';
 import {projectManualProspect,type ManualProspectRow} from './manualProspectProjection.ts';
 import type {ManualPhoneSnapshot} from './manualProspectPhone.ts';
 import {originalLineage} from './manualProspectOriginalAuthority.ts';
@@ -8,10 +8,22 @@ import {classifyPreparedPassage,type PreparedPassageClassification} from './prep
 import {blockPhoneLabels} from './manualProspectLiteralPhone.ts';
 import {classifyDiscoveryPage,companyHost} from './discoveryIdentity.ts';
 import {ownSitePageKind,type OwnSitePageKind} from '../research/sourcePolicy.ts';
+import {BUSINESS_JUDGMENT_MODELS} from './qualificationModel.ts';
 
 export interface PreparedRunIdentity {id:string;candidate_revision:number}
 type Passage=PreparedProspectCurrentBrief['passages'][number];
 const OWN_SITE_SECTION:Partial<Record<Passage['kind'],OwnSitePageKind>>={contact:'contact',business:'about',person:'team'};
+const selection=(observationId:string,blockId:string)=>`${observationId}\u0000${blockId}`;
+/** A business-judgment run's residential_management selections (block -> selected text), or null for any other run, whose
+ * business context stays the passage rules. Each malformed selection drops itself; a selection counts only where it
+ * resolves to an admitted page's block with the same text. */
+function judgedSelections(snapshot:ManualPhoneSnapshot):Map<string,string>|null {
+ if(typeof snapshot.model_name!=='string'||!BUSINESS_JUDGMENT_MODELS.includes(snapshot.model_name))return null;
+ return new Map((Array.isArray(snapshot.facts)?snapshot.facts:[]).flatMap(value=>{
+  const fact=qualificationFactSchema.safeParse(value);
+  return fact.success&&fact.data.kind==='residential_management'?[[selection(fact.data.observationId,fact.data.blockId),fact.data.value] as const]:[];
+ }));
+}
 /** Dated original passages only. A preparation assessment never changes a stored
  * qualification, resolves a canonical identity, or grants a channel/endpoint. */
 export function projectPreparedProspect(row:ManualProspectRow,snapshot:ManualPhoneSnapshot|undefined,latest:PreparedRunIdentity|undefined,now:number,expirations:PreparedSourceExpirations=new Map()):PreparedProspectCurrentBrief|null {
@@ -21,18 +33,23 @@ export function projectPreparedProspect(row:ManualProspectRow,snapshot:ManualPho
  let usablePages=0,partialPages=0,unshown=false,contraryBeyondBound=false;
  const linked=new Set<string>();
  if(snapshot&&!snapshot.dependency_changed&&snapshot.id===latest?.id&&snapshot.candidate_revision===row.revision&&originalLineage(snapshot)){
-  const admitted=admitPreparedPages(snapshot,now,expirations);
+  const admitted=admitPreparedPages(snapshot,now,expirations),judged=judgedSelections(snapshot);
   unshown=admitted.unshown;
   // A linked page's lineage runs through the landing's final URL; a captured page that is no
   // other page's lineage step is linked, whatever its path and whether the landing has citable text.
   const pages=preparedCaptureManifest(snapshot)?.pages??[],steps=new Set(pages.flatMap(page=>page.redirectUrls.slice(0,-1)));
   for(const page of pages)if(admitted.capturedIds.has(page.observationId)&&!steps.has(page.url))linked.add(page.observationId);
-  for(const {source,captured,expires} of admitted.pages){
+  for(const {source,captured,selectionOnly,expires} of admitted.pages){
+   // A selection-only page contributes only the judgment run's selected blocks, as business (or contrary) passages.
+   const selected=(block:{id:string;text:string})=>judged?.get(selection(source.id,block.id))===block.text;
+   if(selectionOnly&&!source.blocks.some(selected))continue;
    usablePages++;if(source.truncated)partialPages++;
    if(captured&&admitted.captureDeadline!==null)usedSourceDeadlines.push(admitted.captureDeadline);
    if(expires!==undefined)usedSourceDeadlines.push(expires);
    for(const block of source.blocks){
-    const classification=classifyPreparedPassage(block.text,observed.locality??'');
+    if(selectionOnly&&!selected(block))continue;
+    const found=classifyPreparedPassage(block.text,observed.locality??'',judged===null?undefined:selected(block));
+    const classification=selectionOnly?{...found,kinds:found.kinds.filter(kind=>kind==='business'||kind==='contrary'),usefulOperations:false}:found;
     if(block.text.length>2000){unshown=true;if(classification.contrary)contraryBeyondBound=true;continue;}
     if(!classification.kinds.length)continue;
     // Callable needs a supported US literal under the reviewed same-block phone grammar, as published.

@@ -2,7 +2,7 @@ import {expect,it} from 'vitest';
 import {qualificationExtraction} from '../src/sourcing/qualificationExtraction.ts';
 import {VertexRequestError,type GeminiResponse,type GeminiSurface} from '../src/sourcing/vertexGemini.ts';
 import {QUALIFICATION_MODEL_NAME,QUALIFICATION_PROVIDER_KEY} from '@fss/domain/sourcing/qualificationModel.ts';
-import {QUALIFICATION_OUTPUT_TOKENS,QUALIFICATION_SCHEMA_TOKEN_ALLOWANCE,QUALIFICATION_SYSTEM_TEXT,QUALIFICATION_THINKING_BUDGET_TOKENS,type QualificationGeminiRequest} from '@fss/domain/sourcing/qualificationPrompt.ts';
+import {QUALIFICATION_OUTPUT_TOKENS,QUALIFICATION_JUDGMENT_SYSTEM_TEXT,QUALIFICATION_SCHEMA_TOKEN_ALLOWANCE,QUALIFICATION_SYSTEM_TEXT,QUALIFICATION_THINKING_BUDGET_TOKENS,type QualificationGeminiRequest} from '@fss/domain/sourcing/qualificationPrompt.ts';
 const source={id:'11111111-1111-4111-8111-111111111111',url:'https://example.test/',contentHash:'a'.repeat(64),relevantTextHash:'b'.repeat(64),retrievedAt:'2026-10-05T00:00:00Z',publishedAt:null,publishedAtBlockId:null,firstParty:true,truncated:false,blocks:[{id:'b1',text:'We need maintenance coordination help.'}]};
 const input={candidate:{firmName:'Harbor Example Management',locality:'Boston',region:'MA' as const,website:'https://example.test/'},observations:[source],modelName:QUALIFICATION_MODEL_NAME,maxInputTokens:5000,maxOutputTokens:QUALIFICATION_OUTPUT_TOKENS};
 const usage={promptTokenCount:100,candidatesTokenCount:50,totalTokenCount:150};
@@ -20,7 +20,12 @@ it('counts the dispatched prompt plus the response schema Vertex does not count,
  expect(await provider.countInputTokens(input)).toBe(120+QUALIFICATION_SCHEMA_TOKEN_ALLOWANCE);
  const result=await provider.extract(input);
  expect(sent).toMatchObject({systemInstruction:counted?.systemInstruction,contents:counted?.contents});
- expect(sent?.systemInstruction.parts[0].text).toBe(QUALIFICATION_SYSTEM_TEXT);
+ expect(sent?.systemInstruction.parts[0].text).toBe(QUALIFICATION_JUDGMENT_SYSTEM_TEXT);
+ // Only the residential_management instruction becomes the business judgment; office research keeps the shared text.
+ expect(QUALIFICATION_SYSTEM_TEXT).toContain('a navigation label such as "Property Management" is insufficient');
+ expect(QUALIFICATION_JUDGMENT_SYSTEM_TEXT).not.toContain('a navigation label such as');
+ expect(QUALIFICATION_JUDGMENT_SYSTEM_TEXT).toContain('Business judgment, required for every company');
+ expect(QUALIFICATION_JUDGMENT_SYSTEM_TEXT.replace(/Business judgment, required.*?select no residential_management\./u,'')).toBe(QUALIFICATION_SYSTEM_TEXT.replace(/For residential_management, select a descriptive.*?headings or menus\./u,''));
  expect(sent?.generationConfig).toMatchObject({temperature:0,maxOutputTokens:QUALIFICATION_OUTPUT_TOKENS,responseMimeType:'application/json',thinkingConfig:{thinkingBudget:QUALIFICATION_THINKING_BUDGET_TOKENS}});
  expect(sent?.generationConfig.responseSchema).toMatchObject({type:'OBJECT',required:['selections','openingQuestion'],properties:{selections:{type:'ARRAY',items:{required:['kind','observationId','blockId']}},openingQuestion:{type:'STRING',nullable:true}}});
  expect(sent?.generationConfig.responseSchema.properties.selections.items.properties.kind.enum).toContain('residential_management');
@@ -140,6 +145,26 @@ it('retains a unique scoped area despite a weak selected city label on the curre
  const result=await provider.extract({...input,observations:[observation]});
  expect(result).toMatchObject({ok:true,value:{facts:[{kind:'firm_identity',blockId:'name'},{kind:'service_area',blockId:'label'},{kind:'residential_management',blockId:'description'},{kind:'service_area',blockId:'description'}]}});
 });
+it('keeps a moved company site selection only as residential_management prepared context and drops its other kinds',async()=>{
+ const moved={...source,url:'https://moved.example.test/',blocks:[{id:'b1',text:'Harbor Example Management manages residential homes in Boston, MA.'}]};
+ const result=await extractText(encoded([{kind:'residential_management',observationId:moved.id,blockId:'b1'},{kind:'firm_identity',observationId:moved.id,blockId:'b1'}]),'STOP',[moved]);
+ expect(result).toMatchObject({ok:true,value:{facts:[{kind:'residential_management',observationId:moved.id,blockId:'b1',value:moved.blocks[0]!.text}]}});
+ if(result.ok)expect(result.value.facts).toHaveLength(1);
+});
+it('refuses an answer with one invalid selection as a whole, but hands back its resolved residential_management selections for the prepared brief',async()=>{
+ const page={...source,blocks:[{id:'b1',text:'Harbor Example Management manages residential homes in Boston, MA.'},{id:'b2',text:'Call (617) 555-0100.'}]};
+ const valid={kind:'residential_management',observationId:page.id,blockId:'b1'};
+ for(const invalid of [{kind:'firm_identity',observationId:'22222222-2222-4222-8222-222222222222',blockId:'b1'},{kind:'business_phone',observationId:page.id,blockId:'missing'}]){
+  const result=await extractText(encoded([invalid,valid,{kind:'business_phone',observationId:page.id,blockId:'b2'}]),'STOP',[page]);
+  expect(result).toMatchObject({ok:false,failureCode:'invalid_evidence',diagnostic:{stage:'selection',selectionIndex:0},preparedFacts:[{...valid,value:page.blocks[0]!.text}]});
+  if(!result.ok)expect(result.preparedFacts).toHaveLength(1);
+ }
+ // A citation-role refusal (a contradictory identity) keeps them too; an answer without such a selection hands back none.
+ const contrary=await extractText(encoded([valid,{kind:'firm_identity',observationId:page.id,blockId:'b2'}]),'STOP',[page]);
+ expect(contrary).toMatchObject({ok:false,failureCode:'invalid_evidence',diagnostic:{stage:'citation_roles'},preparedFacts:[{...valid,value:page.blocks[0]!.text}]});
+ expect(await extractText(encoded([{kind:'business_phone',observationId:page.id,blockId:'missing'}]),'STOP',[page])).not.toHaveProperty('preparedFacts');
+});
+
 it('bills reasoning tokens as output, whether reported separately or only in the total',async()=>{
  const ok=selectionsOf([]);
  // 1M prompt + 100k candidates + 900k thoughts: (1M*75 + 1M*375)/1M = 450 cents through 2026.

@@ -10,12 +10,12 @@ import {readResearchSettings} from '../research/settings.ts';
 import {lockResearchBudget} from '../research/ceilings.ts';
 import {readCreditSpend,workspaceBusinessZone} from '../research/ledger.ts';
 import {reserveAttempt,markCalling,settleAttempt} from '../research/reservations.ts';
-import {QUALIFICATION_PROVIDER_KEY,isPricedQualificationModel,qualificationReservationCents} from './qualificationModel.ts';
+import {BUSINESS_JUDGMENT_MODELS,QUALIFICATION_PROVIDER_KEY,isPricedQualificationModel,qualificationReservationCents} from './qualificationModel.ts';
 import {parsePageText} from '../research/pageText.ts';
 import {isPublicResearchUrl,withoutFragment} from '../research/sourcePolicy.ts';
 import type {PageFetchProvider,FetchedPage} from '../research/providers.ts';
 import {finishQualification,QUALIFICATION_PROMPT_VERSION,QUALIFICATION_POLICY_VERSION,type QualificationRunRow} from './qualificationStore.ts';
-import {QUALIFICATION_OUTPUT_TOKENS,type QualificationExtractionProvider,type QualificationExtractionOutcome,type QualificationExtractionRequest} from './qualificationPrompt.ts';
+import {QUALIFICATION_FACT_LIMIT,QUALIFICATION_OUTPUT_TOKENS,type QualificationExtractionProvider,type QualificationExtractionOutcome,type QualificationExtractionRequest} from './qualificationPrompt.ts';
 import {normalizeQualificationDiagnostic,type QualificationDiagnostic,type QualificationDiagnosticPhase} from './qualificationDiagnostics.ts';
 import {isCurrentPreparedCandidatePayload} from './discoveryIntake.ts';
 import {retainedCandidateOnly} from './retainedAcquisition.ts';
@@ -25,6 +25,7 @@ import {PREPARED_CAPTURE_POLICY,isPreparedCapturePolicy,buildPreparedCapture,typ
 import {preparedCaptureSourcesAvailable,preparedCaptureSourceWitness,type PreparedCaptureSourceWitness} from './preparedCaptureAccess.ts';
 import {isDeepStrictEqual} from 'node:util';
 import {classifyDiscoveryPage} from './discoveryIdentity.ts';
+import {preparedOnlySelection} from './qualificationCitationRoles.ts';
 interface Run extends QualificationRunRow {payload:CandidateInput;current_revision:number;candidate_status:string}
 const readSql=`SELECT r.*,c.payload,c.revision AS current_revision,c.status AS candidate_status FROM sourcing_qualification_runs r
  JOIN sourcing_candidates c ON c.workspace_id=r.workspace_id AND c.id=r.candidate_id WHERE r.workspace_id=$1 AND r.id=$2`;
@@ -138,8 +139,10 @@ export async function runQualification(ctx:RepositoryContext,input:{runId:string
   const saved=await finish(null,supplemented,previous.opening_question,citations);
   if(saved.ok)await recoverDiscoveredIdentity(ctx,run.id);return;
  }
- const offered=observations.filter(source=>source.firstParty&&!source.truncated);
- if(!offered.length){diagnose('no_complete_first_party');await finish('source_incomplete_or_unverified');return;}
+ // Truncated first-party pages are offered too, for the business judgment: a selection there is prepared-brief context
+ // only (`preparedOnlySelection`); citations still need a complete page.
+ const offered=observations.filter(source=>source.firstParty);
+ if(!offered.some(source=>!source.truncated)){diagnose('no_complete_first_party');await finish('source_incomplete_or_unverified');return;}
  const request:QualificationExtractionRequest={candidate:{firmName:run.payload.firmName,locality:run.payload.locality,region:run.payload.region,website:run.payload.website},observations:offered,modelName:run.model_name,maxInputTokens:0,maxOutputTokens:QUALIFICATION_OUTPUT_TOKENS,...(producer===PREPARED_IDENTITY_PRODUCER?{producerVersion:producer}:{})};
  let tokens:number;
  try{tokens=await extraction.countInputTokens(request);}catch{await finish('token_count_unavailable');return;}
@@ -173,7 +176,16 @@ export async function runQualification(ctx:RepositoryContext,input:{runId:string
  // Settlement has its own commit so even invalid/stale evidence cannot erase spent money.
  if(result.ok&&result.value.facts.some(f=>!offered.some(source=>source.id===f.observationId))){diagnose('unoffered_observation');await finish('invalid_evidence');return;}
  const preparedIdentity=result.ok?result.value.preparedIdentity:undefined;
- const facts=result.ok?(preparedIdentity?result.value.facts:withSupportedOfficeName(run.payload,result.value.facts,observations,await databaseNow(ctx))):[];
+ // A rejected answer of a business-judgment model keeps only its offered residential_management selections, on the
+ // unavailable run: prepared-brief context, never a citation (citation readers require a successful run).
+ const judged=!result.ok&&result.failureCode==='invalid_evidence'&&BUSINESS_JUDGMENT_MODELS.includes(run.model_name)?(result.preparedFacts??[]).filter(f=>f.kind==='residential_management'&&offered.some(source=>source.id===f.observationId)):[];
+ // One stored bound: a supplemented citation displaces the last prepared-only business selections, never a citation.
+ const bounded=(all:QualificationFact[])=>{
+  const over=all.length-QUALIFICATION_FACT_LIMIT;if(over<=0)return all;
+  const drop=new Set(all.filter(f=>f.kind==='residential_management'&&preparedOnlySelection(run.payload,f,observations)).slice(-over));
+  return all.filter(f=>!drop.has(f));
+ };
+ const facts=result.ok?bounded(preparedIdentity?result.value.facts:withSupportedOfficeName(run.payload,result.value.facts,observations,await databaseNow(ctx))):judged;
  const supplementedEvidence=result.ok?facts.filter(f=>!result.value.facts.some(original=>original.kind===f.kind&&original.observationId===f.observationId&&original.blockId===f.blockId)).map(({kind,observationId,blockId})=>({kind,observationId,blockId})):[];
  const saved=await finish(result.ok?null:result.failureCode,facts,result.ok?result.value.openingQuestion:null,supplementedEvidence,preparedIdentity);
  if(saved.ok&&result.ok&&!preparedIdentity)await recoverDiscoveredIdentity(ctx,run.id);

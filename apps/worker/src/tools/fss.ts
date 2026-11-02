@@ -6,6 +6,7 @@ import {crmReadAllocationPutCommand} from './fss/crmReadAllocation.ts';
 import {migrationAuthenticationCheck} from './fss/migrationAuthentication.ts';
 import {discoveryResumeCommand} from './fss/discoveryResume.ts';
 import {qualificationResolveIdentityCommand} from './fss/qualificationResolveIdentity.ts';
+import {qualificationRequeuePreparedCommand} from './fss/qualificationRequeuePrepared.ts';
 import {qualificationConfigureCommand} from './fss/qualificationConfigure.ts';
 import {targetingConfigureCommand} from './fss/targetingConfigure.ts';
 import {researchSetCeilingsCommand} from './fss/researchSetCeilings.ts';
@@ -217,6 +218,7 @@ const ADMIN_COMMANDS: Readonly<Record<string, AdminRunner>> = Object.freeze({
   'research set-ceilings': researchSetCeilingsCommand,
   'research status': researchStatusCommand,
   'qualification resolve-identity': qualificationResolveIdentityCommand,
+  'qualification requeue-prepared': qualificationRequeuePreparedCommand,
   'import-match report': importMatchReportCommand,
   // Lane M1: what the attendance correction will change, as counts.
   'meetings attendance-report': meetingsAttendanceReportCommand,
@@ -271,7 +273,7 @@ async function adminInvocation(
     options: parsed.options,
     switches: parsed.switches,
   };
-  if (name === 'holds release-restore' || name === 'discovery configure' || name === 'apollo configure' || name === 'discovery resume' || name === 'qualification configure' || name === 'qualification resolve-identity' || name === 'targeting configure' || name === 'research set-ceilings' || name.startsWith('release drain ')) {
+  if (name === 'holds release-restore' || name === 'discovery configure' || name === 'apollo configure' || name === 'discovery resume' || name === 'qualification configure' || name === 'qualification resolve-identity' || name === 'qualification requeue-prepared' || name === 'targeting configure' || name === 'research set-ceilings' || name.startsWith('release drain ')) {
     const identity = await launchIdentity(environment);
     if ('refusal' in identity) return identity;
     return { ...base, launch: identity.launch };

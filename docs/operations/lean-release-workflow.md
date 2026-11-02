@@ -74,7 +74,7 @@ release_run_task --step admin-<name> --environment "$ENVIRONMENT" --prefix "$PRE
      [--daily-firms <n>] [--approval-ref "<who approved, when>"] --report /tmp/fss-admin.json
 ```
 
-Any increase of a research ceiling needs `--approval-ref`; the `research.ceilings_set` audit records before/after, approval, owner, launcher and task ARN. Record the task ARN and JSON answer, and reconcile a task whose outcome is unknown before any retry.
+Any increase of a research ceiling needs `--approval-ref`; the `research.ceilings_set` audit records before/after, approval, owner, launcher and task ARN. The same launch runs `admin qualification requeue-prepared --workspace-id <ws> --approval-ref "<who approved, when>" [--limit <1-1000>] [--dry-run]` ([Vertex qualification](vertex-qualification.md#business-judgment-re-qualification)); its `sourcing.qualification_requeued` audit records counts, approval, launcher and task ARN. Record the task ARN and JSON answer, and reconcile a task whose outcome is unknown before any retry.
 
 ## Failure and recovery
 

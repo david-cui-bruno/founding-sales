@@ -1,9 +1,10 @@
 import {createHash} from 'node:crypto';
 import {expect,it} from 'vitest';
-import {preparedProspectBriefSchema,type CandidateInput,type PreparedProspectBrief,type SourceObservation} from '@fss/contracts';
+import {preparedProspectBriefSchema,type CandidateInput,type PreparedProspectBrief,type QualificationFact,type SourceObservation} from '@fss/contracts';
 import {projectPreparedProspect} from '../../sourcing/preparedProspectProjection.ts';
 import type {ManualProspectRow} from '../../sourcing/manualProspectProjection.ts';
 import type {ManualPhoneSnapshot} from '../../sourcing/manualProspectPhone.ts';
+import {QUALIFICATION_MODEL_NAME} from '../../sourcing/qualificationModel.ts';
 const id='10000000-0000-4000-8000-000000000001',other='10000000-0000-4000-8000-000000000002',run='10000000-0000-4000-8000-000000000003';
 it('binds a derived research gap to the earlier lifetime of an undisplayed contrary source',()=>{
  const now=Date.parse('2026-10-30T20:00:00Z'),website='https://cedar.example.test/',aux=website+'scope';
@@ -24,13 +25,14 @@ const callableNow=Date.parse('2026-10-31T20:00:00Z'),peakWebsite='https://peak.e
 const peakBusiness='Peak Property Management manages rental properties for landlords and investors throughout the Richmond area.';
 const peakPhone='Questions about your rental? Call us at (804) 555-0142.';
 const peakPerson='Jordan Reyes, Owner';
-function callableBrief(texts:string[],firmName='Peak Property Management',peakSite=peakWebsite){
+/** `judgment`: the run's model and its stored selections; absent, a run without the business judgment. */
+function callableBrief(texts:string[],firmName='Peak Property Management',peakSite=peakWebsite,judgment?:{model:string;facts:(page:SourceObservation)=>QualificationFact[]},expirations:Map<string,number>=new Map()){
  const candidate:CandidateInput={firmName,website:peakSite,locality:'Richmond',region:'VA',signal:'fit_only',evidence:'Retained discovery context',sourceUrl:peakSite,observedOn:'2026-10-31',preparedBy:'Fictional retained acceptance'};
  const blocks=texts.map((text,index)=>({id:`b${index}`,text}));
  const page:SourceObservation={id,url:peakSite,blocks,contentHash:'a'.repeat(64),relevantTextHash:createHash('sha256').update(JSON.stringify(blocks)).digest('hex'),retrievedAt:new Date(callableNow-1000).toISOString(),publishedAt:null,publishedAtBlockId:null,firstParty:true,truncated:false};
  const row:ManualProspectRow={id,revision:1,payload:candidate,origins:[],created_at:new Date(callableNow-2000),manual_state:'new',duplicate_count:0};
- const snapshot:ManualPhoneSnapshot={id:run,candidate_id:id,candidate_revision:1,payload:candidate,origins:[],observations:[page],facts:[],permitted_urls:[peakSite]};
- return preparedProspectBriefSchema.parse(projectPreparedProspect(row,snapshot,{id:run,candidate_revision:1},callableNow));
+ const snapshot:ManualPhoneSnapshot={id:run,candidate_id:id,candidate_revision:1,payload:candidate,origins:[],observations:[page],facts:judgment?.facts(page)??[],permitted_urls:[peakSite],...judgment?{model_name:judgment.model}:{}};
+ return preparedProspectBriefSchema.parse(projectPreparedProspect(row,snapshot,{id:run,candidate_revision:1},callableNow,expirations));
 }
 const callableOf=(brief:PreparedProspectBrief)=>brief.policyVersion==='prepared-prospect-v2'?brief.callable:null;
 it('marks an own-site prepared company with business context and a published US phone callable, without contact authority',()=>{
@@ -75,4 +77,39 @@ it('takes the callable person only from a person passage included in the brief',
  expect(callableOf(brief)).toMatchObject({state:'callable',person:peakPerson});
  expect(brief.passages.filter(p=>p.kind==='person').map(p=>p.quote)).toContain(peakPerson);
  expect(brief.policyVersion==='prepared-prospect-v2'&&brief.companyHost).toBe('peak.example.test');
+});
+
+// Business judgment (David, 1 November 2026): a Gemini run's residential_management selections are the business context;
+// every other run keeps the passage rules until it is re-qualified.
+const selects=(text:string)=>(page:SourceObservation):QualificationFact[]=>page.blocks.filter(b=>b.text===text).map(b=>({kind:'residential_management',value:b.text,observationId:page.id,blockId:b.id}));
+const judged=(facts:(page:SourceObservation)=>QualificationFact[])=>({model:QUALIFICATION_MODEL_NAME,facts});
+it('keeps the rules-based callable for a run without the business judgment (no regression before re-qualification)',()=>{
+ for(const judgment of [undefined,{model:'claude-haiku-4-5',facts:()=>[]}])
+  expect(callableOf(callableBrief([peakBusiness,peakPhone,peakPerson],undefined,undefined,judgment))).toEqual({state:'callable',missing:[],phone:'(804) 555-0142',person:peakPerson,residential:true});
+});
+it('takes business context and residential fit from the judgment run\'s selection, and none without one',()=>{
+ const heading='Full Property Management';
+ const selected=callableBrief([heading,peakPhone],undefined,undefined,judged(selects(heading)));
+ expect(callableOf(selected)).toMatchObject({state:'callable',missing:[],residential:true});
+ expect(selected.passages.filter(p=>p.kind==='business').map(p=>p.quote)).toEqual([heading]);
+ // The rules would call this business context; the judgment run selected nothing, so it is not.
+ expect(callableOf(callableBrief([peakBusiness,peakPhone],undefined,undefined,judged(()=>[]))))
+  .toMatchObject({state:'not_callable',missing:expect.arrayContaining(['no_business_context']),residential:false});
+ expect(callableOf(callableBrief([peakBusiness,peakPhone],undefined,undefined,judged(page=>[{kind:'firm_identity',value:peakBusiness,observationId:page.id,blockId:'b0'},{kind:'service_area',value:peakBusiness,observationId:page.id,blockId:'b0'}])))?.missing).toContain('no_business_context');
+});
+it('drops a selection that does not resolve to an admitted page block with its text: foreign page, unknown block, other text or expired page',()=>{
+ for(const facts of [()=>[{kind:'residential_management' as const,value:peakBusiness,observationId:other,blockId:'b0'}],(page:SourceObservation)=>[{kind:'residential_management' as const,value:peakBusiness,observationId:page.id,blockId:'missing'}],(page:SourceObservation)=>[{kind:'residential_management' as const,value:peakPhone,observationId:page.id,blockId:'b0'}]])
+  expect(callableOf(callableBrief([peakBusiness,peakPhone],undefined,undefined,judged(facts)))?.missing).toContain('no_business_context');
+ expect(callableOf(callableBrief([peakBusiness,peakPhone],undefined,undefined,judged(selects(peakBusiness)),new Map([[peakWebsite,callableNow-1]]))))
+  .toMatchObject({state:'not_callable',missing:expect.arrayContaining(['no_business_context'])});
+ // One bad selection drops itself; the valid one still counts.
+ expect(callableOf(callableBrief([peakBusiness,peakPhone],undefined,undefined,judged(page=>[{kind:'residential_management',value:peakBusiness,observationId:other,blockId:'b0'},...selects(peakBusiness)(page)]))))
+  .toMatchObject({state:'callable'});
+});
+it('keeps contrary and attributed wording blocking a selected block',()=>{
+ const contrary='Peak Property Management does not manage residential homes or apartments in Richmond.';
+ expect(callableOf(callableBrief([contrary,peakPhone],undefined,undefined,judged(selects(contrary)))))
+  .toMatchObject({state:'not_callable',missing:expect.arrayContaining(['contrary_context'])});
+ const testimonial='Testimonial: Peak Property Management manages our rental homes.';
+ expect(callableOf(callableBrief([testimonial,peakPhone],undefined,undefined,judged(selects(testimonial))))?.missing).toContain('no_business_context');
 });

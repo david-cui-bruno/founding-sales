@@ -17,6 +17,10 @@ import {rememberExpiredManualSources} from '../../sourcing/manualProspectSourceL
 import {withPreparedSourceDeadlines} from '../../sourcing/preparedSourceDeadlines.ts';
 import type {ManualPhoneSnapshot} from '../../sourcing/manualProspectPhone.ts';
 import type {ManualProspectRow} from '../../sourcing/manualProspectProjection.ts';
+import {residentialFacts,selectingExtraction} from './support/modelSelections.ts';
+import {qualificationExtraction} from '../../../../apps/worker/src/sourcing/qualificationExtraction.ts';
+import {qualificationCitationRoles} from '../../sourcing/qualificationCitationRoles.ts';
+import type {QualificationExtractionProvider} from '../../sourcing/qualificationPrompt.ts';
 
 let db:TestDatabase,seed:TwoWorkspaces,runtime:SessionQueryable;
 const ctx=(session=runtime,worker=false)=>repositoryContext(workspaceScope(seed.alpha.workspaceId,worker?{kind:'system',component:'worker'}:{kind:'user',role:'admin',userId:seed.alpha.admin.userId}),session);
@@ -31,7 +35,7 @@ beforeEach(async()=>{
 afterAll(async()=>db?.drop());
 
 /** A real redirected own-site capture whose final page carries the supplied blocks. */
-async function captured(page:string,options:{moved?:boolean}={}){
+async function captured(page:string,options:{moved?:boolean;extraction?:QualificationExtractionProvider}={}){
  const domain=`phone-${randomUUID()}.example.test`,website=`https://${domain}/`,sourceUrl=website+'old-landing',middle=`https://www.${domain}/new-entry`;
  // A moved company site: the old host's landing redirects to another company host (ADR0034).
  const final=options.moved?`https://${domain.replace('phone-','moved-')}/contact`:`https://www.${domain}/contact`;
@@ -47,8 +51,8 @@ async function captured(page:string,options:{moved?:boolean}={}){
   return {statusCode:404,headers:{},body:null,abortedOverCap:false};
  }});
  const target={candidateId:saved.value.id,candidateRevision:1,runId:requested.value.runId};
- await runQualification(ctx(runtime,true),target,{pageFetch:provider,extraction:{providerKey:'google_vertex.sourcing_qualification',countInputTokens:async()=>100,extract:async()=>({ok:false,failureCode:'invalid_evidence',costCents:1})}});
- return {target,candidateId:saved.value.id,final};
+ await runQualification(ctx(runtime,true),target,{pageFetch:provider,extraction:options.extraction??selectingExtraction()});
+ return {target,candidateId:saved.value.id,final,candidate:{firmName:'Capture Property Management',website,locality:'Columbus',region:'OH' as const}};
 }
 const list=(candidateId:string,includeManualPhone=true)=>tx(()=>listManualProspects(ctx(),{state:'all',offset:0,candidateId,expectedRevision:1,...(includeManualPhone?{includeManualPhone:true}:{})}));
 const only=async(candidateId:string,includeManualPhone=true):Promise<ManualProspect>=>{const answer=await list(candidateId,includeManualPhone);if(!answer.ok)throw Error(answer.reason);const found=answer.value.prospects.find(p=>p.candidateId===candidateId);if(!found)throw Error('missing prospect');return found;};
@@ -138,7 +142,7 @@ it('offers and keeps the phone of an incomplete own-source page the brief cites 
  const requested=await tx(()=>requestQualification(ctx(runtime,true),{candidateId:saved.value.id,expectedRevision:1},{enqueue:false}));if(!requested.ok)throw Error(requested.reason);
  const blocks=[{id:'b1',text:'(614) 725-3059 info@rlpmg.test'},{id:'b2',text:'Our property management company manages residential homes for owners and coordinates tenant maintenance requests.'},{id:'b83',text:'(614) 725-3059'}];
  const page={id:randomUUID(),url:website,contentHash:'a'.repeat(64),relevantTextHash:createHash('sha256').update(JSON.stringify(blocks)).digest('hex'),retrievedAt:new Date(Date.now()-60_000).toISOString(),publishedAt:null,publishedAtBlockId:null,firstParty:true,truncated:true,blocks};
- await runtime.query("UPDATE sourcing_qualification_runs SET state='review',observations=$3::jsonb WHERE workspace_id=$1 AND id=$2",[seed.alpha.workspaceId,requested.value.runId,JSON.stringify([page])]);
+ await runtime.query("UPDATE sourcing_qualification_runs SET state='review',observations=$3::jsonb,facts=$4::jsonb WHERE workspace_id=$1 AND id=$2",[seed.alpha.workspaceId,requested.value.runId,JSON.stringify([page]),JSON.stringify(residentialFacts([page]))]);
  const id=saved.value.id;
  expect(await tx(()=>readPreparedProspect(ctx(),{candidateId:id,candidateRevision:1,runId:requested.value.runId}))).toMatchObject({ok:true,value:{callable:{state:'callable',phone:'(614) 725-3059'},coverage:'partial_retained_pages'}});
  const prospect=await only(id);
@@ -149,8 +153,20 @@ it('offers and keeps the phone of an incomplete own-source page the brief cites 
  expect((await only(id)).manualPhone).toMatchObject({value:'+16147253059',choice,sourceUrl:website});
 });
 
+/** The production Vertex adapter over a scripted model that selects every kind on the page, plus `extra` selections. */
+const movedSiteModel=(extra:readonly object[]=[])=>qualificationExtraction({countTokens:async()=>200,generate:async request=>{
+ const offered=JSON.parse(request.contents[0].parts[0].text) as {observations:{id:string;blocks:{id:string;text:string}[]}[]};
+ const select=(kind:string,pattern:RegExp)=>{for(const source of offered.observations){const block=source.blocks.find(b=>pattern.test(b.text));if(block)return {kind,observationId:source.id,blockId:block.id};}throw Error('Controlled block missing');};
+ const selections=[select('residential_management',/manages residential homes/u),select('firm_identity',/property management company/u),select('service_area',/residential homes/u),...extra];
+ return {candidates:[{content:{parts:[{text:JSON.stringify({selections,openingQuestion:null})}]},finishReason:'STOP'}],usageMetadata:{promptTokenCount:200,candidatesTokenCount:80,totalTokenCount:280}};
+}});
 it('keeps and prepares the phone of a company whose site moved to another host, through the traced move only',async()=>{
- const f=await captured('<p>Office phone: (614) 725-3059</p>',{moved:true});
+ const f=await captured('<p>Office phone: (614) 725-3059</p>',{moved:true,extraction:movedSiteModel()});
+ // The production adapter keeps only the moved page's residential_management selection, as prepared business
+ // context; it is never a native/publication citation.
+ const stored=(await runtime.query<{state:string;facts:{kind:string}[];observations:never[]}>('SELECT state,facts,observations FROM sourcing_qualification_runs WHERE id=$1',[f.target.runId])).rows[0]!;
+ expect(stored.state).not.toBe('unavailable');expect(stored.facts.map(fact=>fact.kind)).toEqual(['residential_management']);
+ expect(qualificationCitationRoles(f.candidate,stored.facts as never,stored.observations)).toEqual({ok:true,facts:[]});
  expect(await tx(()=>readPreparedProspect(ctx(),f.target))).toMatchObject({ok:true,value:{callable:{state:'callable',phone:'(614) 725-3059'}}});
  const prospect=await only(f.candidateId);
  expect(prospect.phoneEvidence).toMatchObject({state:'observed',value:'+16147253059',sources:[{url:f.final,authority:{kind:'prepared_capture',sourceUrl:f.final}}]});
@@ -160,4 +176,18 @@ it('keeps and prepares the phone of a company whose site moved to another host, 
  expect(await tx(()=>readCallingPreparation(ctx(),{candidateId:f.candidateId,expectedCandidateRevision:1,choice},async()=>true))).toMatchObject({state:'available',phone:{value:'+16147253059'},contactAuthority:'not_granted'});
  // Without the capture association the moved host is not the company's website: the default read stays exact.
  expect((await only(f.candidateId,false)).phoneEvidence).toMatchObject({state:'not_extracted',reason:'original_not_usable'});
+});
+const runRow=async(runId:string)=>(await runtime.query<{state:string;reason:string|null;facts:{kind:string}[]}>('SELECT state,reason,facts FROM sourcing_qualification_runs WHERE id=$1',[runId])).rows[0]!;
+it('keeps a rejected answer\'s resolved residential_management selection on the unavailable run as prepared business context only',async()=>{
+ // One selection names a page the model was never offered: the whole answer is refused for every citation reader.
+ const f=await captured('<p>Office phone: (614) 725-3059</p>',{extraction:movedSiteModel([{kind:'firm_identity',observationId:randomUUID(),blockId:'b1'}])});
+ expect(await runRow(f.target.runId)).toEqual({state:'unavailable',reason:'invalid_evidence',facts:[expect.objectContaining({kind:'residential_management'})]});
+ expect(await tx(()=>readPreparedProspect(ctx(),f.target))).toMatchObject({ok:true,value:{callable:{state:'callable',residential:true,phone:'(614) 725-3059'}}});
+});
+it('keeps a run made before the business judgment on the passage rules, and judges a Gemini run only by its selections',async()=>{
+ const f=await captured('<p>Office phone: (614) 725-3059</p>',{extraction:{providerKey:'google_vertex.sourcing_qualification',countInputTokens:async()=>100,extract:async()=>({ok:false,failureCode:'invalid_evidence',costCents:1})}});
+ expect(await runRow(f.target.runId)).toMatchObject({state:'unavailable',facts:[]});
+ expect(await tx(()=>readPreparedProspect(ctx(),f.target))).toMatchObject({ok:true,value:{callable:{state:'not_callable',missing:expect.arrayContaining(['no_business_context'])}}});
+ await runtime.query("UPDATE sourcing_qualification_runs SET model_name='claude-haiku-4-5' WHERE id=$1",[f.target.runId]);
+ expect(await tx(()=>readPreparedProspect(ctx(),f.target))).toMatchObject({ok:true,value:{callable:{state:'callable',missing:[],residential:true}}});
 });
