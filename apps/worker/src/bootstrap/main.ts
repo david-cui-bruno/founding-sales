@@ -37,6 +37,7 @@ import type {ApolloDiscoveryDependencies,ApolloBinding} from '@fss/domain/sourci
 import {tavilySearch} from '../sourcing/tavilySearch.ts';
 import type {DiscoverySearchProvider} from '@fss/domain/sourcing/discoveryProvider.ts';
 import {sourcingMonitorHandler,sourcingMonitorSource} from '../handlers/sourcingMonitor.ts';
+import {sourcingCallableRankHandler,sourcingCallableRankSource} from '../handlers/sourcingCallableRank.ts';
 import {sourcingCheckHandler} from '../handlers/sourcingCheck.ts';
 import { meetingAutoRecordingJobHandler,meetingAutoRecordingSource } from '../handlers/meetingAutoRecording.ts';
 import { readZoomMeetingsConfiguration } from '../zoom/meetingsClient.ts';
@@ -299,6 +300,7 @@ export function registerHandlers(
     registry.register(prospectPhoneDiscoveryHandler({pageFetch:composition.research.pageFetch,...log?{log}:{}}));
     registry.register(sourcingCheckHandler(composition.research.pageFetch));
     registry.register(sourcingMonitorHandler());
+    registry.register(sourcingCallableRankHandler());
   }
   for (const handler of researchHandlers(composition.research)) registry.register(handler);
   return registry;
@@ -568,6 +570,7 @@ export function workerDueWorkSources(
     socialAssetsSource(),
     researchSweepSource(),
     sourcingMonitorSource(options.sourcing === true && options.qualification!==true),
+    sourcingCallableRankSource(options.sourcing === true),
     sourcingQualificationSource(options.qualification===true),
     prospectPhoneDiscoverySource(),
     sourcingDiscoverySource(options.discovery === true),

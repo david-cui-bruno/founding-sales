@@ -42,6 +42,7 @@ The default `workerDueWorkSources()` registry contains exactly the following nam
 | `social-assets-cleanup` | Cleanup of eligible social assets. |
 | `research-sweep` | Daily research scheduling and abandoned-run recovery. |
 | `sourcing-monitor` | Eligible sourcing-monitor work when that composition is enabled. |
+| `sourcing-callable-rank` | One `sourcing.callable_rank` per workspace per minute while a candidate with retained first-party research has no current advisory rank row (ADR0034). Database reads only: it projects up to fifty candidates per batch and upserts a rank and company host, never source text, and starts no fetch, model call or contact. |
 | `sourcing-qualification` | Due candidate qualification under configured composition. |
 | `sourcing-discovery` | Due configured discovery searches. |
 | `apollo-discovery` | Apollo Free company-only pages with matching operator-bound account/key references and a verified exclusive Free-cycle allowance. One atomic spent reservation per page, no retry or paid fallback. Disabled without key/attestation, intake remains unverified and first-party qualification still requires current owner approval. |

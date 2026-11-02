@@ -82,6 +82,7 @@ describe('job kind classes', () => {
       'social.linkedin_recurring',
       'social.assets_cleanup',
       'sourcing.monitor',
+      'sourcing.callable_rank',
       'sourcing.discover',
       'research.firm',
       'research.sweep',

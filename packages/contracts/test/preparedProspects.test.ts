@@ -36,9 +36,9 @@ it('requires callable and companyHost on summaries and current briefs while V1 b
  expect(preparedProspectBriefSchema.safeParse({...summary,...detail,policyVersion:'prepared-prospect-v1'}).success).toBe(false);
 });
 
-it('defaults list order to priority and accepts only the closed newest order with the same continuation rule',()=>{
+it('defaults list order to priority and accepts only the closed callable order with the same continuation rule',()=>{
  expect(preparedProspectListInputSchema.parse({offset:0})).toEqual({offset:0,order:'priority'});
- expect(preparedProspectListInputSchema.parse({offset:50,viewRevision:'a'.repeat(64),order:'newest'})).toEqual({offset:50,viewRevision:'a'.repeat(64),order:'newest'});
- expect(preparedProspectListInputSchema.safeParse({offset:50,order:'newest'}).success).toBe(false);
- expect(preparedProspectListInputSchema.safeParse({offset:0,order:'callable'}).success).toBe(false);
+ expect(preparedProspectListInputSchema.parse({offset:50,viewRevision:'a'.repeat(64),order:'callable'})).toEqual({offset:50,viewRevision:'a'.repeat(64),order:'callable'});
+ expect(preparedProspectListInputSchema.safeParse({offset:50,order:'callable'}).success).toBe(false);
+ expect(preparedProspectListInputSchema.safeParse({offset:0,order:'newest'}).success).toBe(false);
 });
