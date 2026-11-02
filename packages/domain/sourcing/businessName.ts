@@ -73,7 +73,26 @@ function footerBrand(blocks:readonly string[],place:ReadonlySet<string>,host:str
  }
  return null;
 }
+// The name shown is the business without its trailing legal form ("Tlj Rentals, Llc" is "Tlj Rentals"). The legal form was already used above as acceptance evidence, so it is only dropped here.
+const TRAILING_LEGAL=/[\s,]+(?:L\.L\.C|LLC|Incorporated|Inc|Corporation|Corp|Co|Ltd|PLLC|LP|LLP)[.,]*$/iu;
+function withoutLegalForm(name:string):string{
+ let kept=name;
+ for(let next=kept.replace(TRAILING_LEGAL,'');next!==kept&&next.length>0;next=kept.replace(TRAILING_LEGAL,''))kept=next;
+ return kept.replace(/[\s,;:|–—•·-]+$/u,'')||name;
+}
+// A short first word the host also begins with, "Tlj Rentals" on tljrentals.com, is an initialism: "TLJ Rentals". A real word that merely prefixes the host ("Rose" on roseresidentials.com, "Acme" on acmerealty.com) stays. Evidence: the word has no vowel, or the rest of the host is the initials of three or more following words ("Iroc Asset Management Company", irocamc.com).
+const NOT_ACRONYM=new Set(['the','new','old','red','rose','blue','oak','sun','bay','big','top','all','one','two','pro','rio','mid','inc','co','mr','mrs','ms','dr','st']);
+const registrableLabel=(host:string):string=>{const labels=host.toLowerCase().replace(/:\d+$/u,'').split('.').filter(Boolean);return(labels.length>=3&&labels.at(-1)!.length===2&&/^(?:co|com|org|net)$/u.test(labels.at(-2)!)?labels.at(-3):labels.at(-2)??labels[0]??'')!.replace(/[^a-z0-9]/gu,'');};
+function withHostAcronym(name:string,host:string):string{
+ const first=/^[A-Za-z]+/u.exec(name)?.[0],label=registrableLabel(host);
+ if(first===undefined||!/^(?:[A-Z][a-z]*|[a-z]+|[A-Z]+)$/u.test(first)||!(first.length>=2&&first.length<=4)||NOT_ACRONYM.has(first.toLowerCase())||name.slice(first.length).search(/^[\s,]|^$/u)!==0)return name;
+ const low=first.toLowerCase(),rest=label.slice(low.length);
+ if(!label.startsWith(low)||rest.length===0)return name;
+ const following=words(name.slice(first.length)),initials=following.map(word=>word[0]).join('');
+ return/[aeiouy]/u.test(low)&&!(following.length>=3&&rest===initials)?name:`${first.toUpperCase()}${name.slice(first.length)}`;
+}
 export function resolveBusinessName(input:BusinessNameInput):string|null{
  const place=new Set([...catalogue,...placeWords(input.locality),...placeWords(input.query??'')]);
- return brandOf(input.name,place,input.source,input.host)??footerBrand(input.blocks??[],place,input.host);
+ const found=brandOf(input.name,place,input.source,input.host)??footerBrand(input.blocks??[],place,input.host);
+ return found===null?null:withHostAcronym(withoutLegalForm(found),input.host);
 }
