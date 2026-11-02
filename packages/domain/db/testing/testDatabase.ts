@@ -82,6 +82,19 @@ async function onCluster(adminUrl: string, statement: string): Promise<void> {
   }
 }
 
+/**
+ * The session time zone every test database runs in. CI's service container is UTC; a
+ * local cluster inherits the machine's zone, and several CHECK constraints compare
+ * `timestamptz` arithmetic against calendar intervals (`to_at-from_at=interval '90 days'`
+ * in `crm_mail_imports`), which only holds when no DST shift falls inside the window.
+ * Pinning it per database keeps a developer's laptop from failing for the calendar.
+ */
+export const TEST_DATABASE_TIME_ZONE = 'UTC';
+
+async function pinTimeZone(adminUrl: string, database: string): Promise<void> {
+  await onCluster(adminUrl, `ALTER DATABASE "${database}" SET timezone TO '${TEST_DATABASE_TIME_ZONE}'`);
+}
+
 export interface TemplateDatabase {
   readonly name: string;
   drop(): Promise<void>;
@@ -99,6 +112,7 @@ export async function createTemplateDatabase(adminUrl: string): Promise<Template
   };
   await onCluster(adminUrl, `CREATE DATABASE "${name}"`);
   try {
+    await pinTimeZone(adminUrl, name);
     const owner = new pg.Client({ connectionString: databaseUrl(adminUrl, name) }) as unknown as RawClient;
     await owner.connect();
     try {
@@ -140,6 +154,8 @@ export async function createTestDatabase(options: CreateTestDatabaseOptions = {}
       ? `CREATE DATABASE "${name}" TEMPLATE "${fromGlobalSetup(TEMPLATE_DATABASE_ENVIRONMENT_VARIABLE)}"`
       : `CREATE DATABASE "${name}"`,
   );
+  // Per-database settings are not copied from the template, so pin every database.
+  await pinTimeZone(adminUrl, name);
 
   const url = databaseUrl(adminUrl, name);
   const owner = new pg.Client({ connectionString: url }) as unknown as RawClient;
