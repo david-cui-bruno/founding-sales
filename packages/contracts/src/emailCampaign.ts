@@ -2,13 +2,14 @@ import { z } from 'zod';
 import { commandIdSchema } from './auth.ts';
 import { semanticVersionSchema } from './clientVersion.ts';
 import { instant, uuid } from './foundationRows.ts';
+import { US_BUSINESS_REGIONS, usBusinessRegionSchema } from './usBusinessGeography.ts';
 
 /** Campaign approval is distinct from published content and never enables sending. */
 export const emailCampaignPolicySchema = z.strictObject({
   mailboxId: uuid,
   sequenceVersionId: uuid,
   authorizationRevision: z.number().int().positive(),
-  regions: z.array(z.enum(['TX', 'RI', 'MA'])).min(1).max(3).refine(values => new Set(values).size === values.length),
+  regions: z.array(usBusinessRegionSchema).min(1).max(US_BUSINESS_REGIONS.length).refine(values => new Set(values).size === values.length),
   maxEnrollments: z.number().int().min(1).max(25),
   dailyAdmissionLimit: z.number().int().min(1).max(5),
   expiresAt: instant,

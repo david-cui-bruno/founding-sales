@@ -4,7 +4,7 @@ import type { MeetingFollowThroughViewV2, MeetingOutcomesView } from '@fss/contr
 import { withTransaction } from '../../db/queryable.ts';
 import { templateContentHash } from '../../src/rules/templates.ts';
 import { updateSetting } from '../../settings/store.ts';
-import { meetingFollowThroughFixture, RECAP_AT } from './support/meetingFollowThroughFixture.ts';
+import { composedRecap, meetingFollowThroughFixture, RECAP_AT } from './support/meetingFollowThroughFixture.ts';
 import { prepareMeetingRecap, editMeetingRecap, readMeetingFollowThrough, readMeetingPlan, currentMeetingDraft } from '../../meetings/followThrough.ts';
 import { hasUnresolvedMeetingFields, REVIEWED_RECAP_BODY, REVIEWED_RECAP_SUBJECT, RECAP_FIELDS_UNRESOLVED } from '../../meetings/recapFields.ts';
 import { buildMeetingRecapContent } from '../../meetings/recapDrafts.ts';
@@ -14,6 +14,8 @@ import { verifyMeetingPlanApproval } from '../../meetings/followThroughApproval.
 import { enrollMeetingFollowThrough, verifyMeetingFollowThrough } from '../../meetings/followThroughEligibility.ts';
 
 /** All people, notes and database records in this fixture are synthetic. */
+/** The sign-off of the wrapper template these cases configure. */
+const TALK_SOON = 'Talk soon,\nDavid';
 describe('reviewed recap partials remain editable but never send-authoritative', () => {
   let f: Awaited<ReturnType<typeof meetingFollowThroughFixture>>;
   beforeEach(async () => { f = await meetingFollowThroughFixture(); });
@@ -55,13 +57,13 @@ describe('reviewed recap partials remain editable but never send-authoritative',
   it('persists exact reviewed copy with all original unknowns and ignores CRM and analyzed notes', async () => {
     const { source, view } = await prepare();
     expect(view).toMatchObject({ status: 'needs_review', approvalRequired: true, sendingPaused: true,
-      currentDraft: { state: 'held', version: 1, subject: REVIEWED_RECAP_SUBJECT, body: REVIEWED_RECAP_BODY } });
+      currentDraft: { state: 'held', version: 1, subject: REVIEWED_RECAP_SUBJECT, body: composedRecap(REVIEWED_RECAP_BODY, TALK_SOON) } });
     expect(view.blockers).toContain(RECAP_FIELDS_UNRESOLVED);
     expect(view.currentDraft!.body).not.toContain('After-hours calls interrupt the manager.');
     expect(view.currentDraft!.body).not.toContain('Pat Example');
     expect(view.currentDraft!.body.split(/\s+/u).length).toBeLessThan(200);
     const repeat = await withTransaction(f.db.session, () => prepareMeetingRecap(f.context, { ...source, at: RECAP_AT }));
-    expect(repeat).toMatchObject({ ok: true, value: { currentDraft: { state: 'held', version: 1, body: REVIEWED_RECAP_BODY } } });
+    expect(repeat).toMatchObject({ ok: true, value: { currentDraft: { state: 'held', version: 1, body: composedRecap(REVIEWED_RECAP_BODY, TALK_SOON) } } });
     expect((await readMeetingFollowThrough(f.context, source))!.currentDraft).toEqual(view.currentDraft);
     expect((await f.db.session.query('SELECT id FROM sequence_enrollments')).rows).toHaveLength(0);
   });
@@ -127,7 +129,7 @@ describe('reviewed recap partials remain editable but never send-authoritative',
     const body = REVIEWED_RECAP_BODY.replace('{Name}', 'Pat Example').replace('{their main headache, in their words}', '“The phone never stops!”')
       .replace('{day}', 'Wednesday').replace('{time}', '2pm Central');
     const resolved = await save(editing, 'Callie + Example firm', body);
-    expect(resolved.currentDraft).toMatchObject({ state: 'ready', body });
+    expect(resolved.currentDraft).toMatchObject({ state: 'ready', body: composedRecap(body, TALK_SOON) });
     expect(resolved.blockers).not.toContain(RECAP_FIELDS_UNRESOLVED);
     expect(resolved.blockers).toContain('reply_received');
     expect(resolved.approvalRequired).toBe(true);
@@ -143,7 +145,7 @@ describe('reviewed recap partials remain editable but never send-authoritative',
       .replace('{day}', 'Wednesday').replace('{time}', '2pm Central');
     const resolved = await save(await edit(view, 'begin_edit'), 'Callie + Example firm', body);
     const repeated = await withTransaction(f.db.session, () => prepareMeetingRecap(f.context, { ...source, at: RECAP_AT }));
-    expect(repeated).toMatchObject({ ok: true, value: { currentDraft: { version: resolved.currentDraft!.version, body, state: 'ready' }, approvalRequired: true } });
+    expect(repeated).toMatchObject({ ok: true, value: { currentDraft: { version: resolved.currentDraft!.version, body: composedRecap(body, TALK_SOON), state: 'ready' }, approvalRequired: true } });
     if (repeated.ok) expect(repeated.value.blockers).not.toContain(RECAP_FIELDS_UNRESOLVED);
   });
 

@@ -115,10 +115,10 @@ export interface OutboundSendDeps extends SendGateDeps {
    * Whether a workspace with no `postal_address` may send (lane W3-F).
    *
    * Absent everywhere in production: the answer is `SEND_FOOTER_POLICY` in
-   * `packages/domain/src/rules/templates.ts`, and **flipping that constant is the whole
-   * of the change** the owner would make to refuse every send until the address is
-   * configured. It is a dependency here only so both positions can be driven in a test
-   * without editing the constant.
+   * `packages/domain/src/rules/templateFooter.ts`, which requires the address since the
+   * outbound campaign (November 2026), so a workspace with none holds every send. It is a
+   * dependency here only so both positions can be driven in a test without editing the
+   * constant.
    */
   readonly footerPolicy?: SendFooterPolicy | undefined;
 }

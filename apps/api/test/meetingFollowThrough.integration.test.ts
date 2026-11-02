@@ -2,7 +2,9 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { meetingFollowThroughViewV2Schema } from '@fss/contracts';
 import { meetingDispatchFixture } from '@fss/domain/test/meetings/support/meetingDispatchFixture.ts';
+import { TEMPLATE_SIGN_OFF, WORLD_POSTAL_ADDRESS } from '@fss/domain/test/outbound/support/outboundWorld.ts';
 import { withTransaction } from '@fss/domain/db/queryable.ts';
+import { sendFooterBlock } from '@fss/domain/src/rules/templates.ts';
 import { runMeetingFollowThrough } from '@fss/domain/meetings/followThroughJobs.ts';
 import { dispatchOutboundMessage } from '@fss/domain/outbound/send.ts';
 import { saveMeetingNotes } from '@fss/domain/meetings/notes.ts';
@@ -82,12 +84,14 @@ describe('meeting follow-through through API, scheduler and dispatch', () => {
     const body = 'Updated controlled recap.\n\nSigned off';
     const saved = await save('/meetings/recap/edit', { planId: begun.view.planId, expectedPlanVersion: begun.view.version,
       expectedDraftVersion: begun.view.currentDraft!.version, action: 'save', subject: 'Meeting follow-up', body, commandId: randomUUID() });
-    expect(saved.view.currentDraft!.body).toBe(body);
+    // A ready draft carries the footer a send composes: the words, the sign-off, the company line and the stop sentence.
+    const composed = `Updated controlled recap.\n\n${sendFooterBlock({ signOff: TEMPLATE_SIGN_OFF, postalAddress: WORLD_POSTAL_ADDRESS })}`;
+    expect(saved.view.currentDraft!.body).toBe(composed);
     await withTransaction(f.db, () => runMeetingFollowThrough(f.context, { meetingId: f.meetingId, at: f.at }));
     const gmail = f.world.clientWith(f.world.alpha, {});
     await dispatchOutboundMessage(f.context, f.world.sendDeps(f.world.alpha, { gmail, now: () => new Date(f.at) }), { outboundMessageId: fence.id });
     expect(gmail.sends).toHaveLength(0);
-    expect(await read()).toMatchObject({ sendingPaused: true, currentDraft: { body } });
+    expect(await read()).toMatchObject({ sendingPaused: true, currentDraft: { body: composed } });
   });
 
   it('refuses stale notes, accepts an explicit current binding and prevents replay resurrection after deletion', async () => {

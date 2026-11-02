@@ -21,6 +21,14 @@ export async function seedEmailCampaign(app: ThinHostApp, overrides: Partial<Ema
     "INSERT INTO mailboxes(workspace_id,owner_user_id,email_address,provider_account_id,status) VALUES($1,$2,$3,$4,'connected') RETURNING id",
     [f.alpha.workspaceId, f.alpha.admin.userId, `campaign-${randomUUID()}@example.test`, `local-campaign-${randomUUID()}`],
   )).rows[0]!.id;
+  // A send requires a configured postal address (`SEND_FOOTER_POLICY`); a workspace with
+  // none would hold every first email for a reason no campaign scenario is about.
+  await f.db.query(
+    `INSERT INTO workspace_settings (workspace_id, setting_key, version, value, change_note, changed_by_user_id)
+     VALUES ($1, 'postal_address', 1, $2::jsonb, 'synthetic fixture address', $3)
+     ON CONFLICT (workspace_id, setting_key, version) DO NOTHING`,
+    [f.alpha.workspaceId, JSON.stringify({ address: '1 Example Way, Providence, RI 02903' }), f.alpha.admin.userId],
+  );
   const authorization = await tx(() => setProspectingAuthorization(context, { mailboxId, expectedRevision: 0, enabled: true, basis: 'owner_reported_google_permission' }));
   assert(authorization.ok, authorization.ok ? '' : authorization.reason);
   const templateIds: string[] = [];

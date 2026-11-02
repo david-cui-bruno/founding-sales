@@ -1,4 +1,5 @@
 import { expect, it, vi } from 'vitest';
+import { SENDING_STOP_LINE } from '@fss/contracts';
 import { campaignOpeningPgFixture, openingPgHandoff } from './campaignOpeningPgFixture.ts';
 import { allowAllEligibility } from '../../sequences/eligibility.ts';
 import { selectCampaignOpeningBeforeTransaction, readCampaignOpeningAttempt, verifyCampaignOpeningFence, eraseCampaignOpening } from '../../outreach/campaignOpeningStore.ts';
@@ -60,19 +61,22 @@ it.each(['dispatching', 'reconciling'] as const)('risk R1 historical witness can
   } finally { await f.stop(); }
 }, 60_000);
 
+/** The footer's last two lines: the company line's address, then the stop sentence. */
+const footerTail = (address: string): string => `${address}\n${SENDING_STOP_LINE}`;
+
 it('risk R2 current postal owner rebinds only footer bytes before the existing atomic claim', async () => {
   const f = await campaignOpeningPgFixture();
   try {
     expect((await f.tx(() => updateSetting(f.admin, { settingKey: 'postal_address', value: { address: '100 Fictional First Street' } }))).ok).toBe(true);
     const before = await prepared(f), attempt = await readCampaignOpeningAttempt(f.worker, f.executionId);
-    expect(before.body.endsWith('100 Fictional First Street')).toBe(true);
+    expect(before.body.endsWith(footerTail('100 Fictional First Street'))).toBe(true);
     expect((await f.tx(() => updateSetting(f.admin, { settingKey: 'postal_address', value: { address: '200 Fictional Second Street' } }))).ok).toBe(true);
     await f.tx(async () => {
       await lockSendGateForDispatch(f.worker);
       await f.db.query('SELECT 1 FROM outbound_messages WHERE workspace_id=$1 AND id=$2 FOR UPDATE', [f.w, before.id]);
       const result = await reconcileFenceFooter(f.worker, before);
       expect(result.reconciled).toBe(true); if (!result.reconciled) throw new Error(result.detail);
-      const expected = before.body.slice(0, -'100 Fictional First Street'.length) + '200 Fictional Second Street';
+      const expected = before.body.slice(0, -footerTail('100 Fictional First Street').length) + footerTail('200 Fictional Second Street');
       expect(result.fence.body).toBe(expected); expect(result.fence.subject).toBe(before.subject);
       expect(await verifyCampaignOpeningFence(f.worker, result.fence)).toBe(true);
       expect(await readCampaignOpeningAttempt(f.worker, f.executionId)).toMatchObject({ attempt_id: attempt?.attempt_id, fence_id: before.id,

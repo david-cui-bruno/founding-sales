@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { withTransaction } from '../../db/queryable.ts';
-import { meetingFollowThroughFixture, RECAP_AT } from './support/meetingFollowThroughFixture.ts';
+import { composedRecap, meetingFollowThroughFixture, RECAP_AT } from './support/meetingFollowThroughFixture.ts';
 import { meetingNoteItemSchema } from '@fss/contracts';
 
 describe('recap drafts preserve the review window and exact content', () => {
@@ -31,11 +31,11 @@ describe('recap drafts preserve the review window and exact content', () => {
     const editing = begin.value;
     const changed = { planId: first.planId!, expectedPlanVersion: editing.version, expectedDraftVersion: 1, action: 'save' as const, subject: 'Our next steps', body: 'Thanks for the conversation.\n\nSam Example\nCallie' };
     const saved = await withTransaction(f.db.session, () => editMeetingRecap(f.context, changed, '2026-10-05T16:00:00.000Z'));
-    expect(saved).toMatchObject({ ok: true, value: { currentDraft: { version: 2, subject: changed.subject, body: changed.body, notBefore: '2026-10-05T16:30:00.000Z' } } });
+    expect(saved).toMatchObject({ ok: true, value: { currentDraft: { version: 2, subject: changed.subject, body: composedRecap(changed.body), notBefore: '2026-10-05T16:30:00.000Z' } } });
     expect(await withTransaction(f.db.session, () => editMeetingRecap(f.context, changed, RECAP_AT))).toEqual({ ok: false, reason: 'draft_changed' });
     const rows = (await f.db.session.query('SELECT version,subject FROM meeting_follow_through_drafts ORDER BY version')).rows;
     expect(rows).toEqual([{ version: 1, subject: 'Our conversation' }, { version: 2, subject: 'Our next steps' }]);
-    expect(await withTransaction(f.db.session, () => prepareMeetingRecap(f.context, { ...p, at: '2026-10-05T16:05:00.000Z' }))).toMatchObject({ ok: true, value: { currentDraft: { version: 2, subject: changed.subject, body: changed.body } } });
+    expect(await withTransaction(f.db.session, () => prepareMeetingRecap(f.context, { ...p, at: '2026-10-05T16:05:00.000Z' }))).toMatchObject({ ok: true, value: { currentDraft: { version: 2, subject: changed.subject, body: composedRecap(changed.body) } } });
   });
   it('cancels the plan without adding a contact stop', async () => {
     const { prepareMeetingRecap, editMeetingRecap } = await import('../../meetings/followThrough.ts');

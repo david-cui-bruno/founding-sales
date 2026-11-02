@@ -79,18 +79,39 @@ export function authoredText(raw: string): string {
 }
 
 /**
+ * A one-sentence answer to the footer's own invitation — "If this isn't relevant, just
+ * reply and I won't email again." — which is a request not to be emailed again: "stop",
+ * "please stop", "not relevant", "this is not relevant to us", "no thanks", "not
+ * interested", each optionally with a leading "no,"/"sorry," and a trailing "thanks".
+ * Whole-sentence only, like the opt-out wording below: "not interested right now, maybe
+ * next quarter", "stop by our office" and "this is relevant to us" are not matches.
+ */
+const STOP_REPLY_PATTERN = new RegExp(
+  String.raw`^(?:(?:no|sorry|hi|hello)[ ,]+)?(?:` +
+    String.raw`(?:please\s+)?stop(?:\s+(?:please|now))?` +
+    String.raw`|(?:(?:this|that|it)(?:\s+is|'s)\s+)?not\s+relevant(?:\s+(?:to|for)\s+(?:us|me|our\s+(?:business|company|team)))?` +
+    String.raw`|no\s+thanks?|no\s+thank\s+you` +
+    String.raw`|(?:(?:we|i)(?:\s+are|\s+am|'re|'m)\s+)?not\s+interested` +
+    String.raw`)(?:\s*,?\s*(?:thanks|thank\s+you))?\s*$`,
+  'i',
+);
+
+/**
  * An explicit, unambiguous instruction to stop. The sentence must be the whole
  * request: "please unsubscribe me" is an opt-out, "someone told me to unsubscribe
  * from their newsletter" is not, and ambiguous wording stays held for confirmation.
+ * The one-sentence answers to the footer's stop sentence (`STOP_REPLY_PATTERN`) count.
  */
 export function hasExplicitOptOut(authored: string): boolean {
-  const sentences = authored.replace(/\s+/g, ' ').split(/[.!]/);
+  const sentences = authored.replace(/’/g, "'").replace(/\s+/g, ' ').split(/[.!]/);
   return sentences.some(sentence => {
     const trimmed = sentence.trim();
     return (
       /^(?:please\s+)?(?:unsubscribe(?: me)?|stop (?:emailing|contacting|messaging) me|remove me(?: from (?:your|the) (?:list|mailing list))?|(?:do not|don't) contact me)\s*$/i.test(
         trimmed,
-      ) || /,\s*but\s+(?:please\s+)?stop (?:emailing|contacting|messaging) me\s*$/i.test(trimmed)
+      ) ||
+      /,\s*but\s+(?:please\s+)?stop (?:emailing|contacting|messaging) me\s*$/i.test(trimmed) ||
+      STOP_REPLY_PATTERN.test(trimmed)
     );
   });
 }

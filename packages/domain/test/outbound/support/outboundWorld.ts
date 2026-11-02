@@ -6,6 +6,7 @@ import type { OutboundSendDeps } from '../../../outbound/send.ts';
 import { createMailWorld, type MailWorld, type MailWorldMailbox } from '../../mail/support/mailWorld.ts';
 import { makeStepExecution } from '../../../db/testing/stepExecutions.ts';
 import { ciGateReleaseReference } from '@fss/contracts';
+import { sendFooterBlock } from '../../../src/rules/templates.ts';
 import { FIXTURE_CI_COMMIT, FIXTURE_WORKER_DIGEST, storeFixtureCiGateRecord } from '../../release/support/releaseRecords.ts';
 
 /**
@@ -43,8 +44,21 @@ export const SENDING_DOMAIN = 'example.test';
 const WORLD_GATE_RUN_ID = '41000000900';
 export const RELEASE_GATE_REFERENCE = ciGateReleaseReference(WORLD_GATE_RUN_ID, FIXTURE_CI_COMMIT);
 export const TEMPLATE_SUBJECT = 'A short note about your properties';
-/** Today's shape: the words, a blank line and the sign-off. No mandatory last line. */
-export const TEMPLATE_BODY = 'Hello.\n\nI work with property managers nearby.\n\nSigned off';
+/** The workspace sign-off every world template carries. */
+export const TEMPLATE_SIGN_OFF = 'Signed off';
+/** The words of the world's template, before any footer. */
+export const TEMPLATE_WORDS = 'Hello.\n\nI work with property managers nearby.';
+/**
+ * The `postal_address` both worlds' workspaces have configured: a send now requires one
+ * (`SEND_FOOTER_POLICY`), and a world with none would hold every send for a reason none
+ * of its scenarios is about. Invented; `example.test`-era fiction.
+ */
+export const WORLD_POSTAL_ADDRESS = '1 Example Way, Providence, RI 02903';
+/** What a send composes for the world's template: the words and the full footer block. */
+export const TEMPLATE_BODY = `${TEMPLATE_WORDS}\n\n${sendFooterBlock({
+  signOff: TEMPLATE_SIGN_OFF,
+  postalAddress: WORLD_POSTAL_ADDRESS,
+})}`;
 
 export interface OutboundWorldMailbox extends MailWorldMailbox {
   readonly templateVersionId: string;
@@ -174,6 +188,13 @@ export async function createOutboundWorld(): Promise<OutboundWorld> {
         JSON.stringify({ enabled: true, releaseGateReference: RELEASE_GATE_REFERENCE }),
         mailbox.workspace.admin.userId,
       ],
+    );
+
+    await context.db.query(
+      `INSERT INTO workspace_settings (workspace_id, setting_key, version, value, change_note, changed_by_user_id)
+       VALUES ($1, 'postal_address', 1, $2::jsonb, 'fixture: a send requires a postal address', $3)
+       ON CONFLICT (workspace_id, setting_key, version) DO NOTHING`,
+      [workspaceId, JSON.stringify({ address: WORLD_POSTAL_ADDRESS }), mailbox.workspace.admin.userId],
     );
 
     const templateId = '22222222-3333-4444-8555-666666666666';

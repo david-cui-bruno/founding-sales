@@ -9,15 +9,15 @@ vi.mock('../../outreach/settings.ts',()=>({campaignKind:mocks.kind}));
 const id='00000000-0000-4000-8000-000000000001',now='2026-10-22T17:00:00.000Z';
 const policy:EmailCampaignRow={id,owner_user_id:id,mailbox_id:id,sequence_version_id:id,authorization_revision:3,regions:['TX'],max_enrollments:25,daily_admission_limit:5,approved_at:new Date(now),expires_at:new Date('2026-10-23T17:00:00Z'),revision:1,revoked_at:null};
 const ctx=repositoryContext(workspaceScope(id,{kind:'user',userId:id,role:'admin'}),{query:mocks.query});
-let current:EmailCampaignRow,clock:string,emailRetrievedAt:string;
+let current:EmailCampaignRow,clock:string,emailRetrievedAt:string,place:{locality:string;region:string};
 function evidence(){
  const nativeId='00000000-0000-4000-8000-000000000002',emailId='00000000-0000-4000-8000-000000000003';
- const nativeText='Example PM Dallas TX',emailText='Example PM Dallas TX office email: info@example.test';
+ const nativeText=`Example PM ${place.locality} ${place.region}`,emailText=`Example PM ${place.locality} ${place.region} office email: info@example.test`;
  const source=(sourceId:string,text:string,retrievedAt:string)=>({id:sourceId,url:'https://example.test/contact',contentHash:'a'.repeat(64),relevantTextHash:'b'.repeat(64),retrievedAt,publishedAt:null,publishedAtBlockId:null,firstParty:true,truncated:false,blocks:[{id:'contact',text}]});
- return {campaign_candidate_payload:{firmName:'Example PM',website:'https://example.test',locality:'Dallas',region:'TX'},facts:[{kind:'firm_identity',value:nativeText,observationId:nativeId,blockId:'contact'},{kind:'business_email',value:emailText,observationId:emailId,blockId:'contact'}],observations:[source(nativeId,nativeText,now),source(emailId,emailText,emailRetrievedAt)]};
+ return {campaign_candidate_payload:{firmName:'Example PM',website:'https://example.test',locality:place.locality,region:place.region},facts:[{kind:'firm_identity',value:nativeText,observationId:nativeId,blockId:'contact'},{kind:'business_email',value:emailText,observationId:emailId,blockId:'contact'}],observations:[source(nativeId,nativeText,now),source(emailId,emailText,emailRetrievedAt)]};
 }
 beforeEach(()=>{
- vi.clearAllMocks();current={...policy};clock=now;emailRetrievedAt=now;
+ vi.clearAllMocks();current={...policy};clock=now;emailRetrievedAt=now;place={locality:'Dallas',region:'TX'};
  mocks.actor.mockResolvedValue(true);mocks.authorization.mockResolvedValue({allowed:true,revision:3});mocks.kind.mockResolvedValue('email_first');
  mocks.proof.mockResolvedValue({selection:{candidateId:id,runId:id,candidateRevision:2},validUntil:'2026-10-23T17:00:00Z',emailFit:'eligible',region:'TX',locality:'Dallas'});
  mocks.lineage.mockResolvedValue({promotionId:id,discoveryCandidateId:id,candidate:{revision:2},firm:{id,region_code:'TX',locality:'Dallas'}});
@@ -70,4 +70,18 @@ it('independently rechecks exact email freshness after the last authority wait e
  expect(await campaignCandidateProvenance(ctx,{campaignId:id,candidateId:id,qualificationRunId:id})).toBeNull();
  expect(mocks.query.mock.calls.at(-1)?.[0]).toBe('SELECT clock_timestamp() AS now');
  expect(Date.parse(clock)).toBeLessThan(Date.parse('2026-10-23T17:00:00Z'));
+});
+it('compares a nationwide campaign against the candidate region, and a TX-only campaign still works',async()=>{
+ const input={campaignId:id,candidateId:id,qualificationRunId:id};
+ // Only the TX/RI/MA CHECK made this campaign impossible to approve before migration 0157.
+ current={...policy,regions:['TX','WA']};place={locality:'Seattle',region:'WA'};
+ mocks.proof.mockResolvedValue({...await mocks.proof(),region:'WA',locality:'Seattle'});
+ mocks.lineage.mockResolvedValue({promotionId:id,discoveryCandidateId:id,candidate:{revision:2},firm:{id,region_code:'WA',locality:'Seattle'}});
+ expect(await campaignCandidateProvenance(ctx,input)).toMatchObject({firmId:id,route:{address:'info@example.test'}});
+ current={...policy,regions:['TX']};
+ expect(await campaignCandidateProvenance(ctx,input)).toBeNull();
+ place={locality:'Dallas',region:'TX'};
+ mocks.proof.mockResolvedValue({...await mocks.proof(),region:'TX',locality:'Dallas'});
+ mocks.lineage.mockResolvedValue({promotionId:id,discoveryCandidateId:id,candidate:{revision:2},firm:{id,region_code:'TX',locality:'Dallas'}});
+ expect(await campaignCandidateProvenance(ctx,input)).toMatchObject({firmId:id});
 });

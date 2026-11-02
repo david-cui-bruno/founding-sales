@@ -6,7 +6,7 @@ import { HandlerRegistry } from '@fss/domain/jobs/handlerRegistry.ts';
 import { changeStage } from '@fss/domain/crm/pipeline.ts';
 import { recordSuppression } from '@fss/domain/suppression/events.ts';
 import { recordingSuppressionJournal } from '@fss/domain/suppression/journal.ts';
-import { SENDING_STOP_LINE, templateContentHash } from '@fss/domain/src/rules/templates.ts';
+import { LEGACY_SENDING_STOP_LINE, templateContentHash } from '@fss/domain/src/rules/templates.ts';
 import { runClaimedJob, runOnce } from '../src/runner/jobRunner.ts';
 import { runSchedulerPass } from '../src/scheduler/schedulerPass.ts';
 import { workerDueWorkSources } from '../src/bootstrap/main.ts';
@@ -181,9 +181,12 @@ describe('the worker drains what the lanes left', () => {
       [workspaceId, firmId, stageId],
     );
 
+    // A send requires a configured postal address (`SEND_FOOTER_POLICY`); the footer carries it.
+    await database.session.query("INSERT INTO workspace_settings (workspace_id, setting_key, version, value, change_note, changed_by_user_id) VALUES ($1, 'postal_address', 1, $2::jsonb, 'synthetic fixture address', $3)", [workspaceId, JSON.stringify({ address: '1 Example Way, Providence, RI 02903' }), adminUserId]);
+
     const templateId = await one('SELECT gen_random_uuid() AS id');
     const subject = 'A question about {firm_name}';
-    const body = `Hello,\n\nA note.\n\nSam Example\n${SENDING_STOP_LINE}`;
+    const body = `Hello,\n\nA note.\n\nSam Example\n${LEGACY_SENDING_STOP_LINE}`;
     const templateVersionId = await one(
       `INSERT INTO template_versions
          (workspace_id, template_id, version, name, subject, body, content_hash,

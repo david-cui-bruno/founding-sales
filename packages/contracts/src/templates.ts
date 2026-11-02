@@ -1,20 +1,31 @@
 /**
- * The sentence Callie's automated e-mail used to end with, kept only so the code can
- * recognise it (David's decision of 29 September 2026: "remove the mandatory 'Reply
- * "stop"' footer and remove the blanket database ban on the word 'unsubscribe.'").
+ * The stop sentence every sent body ends with (David's approved outbound email campaign,
+ * November 2026): the last line of the composed footer block, after the sign-off
+ * and the `Callie, AI maintenance coordination · <postal address>` line.
  *
- * **Nothing appends it any more.** It is legacy bytes: every template approved before
- * that decision, and every fence prepared before it, ends with the sign-off and then
- * this line, and `composeSendBody` recognises that block so it can be *replaced* by the
- * footer the workspace composes now (the sign-off, and its postal address when it has
- * one). A body that carries the line somewhere the records cannot account for is still
- * held rather than edited.
+ * It is a plain-language invitation to reply, never a link: the opt-out *link* stays
+ * forbidden (`hasOptOutLink`, below), and a reply that says "not relevant", "stop" and
+ * the like suppresses (`packages/domain/src/rules/replyClassification.ts`). Plain ASCII
+ * apostrophes, because these are bytes a CHECK, a hash and a recipient's client all see.
  *
- * It stays in `@fss/contracts` because both the domain's composition rule and the Mac's
- * template panel have to recognise the same bytes, and a copy in the renderer would be a
+ * It stays in `@fss/contracts` because both the domain's composition rule and the web
+ * template panel have to recognise the same bytes, and a copy in a client would be a
  * second spelling of a sentence that has to have one. `@fss/domain` re-exports it.
  */
-export const SENDING_STOP_LINE = 'Reply "stop" and I will not email you again.';
+export const SENDING_STOP_LINE = "If this isn't relevant, just reply and I won't email again.";
+
+/**
+ * The sentence Callie's automated e-mail used to end with, kept only so the code can
+ * recognise it (it was removed from sends on 29 September 2026: David's decision to
+ * "remove the mandatory 'Reply "stop"' footer").
+ *
+ * **Nothing appends it.** It is legacy bytes: every template approved before that
+ * decision, and every fence prepared before it, ends with the sign-off and then this
+ * line, and `composeSendBody` recognises that block so it is *replaced* by the footer
+ * the workspace composes now instead of being doubled. A body that carries the line
+ * somewhere the records cannot account for is held rather than edited.
+ */
+export const LEGACY_SENDING_STOP_LINE = 'Reply "stop" and I will not email you again.';
 
 /**
  * The one rule left about opting out: **no visible opt-out link** (specification 12.6,
@@ -133,6 +144,7 @@ export const TEMPLATE_VARIABLE_NAMES = [
   'contact_full_name',
   'contact_title',
   'meeting_recap',
+  'booking_link',
 ] as const;
 export type TemplateVariableName = (typeof TEMPLATE_VARIABLE_NAMES)[number];
 

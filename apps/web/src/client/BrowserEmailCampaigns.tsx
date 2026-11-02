@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type JSX } from 'react';
-import { emailCampaignPolicySchema, type EmailCampaignControl } from '@fss/contracts';
+import { emailCampaignPolicySchema, US_BUSINESS_REGIONS, US_BUSINESS_STATE_NAMES, type EmailCampaignControl, type USBusinessRegion } from '@fss/contracts';
 import { type BrowserClient } from './BrowserClient.ts';
 import { EmailCampaignClient } from './EmailCampaignClient.ts';
 import { type CampaignAction } from './CampaignPending.ts';
@@ -16,7 +16,7 @@ export function BrowserEmailCampaigns({ client }: { client: BrowserClient }): JS
   const operation = useRef(0);
   const [mailboxId, setMailboxId] = useState('');
   const [sequenceVersionId, setSequenceVersionId] = useState('');
-  const [regions, setRegions] = useState<('TX' | 'RI' | 'MA')[]>([]);
+  const [regions, setRegions] = useState<USBusinessRegion[]>([]);
   const [daily, setDaily] = useState('1'), [lifetime, setLifetime] = useState('25');
   const [expiry, setExpiry] = useState('');
   const [openingCampaignId, setOpeningCampaignId] = useState('');
@@ -90,7 +90,9 @@ export function BrowserEmailCampaigns({ client }: { client: BrowserClient }): JS
       <details className="email-campaign-policy"><summary>Campaign policy and one-time approval</summary><p>Approve a bounded campaign, not each recipient. Existing sending controls remain authoritative.</p>
       <label>Approved sender<select aria-label="Approved sender" disabled={busy || pending !== null} value={mailboxId} onChange={event => { setMailboxId(event.target.value); }}><option value="">Select sender</option>{control.senders.map(sender => <option key={sender.id} value={sender.id}>{sender.label} · authorization revision {sender.authorizationRevision}</option>)}</select></label>
       <label>Approved email sequence<select aria-label="Approved email sequence" disabled={busy || pending !== null} value={sequenceVersionId} onChange={event => { setSequenceVersionId(event.target.value); }}><option value="">Select sequence</option>{control.sequences.map(sequence => <option key={sequence.id} value={sequence.id}>{sequence.label}</option>)}</select></label>
-      <fieldset disabled={busy || pending !== null}><legend>Campaign regions</legend>{(['TX', 'RI', 'MA'] as const).map(region => <label key={region}><input type="checkbox" checked={regions.includes(region)} onChange={event => { setRegions(previous => event.target.checked ? [...previous, region] : previous.filter(value => value !== region)); }} />{region}</label>)}</fieldset>
+      <fieldset disabled={busy || pending !== null}><legend>Campaign regions</legend>
+        <button type="button" onClick={() => { setRegions(regions.length === US_BUSINESS_REGIONS.length ? [] : [...US_BUSINESS_REGIONS]); }}>{regions.length === US_BUSINESS_REGIONS.length ? 'Clear all regions' : 'Select all regions'}</button>
+        <div className="email-campaign-regions">{US_BUSINESS_REGIONS.map(region => <label key={region} title={US_BUSINESS_STATE_NAMES[region]}><input type="checkbox" checked={regions.includes(region)} onChange={event => { setRegions(previous => event.target.checked ? [...previous, region] : previous.filter(value => value !== region)); }} />{region}</label>)}</div></fieldset>
       <label>Daily admission limit<input aria-label="Daily admission limit" type="number" min="1" max="5" value={daily} disabled={busy || pending !== null} onChange={event => { setDaily(event.target.value); }} /></label>
       <label>Lifetime enrollment cap<input aria-label="Lifetime enrollment cap" type="number" min="1" max="25" value={lifetime} disabled={busy || pending !== null} onChange={event => { setLifetime(event.target.value); }} /></label>
       <label>Campaign expiry<input aria-label="Campaign expiry" type="datetime-local" value={expiry} disabled={busy || pending !== null} onChange={event => { setExpiry(event.target.value); }} /></label>

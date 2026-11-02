@@ -1,4 +1,4 @@
-import { SENDING_STOP_LINE, hasOptOutLink } from '@fss/contracts';
+import { LEGACY_SENDING_STOP_LINE, SENDING_STOP_LINE, hasOptOutLink } from '@fss/contracts';
 
 /** Browser-safe footer composition shared by server validation and desktop readiness. */
 
@@ -16,11 +16,6 @@ export const SENT_BODY_MAX_LENGTH = 4000;
 export interface FooterConfiguration {
   /** The workspace's approved sign-off block. Configuration; never a literal in this repository. */
   readonly signOff: string;
-  /**
-   * The legacy last line, recognised at the end of a body so it can be removed. Never
-   * appended. Overridable only to test the rule; production uses SENDING_STOP_LINE.
-   */
-  readonly stopLine?: string | undefined;
 }
 
 /**
@@ -44,27 +39,37 @@ export interface SendFooterConfiguration extends FooterConfiguration {
   readonly recordedAddresses?: readonly string[] | undefined;
 }
 
-/** The block a send appends: the sign-off, and the address when there is one. Nothing else. */
+/** Named between the sign-off and the stop sentence, then ` · <postal address>` when there is one. */
+const FOOTER_COMPANY_NAME = 'Callie, AI maintenance coordination';
+
+/**
+ * The block a send appends, in three parts joined by newlines: the sign-off, the company
+ * line (`Callie, AI maintenance coordination · <postal address>`, or the name alone
+ * when no address is configured — only possible under `APPROVAL_FOOTER_POLICY`), and the
+ * stop sentence. Nothing else.
+ */
 export function sendFooterBlock(configuration: SendFooterConfiguration): string {
   const address = configuration.postalAddress?.trim() ?? '';
-  return [configuration.signOff.trim(),address].filter(part=>part.length>0).join('\n');
+  const company = address.length === 0 ? FOOTER_COMPANY_NAME : `${FOOTER_COMPANY_NAME} \u00B7 ${address}`;
+  return [configuration.signOff.trim(), company, SENDING_STOP_LINE]
+    .filter(part => part.length > 0)
+    .join('\n');
 }
 
 /**
- * The one switch the owner flips to make the address compulsory.
- *
- * David's decision of 27 September 2026 (plan rev 3, "Sending across 0020"): an absent
- * address is **not** a refusal — the footer is then the sign-off alone, and sending
- * continues, because a schema release must not stop sending.
- * The stricter alternative the reviewer asked for — refuse every send until the address
- * is configured — is this one boolean, and both positions are tested
- * (`packages/domain/test/domain/rules.test.ts`, `test/outbound/footerAtSend.test.ts`).
+ * The one switch that makes the address compulsory — on for a send since David's approved
+ * outbound campaign (November 2026): the footer carries the workspace's postal address,
+ * so a send with no address configured is a handled hold (`postal_address_required`),
+ * never an exception and never a footer without it. An *approval* composes under
+ * `APPROVAL_FOOTER_POLICY`, which never demands one: whether a template may be approved
+ * does not turn on whether the settings page has been filled in. Both positions are
+ * tested (`packages/domain/test/domain/rules.test.ts`, `test/outbound/footerAtSend.test.ts`).
  */
 export interface SendFooterPolicy {
   readonly postalAddressRequired: boolean;
 }
 
-export const SEND_FOOTER_POLICY: SendFooterPolicy = Object.freeze({ postalAddressRequired: false });
+export const SEND_FOOTER_POLICY: SendFooterPolicy = Object.freeze({ postalAddressRequired: true });
 
 /** A policy that never demands an address: what an *approval* composes under, whatever the switch says. */
 export const APPROVAL_FOOTER_POLICY: SendFooterPolicy = Object.freeze({ postalAddressRequired: false });
@@ -73,11 +78,11 @@ export const COMPOSE_SEND_BODY_REFUSALS = [
   /** The switch is on and the workspace has configured no address. */
   'postal_address_required',
   /**
-   * The body is signed — it carries the legacy stop line, or the sign-off starting a
-   * line — and does not *end* with a block this workspace's own records can account for:
-   * an address that was never configured here, a sign-off that has since been edited, a
-   * postscript under the footer. Nothing is removed and nothing is appended — the body is
-   * held for a person to look at.
+   * The body is signed — it carries a stop line (today's or the legacy one), or the
+   * sign-off starting a line — and does not *end* with a block this workspace's own
+   * records can account for: an address that was never configured here, a sign-off that
+   * has since been edited, a postscript under the footer. Nothing is removed and nothing
+   * is appended — the body is held for a person to look at.
    */
   'footer_ambiguous',
   /** The composed body is longer than the fence's column allows. */
@@ -106,6 +111,14 @@ export type ComposeSendBodyDecision =
   | { readonly composed: false; readonly reason: ComposeSendBodyRefusal; readonly detail?: string | undefined };
 
 /**
+ * Whether `text` carries either stop sentence: today's, or the one sends carried before
+ * 29 September 2026. The footer's sign-off and body-above-the-footer must carry neither.
+ */
+export function hasStopLine(text: string): boolean {
+  return text.includes(SENDING_STOP_LINE) || text.includes(LEGACY_SENDING_STOP_LINE);
+}
+
+/**
  * Every footer block this workspace's records can account for, longest first.
  *
  * Each candidate is a string rebuilt from something stored: the sign-off on the template
@@ -114,23 +127,25 @@ export type ComposeSendBodyDecision =
  * inferred from the shape of the body — that is the whole difference between replacing a
  * footer and deleting a sentence somebody wrote.
  *
- * Each block comes in two shapes: today's, which ends with the sign-off or the address,
- * and the pre-0024 one, which ends with the stop line. Both are recognised so that a
- * template approved or a fence prepared before 29 September 2026 has its footer
- * *replaced* — the stop line goes at the next send — instead of a second sign-off
- * appended underneath the first.
+ * Each block comes in three shapes, so that a template approved or a fence prepared under
+ * an earlier footer has it *replaced* at the next send instead of a second sign-off
+ * appended underneath the first: today's (sign-off, company line, `SENDING_STOP_LINE`);
+ * the one before the company line existed, which ends with the sign-off or the address;
+ * and the pre-0024 one, which ends with `LEGACY_SENDING_STOP_LINE` (29 September 2026).
  */
 function candidateFooterBlocks(configuration: SendFooterConfiguration): readonly string[] {
-  const stopLine = configuration.stopLine ?? SENDING_STOP_LINE;
   const signOff = configuration.signOff.trim();
   const addresses = [configuration.postalAddress ?? '', ...(configuration.recordedAddresses ?? [])]
     .map(address => address.trim())
     .filter(address => address.length > 0);
-  const heads = signOff.length===0 ? addresses : [signOff, ...addresses.map(address => `${signOff}\n${address}`)];
+  const heads = signOff.length === 0 ? addresses : [signOff, ...addresses.map(address => `${signOff}\n${address}`)];
   const blocks = new Set<string>();
   for (const head of heads) {
     blocks.add(head);
-    blocks.add(`${head}\n${stopLine}`);
+    blocks.add(`${head}\n${LEGACY_SENDING_STOP_LINE}`);
+  }
+  for (const address of ['', ...addresses]) {
+    blocks.add(sendFooterBlock({ signOff, postalAddress: address }));
   }
   // Longest first: when an address block and the bare block both end the body, the
   // address block is the one that was actually written there.
@@ -190,16 +205,15 @@ function signOffStandsAlone(body: string, rawSignOff: string): boolean {
  * is what makes reconciling an already-current fence a no-op.
  *
  * Three things can stop it, and each is a handled hold at the caller rather than a
- * mangled send: the switch with no address; a body carrying the legacy stop line in a
- * place this workspace's records cannot account for (`footer_ambiguous` — nothing is
- * removed, a person looks at it); and a composed body the fence's column would refuse.
+ * mangled send: the switch with no address; a body carrying a stop line in a place this
+ * workspace's records cannot account for (`footer_ambiguous` — nothing is removed, a
+ * person looks at it); and a composed body the fence's column would refuse.
  */
 export function composeSendBody(
   body: string,
   configuration: SendFooterConfiguration,
   policy: SendFooterPolicy = SEND_FOOTER_POLICY,
 ): ComposeSendBodyDecision {
-  const stopLine = configuration.stopLine ?? SENDING_STOP_LINE;
   const address = configuration.postalAddress?.trim() ?? '';
   if (policy.postalAddressRequired && address.length === 0) {
     return { composed: false, reason: 'postal_address_required' };
@@ -207,12 +221,12 @@ export function composeSendBody(
 
   const blockStart = footerBlockStart(body, configuration);
   const stripped = body.replace(/\s+$/u, '');
-  // No recognised block, but the body is signed all the same: the legacy stop line is in
-  // there somewhere, or the sign-off stands as whole lines of its own — an address this
+  // No recognised block, but the body is signed all the same: a stop line is in there
+  // somewhere, or the sign-off stands as whole lines of its own — an address this
   // workspace never recorded under it, a postscript after it, a sign-off since edited.
   // Appending the block would send the sign-off twice and removing anything would mean
   // guessing which words are the footer, so the body is held for a person to look at.
-  if (blockStart === null && (stripped.includes(stopLine) || signOffStandsAlone(stripped, configuration.signOff))) {
+  if (blockStart === null && (hasStopLine(stripped) || signOffStandsAlone(stripped, configuration.signOff))) {
     return { composed: false, reason: 'footer_ambiguous' };
   }
   const head = body.slice(0, blockStart ?? stripped.length);
@@ -220,11 +234,13 @@ export function composeSendBody(
   const composedBody = head.trim().length === 0 ? footer : `${head.replace(/\s+$/u, '')}\n\n${footer}`;
 
   // Its own output, checked before it is returned (the P0 of the review of PR 296, kept
-  // under the new rule). A legacy stop line anywhere in the bytes that would leave — in
-  // the head above a block that was recognised, or inside a sign-off that still carries
-  // the old sentence — is a body nobody may compose: the line is exactly what this
-  // release removes, and which words are the footer is not a thing to guess at.
-  if (composedBody.includes(stopLine)) return { composed: false, reason: 'footer_ambiguous' };
+  // under the new rule). The footer's stop sentence is the last line and the only one:
+  // everything above it — the head left after a recognised block was removed, the
+  // sign-off, the address — must carry neither stop line. A sign-off that still repeats
+  // one would send it twice, and which words are the footer is not a thing to guess at.
+  if (hasStopLine(composedBody.slice(0, composedBody.length - SENDING_STOP_LINE.length))) {
+    return { composed: false, reason: 'footer_ambiguous' };
+  }
   if (sendBodyIssue(composedBody) === 'body_too_long') {
     return { composed: false, reason: 'composed_body_too_long', detail: String(composedBody.length) };
   }

@@ -40,7 +40,7 @@ import { rescheduleExecution } from '@fss/domain/sequences/shifts.ts';
 import { consumeTerminalStops } from '@fss/domain/sequences/terminalStops.ts';
 import { updateSetting } from '@fss/domain/settings/store.ts';
 import { POSTURE_STATEMENT_KEYS } from '@fss/domain/src/rules/statePosture.ts';
-import { SENDING_STOP_LINE } from '@fss/domain/src/rules/templates.ts';
+import { LEGACY_SENDING_STOP_LINE } from '@fss/domain/src/rules/templates.ts';
 import { canonicalizeHandle } from '@fss/domain/src/rules/suppressionCanonicalization.ts';
 import { recordSuppression } from '@fss/domain/suppression/events.ts';
 import { claimFinalization } from '@fss/domain/suppression/finalize.ts';
@@ -1236,7 +1236,7 @@ function legacyFooterWithAddressPart(
         toAddress: 'legacy.postal.address@firm03.example.test',
         body:
           'Hello.\n\nA note written while the postal address was still part of the footer.' +
-          `\n\n${FIXTURE_SIGN_OFF}\n${LEGACY_POSTAL_ADDRESS}\n${SENDING_STOP_LINE}`,
+          `\n\n${FIXTURE_SIGN_OFF}\n${LEGACY_POSTAL_ADDRESS}\n${LEGACY_SENDING_STOP_LINE}`,
         what: 'the pre-0020 footer fence',
       }),
   };

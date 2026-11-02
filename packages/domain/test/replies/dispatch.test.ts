@@ -1,6 +1,7 @@
 import {randomUUID} from 'node:crypto';
 import {afterAll,beforeAll,expect,it} from 'vitest';
-import {createOutboundWorld,type OutboundWorld} from '../outbound/support/outboundWorld.ts';
+import {createOutboundWorld,WORLD_POSTAL_ADDRESS,type OutboundWorld} from '../outbound/support/outboundWorld.ts';
+import {sendFooterBlock} from '../../src/rules/templates.ts';
 import {seedFirm,openExtraSession,pausingAtTokenRefresh} from '../outbound/support/dispatchFixtures.ts';
 import {repositoryContext,workspaceScope} from '../../db/workspaceScope.ts';
 import {withTransaction} from '../../db/queryable.ts';
@@ -124,7 +125,7 @@ it('dispatches reviewed bytes once in the original thread and reports confirmed 
  const report=await dispatchOutboundMessage(f.ctx,world.sendDeps(world.alpha),{outboundMessageId:queued.value.outboundMessageId});
  if(report.outcome!=='sent')throw new Error(JSON.stringify(report));
  expect(report).toMatchObject({outcome:'sent'});
- expect(world.alpha.gmail.sends.slice(before)).toMatchObject([{to:f.firm.address,subject:'Can you help?',body:'Callie helps coordinate maintenance requests.\n\nDavid\n\n',threadId:f.threadId,inReplyTo:`<${f.threadId}@example.test>`,references:[`<${f.threadId}@example.test>`]}]);
+ expect(world.alpha.gmail.sends.slice(before)).toMatchObject([{to:f.firm.address,subject:'Can you help?',body:`Callie helps coordinate maintenance requests.\n\nDavid\n\n${sendFooterBlock({signOff:'',postalAddress:WORLD_POSTAL_ADDRESS})}`,threadId:f.threadId,inReplyTo:`<${f.threadId}@example.test>`,references:[`<${f.threadId}@example.test>`]}]);
  expect(await readHumanReplySend(f.ctx,f.input)).toMatchObject({ok:true,value:{state:'sent',providerMessageId:expect.any(String),sentAt:expect.any(String)}});
  expect(await dispatchOutboundMessage(f.ctx,world.sendDeps(world.alpha),{outboundMessageId:queued.value.outboundMessageId})).toMatchObject({outcome:'already_terminal'});
  expect(world.alpha.gmail.sends).toHaveLength(before+1);

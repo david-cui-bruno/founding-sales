@@ -42,6 +42,7 @@ export * from './meetingFollowThrough.ts';
 export * from './meetingAutoRecording.ts';
 
 export * from './sourcing.ts';
+export * from './usBusinessGeography.ts';
 export * from './discoveryIntake.ts';
 export * from './discoveryReview.ts';
 export * from './discoveryPromotion.ts';

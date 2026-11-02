@@ -174,7 +174,7 @@ export async function reconcileFenceFooter(
   if (!decision.changed) {
     // The unchanged branch is checked too, and this is the P0 of the review of PR 296:
     // a fence prepared on schema 19 under a sign-off that itself ends with the stop
-    // sentence composes to the same two-stop-line body it already stores, and nothing
+    // sentence composes to the same two-stop-sentence body it already stores, and nothing
     // else on this path would have looked at it.
     const issue = sendBodyIssue(fence.body);
     if (issue !== null) return { reconciled: false, reason: 'footer_not_composed', detail: issue };

@@ -15,7 +15,7 @@ import { listStepExecutions, readSequenceVersion } from '../../sequences/rows.ts
 import { recordingSendHandoff } from '../../sequences/sendHandoff.ts';
 import { createTemplateVersion, readTemplateVersion, updateTemplateVersion } from '../../templates/templates.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
-import { fixtureBody, seedSequences } from './support/sequenceFixtures.ts';
+import { composedFixtureBody, seedSequences } from './support/sequenceFixtures.ts';
 import {
   approvedTemplate as makeTemplate,
   callStep,
@@ -268,7 +268,7 @@ describe('(b) and (c): new enrollments run the new version; running ones keep th
     expect((await readSequenceVersion(contextFor('admin'), plan.versionId))?.steps).toEqual(oldSteps);
     const sent = await sendFirstStep(running);
     expect(sent.hash).toBe(originalHash);
-    expect(sent.body).toBe(fixtureBody('The wording they were enrolled under.'));
+    expect(sent.body).toBe(composedFixtureBody('The wording they were enrolled under.'));
     const [first] = await listStepExecutions(worker(), { enrollmentId: running });
     const completed = await completeStepExecution(worker(), {
       stepExecutionId: first?.id ?? '',
@@ -286,7 +286,7 @@ describe('(b) and (c): new enrollments run the new version; running ones keep th
     expect(newSteps[1]?.delay).toEqual({ unit: 'business_days', days: 9 });
     const freshSent = await sendFirstStep(fresh);
     expect(freshSent.hash).toBe(edited.value.contentHash);
-    expect(freshSent.body).toBe(fixtureBody('The wording written afterwards.'));
+    expect(freshSent.body).toBe(composedFixtureBody('The wording written afterwards.'));
     const [freshFirst] = await listStepExecutions(worker(), { enrollmentId: fresh });
     expect(freshFirst?.stepId).toBe(newSteps[0]?.id);
   });

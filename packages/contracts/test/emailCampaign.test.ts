@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { emailCampaignApproveCommandSchema, emailCampaignCommandResultSchema, emailCampaignRevokeCommandSchema } from '../src/emailCampaign.ts';
+import { US_BUSINESS_REGIONS } from '../src/usBusinessGeography.ts';
 
 const id = '11111111-1111-4111-8111-111111111111';
 const input = { mailboxId: id, sequenceVersionId: id, authorizationRevision: 1, regions: ['TX'], maxEnrollments: 5, dailyAdmissionLimit: 1, expiresAt: '2026-10-29T00:00:00.000Z', commandId: id, clientVersion: '1.0.56' };
@@ -8,8 +9,13 @@ describe('approved email campaign boundary', () => {
     expect(emailCampaignApproveCommandSchema.safeParse(input).success).toBe(true);
     expect(emailCampaignApproveCommandSchema.safeParse({ ...input, candidateIds: [id] }).success).toBe(false);
   });
-  it('does not accept expanded geography, duplicate targets, higher limits or sending switches', () => {
-    for (const change of [{ regions: ['CA'] }, { regions: ['TX', 'TX'] }, { maxEnrollments: 26 }, { dailyAdmissionLimit: 6 }, { sendingEnabled: true }, { reviewed: true }, { authorizationRevision: 0 }]) {
+  it('accepts any of the 50 states and DC, once each', () => {
+    for (const regions of [['TX'], ['WA', 'DC'], [...US_BUSINESS_REGIONS]]) {
+      expect(emailCampaignApproveCommandSchema.safeParse({ ...input, regions }).success, regions.join()).toBe(true);
+    }
+  });
+  it('does not accept unknown or lower-case regions, duplicate targets, higher limits or sending switches', () => {
+    for (const change of [{ regions: [] }, { regions: ['PR'] }, { regions: ['tx'] }, { regions: ['TX', 'TX'] }, { regions: [...US_BUSINESS_REGIONS, 'TX'] }, { maxEnrollments: 26 }, { dailyAdmissionLimit: 6 }, { sendingEnabled: true }, { reviewed: true }, { authorizationRevision: 0 }]) {
       expect(emailCampaignApproveCommandSchema.safeParse({ ...input, ...change }).success).toBe(false);
     }
   });
