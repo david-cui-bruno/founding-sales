@@ -59,6 +59,7 @@ export const JOB_KINDS = [
   'social.linkedin_recurring',
   'social.assets_cleanup',
   'sourcing.monitor',
+  'sourcing.callable_rank',
   'sourcing.discover',
   'research.firm',
   'research.sweep',
@@ -163,6 +164,7 @@ export const JOB_KIND_PROTECTION: Readonly<Record<JobKind, IdempotencyProtection
   'social.assets_cleanup': 'business_uniqueness',
   'sourcing.discover': 'outbound_fence',
   'sourcing.monitor': 'business_uniqueness',
+  'sourcing.callable_rank': 'business_uniqueness',
   'research.firm': 'business_uniqueness',
   // One sweep per workspace per business date. The key carries the date and the
   // sweep's own effect is enqueueing, which is itself unique on the run's revision,
@@ -279,6 +281,8 @@ export const jobIdempotencyKey = Object.freeze({
     `${RESEARCH_FIRM_JOB_KEY_PREFIX}${firmId}:${String(revision)}`,
   /** One sweep per workspace business date, like the Today build's key rule. */
   sourcingMonitor: (workspaceId:string,hour:string):string => `sourcing-monitor:${workspaceId}:${hour}`,
+  /** One advisory Callable-today rank refresh per workspace per minute. */
+  sourcingCallableRank: (workspaceId:string,minute:string):string => `sourcing-callable-rank:${workspaceId}:${minute}`,
   researchSweep: (workspaceSlug: string, businessDate: string): string =>
     `research-sweep:${workspaceSlug}:${businessDate}`,
   /** One call-session reservation sweep per workspace per quarter hour, when it owes one. */
@@ -403,6 +407,7 @@ export const JOB_KIND_CLASS: Readonly<Record<JobKind, JobClass>> = Object.freeze
   'social.linkedin_recurring': 'bulk',
   'social.assets_cleanup': 'bulk',
   'sourcing.monitor': 'bulk',
+  'sourcing.callable_rank': 'bulk',
   'sourcing.discover': 'bulk',
   'research.firm': 'bulk',
   'research.sweep': 'bulk',

@@ -5,7 +5,7 @@ import {withTransaction} from '../../db/queryable.ts';
 import {saveCandidate} from '../../sourcing/candidates.ts';
 
 /** Fictional retained pages only. Seeding never calls acquisition or qualification. */
-export async function seedPreparedProspect(ctx:RepositoryContext,index=1,options:{pages?:boolean;sourceAgeMs?:number;truncated?:boolean;firstParty?:boolean;region?:CandidateInput['region'];extraBlocks?:SourceObservation['blocks'];businessText?:string;omitBrand?:boolean;website?:string}={}){
+export async function seedPreparedProspect(ctx:RepositoryContext,index=1,options:{pages?:boolean;sourceAgeMs?:number;truncated?:boolean;firstParty?:boolean;region?:CandidateInput['region'];extraBlocks?:SourceObservation['blocks'];businessText?:string;omitBrand?:boolean;website?:string;onlyBlocks?:SourceObservation['blocks']}={}){
  const website=options.website??`https://cedar-${index}-${randomUUID()}.example.test/`,name=`Cedar ${index} Property Management`,label=`Home | Cedar ${index} PM`;
  const input:CandidateInput={firmName:label,website,locality:'Boston',region:options.region??'MA',signal:'fit_only',
   evidence:'Retained discovery label; phone and business need unknown.',sourceUrl:website,
@@ -13,7 +13,7 @@ export async function seedPreparedProspect(ctx:RepositoryContext,index=1,options
  const saved=await withTransaction(ctx.db,()=>saveCandidate(ctx,input));if(!saved.ok)throw Error(saved.reason);
  const candidateId=saved.value.id;
  if(options.pages===false)return {candidateId,runId:null,candidateRevision:1,website,name,label,input,observations:[] as SourceObservation[]};
- const blocks=[...(options.omitBrand?[]:[{id:'brand',text:name}]),{id:'residential',text:options.businessText??`${name} manages residential homes in Boston, Massachusetts.`},
+ const blocks=options.onlyBlocks??[...(options.omitBrand?[]:[{id:'brand',text:name}]),{id:'residential',text:options.businessText??`${name} manages residential homes in Boston, Massachusetts.`},
   {id:'workflow',text:'Our property managers coordinate maintenance requests and tenant communication for residential owners.'},
   {id:'territory',text:'This independently operated franchise office serves Boston. National network totals are not this office portfolio.'},...(options.extraBlocks??[])];
  const observations:SourceObservation[]=[{id:randomUUID(),url:website,contentHash:createHash('sha256').update(JSON.stringify(blocks)).digest('hex'),
