@@ -39,7 +39,7 @@ it('admits a guessed address only with the name\'s page citation and an own-host
  for(const bad of [{source_url:null,source_block_id:null,source_quote:null},{email:null},{email:'ryan@other.example.test'},{email_status:'guess'},{match_confidence:'low'}])await expect(person(bad),JSON.stringify(bad)).rejects.toMatchObject({code:'23514'});
 });
 it('records the verifier\'s five answers and the free no-mail-domain refusal as custody reasons, and nothing else new',async()=>{
- for(const reason of ['verdict_ok','verdict_catch_all','verdict_unknown','verdict_invalid','verdict_disposable','no_mail_domain','no_person','unavailable'])await expect(lookup({reason},'millionverifier'),reason).resolves.toBeDefined();
+ for(const reason of ['verdict_ok','verdict_catch_all','verdict_unknown','verdict_invalid','verdict_disposable','no_mail_domain','interrupted','no_person','unavailable'])await expect(lookup({reason},'millionverifier'),reason).resolves.toBeDefined();
  for(const reason of ['verdict_maybe','guess_invalid','because'])await expect(lookup({reason},'millionverifier'),reason).rejects.toMatchObject({code:'23514'});
 });
 it('lets a check record name the paid verifier and still refuses any other provider',async()=>{

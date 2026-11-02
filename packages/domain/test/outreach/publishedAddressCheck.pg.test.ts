@@ -1,5 +1,7 @@
 import {afterAll,beforeAll,expect,it} from 'vitest';
+import {randomUUID} from 'node:crypto';
 import {checkPublishedAddress,type AddressCheck,type AddressVerdict} from '../../outreach/addressGuess.ts';
+import {markStaleReservations} from '../../outreach/peopleEnrichment.ts';
 import {fakeAddressVerifier,preparedEmailWorld} from './preparedEmailFixture.ts';
 
 // ADR0038: a PUBLISHED address is asked of the paid verifier once before admission, through the real own-site read and the real admission pass, with a fake verifier (no network, no key).
@@ -68,10 +70,41 @@ it('commits a negative answer with its address-bound refusal record or neither: 
  await expect(checkPublishedAddress(world.ctx(),paid.verifier,target,`tyler@${company.domain}`,async()=>{throw new Error('record write failed');})).rejects.toThrow('record write failed');
  expect(await custody(company.candidateId)).toMatchObject({state:'reserved'});
  const again=fakeAddressVerifier(()=>verdict('ok'));
- expect(await checkPublishedAddress(world.ctx(),again.verifier,target,`tyler@${company.domain}`,async()=>undefined)).toBeNull();expect(again.calls).toEqual([]);
+ expect(await checkPublishedAddress(world.ctx(),again.verifier,target,`tyler@${company.domain}`,async()=>undefined)).toBe('held');expect(again.calls).toEqual([]);// taken by an unresolved attempt: refused, not an MX fallback
+ const before=(await world.admissions()).length;
+ // The NEXT FULL admission passes (the row still reserved, then settled unknown by the stale-reservation sweep): nothing is admitted and nothing is asked again.
+ expect(await world.pass(undefined,again.verifier)).toMatchObject({admitted:0});expect(again.calls).toEqual([]);
+ await world.runtime.query("UPDATE outreach_people_lookups SET reserved_at=clock_timestamp()-interval '10 minutes' WHERE workspace_id=$1 AND candidate_id=$2 AND provider='millionverifier'",[world.ws,company.candidateId]);
+ await markStaleReservations(world.ctx());
+ expect(await custody(company.candidateId)).toMatchObject({state:'unknown',reason:'interrupted'});
+ expect(await world.pass(undefined,again.verifier)).toMatchObject({admitted:0});expect(again.calls).toEqual([]);expect((await world.admissions()).length).toBe(before);
  let wrote:string|null=null;
  const other=await world.prepared('OH',published,'Columbus',true);
  const otherTarget={candidateId:other.candidateId,candidateRevision:(await world.runtime.query<{revision:number}>('SELECT revision FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2',[world.ws,other.candidateId])).rows[0]!.revision,host:other.domain};
  expect(await checkPublishedAddress(world.ctx(),fakeAddressVerifier(()=>verdict('disposable')).verifier,otherTarget,`tyler@${other.domain}`,async v=>{wrote=v;})).toBe('disposable');
  expect(wrote).toBe('disposable');expect(await custody(other.candidateId)).toMatchObject({state:'none',reason:'verdict_disposable'});
+});
+
+it('still falls back to the free check when THIS call gets no verifier answer: a transport failure admits, and the failed attempt then holds the company (never asked twice)',async()=>{
+ await world.setPeople({enabled:true,dailyCredits:100});
+ const company=await world.prepared('OH',published,'Columbus',true);
+ await world.enrichOwnSite();
+ const down=fakeAddressVerifier(()=>({ok:false,code:'unavailable',mayHaveCharged:true}));
+ expect(await world.pass(undefined,down.verifier)).toMatchObject({admitted:1});expect(down.calls).toEqual([`tyler@${company.domain}`]);
+ expect(await custody(company.candidateId)).toMatchObject({state:'unknown',credits:1});
+ expect(await lastCheck()).toMatchObject({provider:'dns_mx',result:'valid'});
+});
+
+it.each([['unknown','unavailable'],['reserved',null],['none','verdict_invalid'],['none','verdict_disposable']] as const)('fences a REPLACEMENT candidate on the same host behind its predecessor\'s paid custody (%s/%s): no paid call, no admission, no free-check fallback',async(state,reason)=>{
+ await world.setPeople({enabled:true,dailyCredits:100});
+ const company=await world.prepared('OH',published,'Columbus',true);
+ await world.enrichOwnSite();
+ // The predecessor is another candidate id on this company's host (custody has no foreign key to the candidate).
+ await world.runtime.query("INSERT INTO outreach_people_lookups(workspace_id,candidate_id,candidate_revision,host,provider,state,reason,credits,business_date,business_time_zone,observed_at,expires_at) VALUES($1,$2,1,$3,'millionverifier',$4,$5,1,current_date,'America/New_York',CASE WHEN $4='none' THEN clock_timestamp() END,clock_timestamp()+interval '30 days')",[world.ws,randomUUID(),company.domain,state,reason]);
+ const paid=fakeAddressVerifier(()=>verdict('ok')),before=(await world.admissions()).length;
+ expect(await world.pass(undefined,paid.verifier)).toMatchObject({admitted:0});
+ expect(paid.calls).toEqual([]);expect((await world.admissions()).length).toBe(before);
+ expect(await custody(company.candidateId)).toBeUndefined();
+ const target={candidateId:company.candidateId,candidateRevision:(await world.runtime.query<{revision:number}>('SELECT revision FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2',[world.ws,company.candidateId])).rows[0]!.revision,host:company.domain};
+ expect(await checkPublishedAddress(world.ctx(),paid.verifier,target,`tyler@${company.domain}`,async()=>undefined)).toBe('held');expect(paid.calls).toEqual([]);
 });

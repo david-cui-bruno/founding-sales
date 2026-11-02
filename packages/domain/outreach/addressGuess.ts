@@ -3,7 +3,7 @@ import {withTransaction} from '../db/queryable.ts';
 import {readPeopleEnrichmentSetting} from '../settings/peopleEnrichment.ts';
 import {listPreparedEmailCandidates} from '../sourcing/preparedEmailRead.ts';
 import type {EmailVerifier} from './emailVerification.ts';
-import {currentPeopleContacts} from './peopleContacts.ts';
+import {addressRefusedByCheck,currentPeopleContacts} from './peopleContacts.ts';
 import {businessDateNow,creditsOnDate,enrichedCustody,enrichmentRegions,markStaleReservations,reservePeopleLookup,settlePeopleLookup,type PeopleCompany} from './peopleEnrichment.ts';
 import {MILLIONVERIFIER_PROVIDER,OWN_SITE_PROVIDER,personalAddressAtHost,type AddressRefusal} from './peopleProvider.ts';
 import {preparedAdmissionRefusedInAdvance} from './preparedEmailAssessment.ts';
@@ -41,9 +41,10 @@ async function paidCheck(ctx:RepositoryContext,verifier:AddressVerifier,company:
  return {kind:'checked',id:reservation.id,verdict:check.verdict,credits:verdictCredits(check.verdict)};
 }
 
-/** A PUBLISHED address's one paid check before admission (ADR0038): a custody row of its own (provider `millionverifier`, one per candidate REVISION, never renewed), counted against the daily cap like a guess, so the company is never paid for twice. The verdict is returned for the admission pass to decide on (`invalid` and `disposable` refuse; the rest admit); the settled `verdict_invalid`/`verdict_disposable` row is itself a refusal that selection and the admission proof honour (`addressRefusedByCheck`), so a crash before the drop record is written admits nothing. Null: nothing was checked (the switch is off, the cap or an earlier check holds the company, or the verifier failed): the free DNS check decides alone. */
-export async function checkPublishedAddress(ctx:RepositoryContext,verifier:AddressVerifier,company:PeopleCompany,address:string,negative:(verdict:'invalid'|'disposable')=>Promise<void>):Promise<AddressVerdict|null>{
+/** A PUBLISHED address's one paid check before admission (ADR0038): a custody row of its own (provider `millionverifier`, one per candidate REVISION, never renewed), counted against the daily cap like a guess, so the company is never paid for twice. The verdict is returned for the admission pass to decide on (`invalid` and `disposable` refuse; the rest admit). `held`: another attempt owns the check and it is unresolved (`reserved`, `unknown`) or negative: refuse now and retry when its fence ends, never fall back to the free check; the same rows refuse in selection and the admission proof (`addressRefusedByCheck`). Null: this call did not check (no verifier answer in THIS call because the switch or the cap is off, or the verifier failed; or an answer already settled) and the free DNS check decides alone. */
+export async function checkPublishedAddress(ctx:RepositoryContext,verifier:AddressVerifier,company:PeopleCompany,address:string,negative:(verdict:'invalid'|'disposable')=>Promise<void>):Promise<AddressVerdict|'held'|null>{
  const paid=await paidCheck(ctx,verifier,company,address);
+ if(paid.kind==='skipped'&&paid.why==='taken')return await addressRefusedByCheck(ctx,company.candidateId)?'held':null;// an unresolved or negative row holds the company; a settled ok/catch_all/unknown answer or a cooling-down refusal leaves the free check
  if(paid.kind!=='checked')return null;
  // A negative answer and its address-bound refusal record commit together (and the settled row is a refusal on its own, `addressRefusedByCheck`): a completed negative check is never an unavailable-verifier fallback.
  await withTransaction(ctx.db,async()=>{await settlePeopleLookup(ctx,paid.id,{state:'none',reason:REFUSALS[paid.verdict],credits:paid.credits});if(paid.verdict==='invalid'||paid.verdict==='disposable')await negative(paid.verdict);});

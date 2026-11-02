@@ -94,6 +94,7 @@ export async function runPreparedEmailAdmission(ctx:RepositoryContext,deps:{veri
      if(!result)continue;
      if(result==='valid'&&deps.paid&&person.emailStatus==='published'&&paidCheckTimeAvailable(startedAt)){
       const verdict=await checkPublishedAddress(ctx,deps.paid,company,address,async()=>{await recordEmailVerification(ctx,address,'invalid','millionverifier');wrote=true;});
+      if(verdict==='held')continue;
       if(verdict!==null){provider='millionverifier';if(wrote)result='invalid';}
      }
      if(!wrote)await recordEmailVerification(ctx,address,result,provider);pass.checked++;

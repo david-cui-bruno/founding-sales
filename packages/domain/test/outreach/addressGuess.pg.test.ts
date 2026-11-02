@@ -142,7 +142,7 @@ it('never renews a paid row: a candidate-revision change gets a new row, both ch
  const [a,b]=[await world.prepared('OH',named('Ava'),'Columbus',true),await world.prepared('OH',named('Bo'),'Columbus',true)];
  const revision=async(id:string)=>Number((await world.runtime.query<{revision:number}>('SELECT revision FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2',[world.ws,id])).rows[0]!.revision);
  const company=async(c:typeof a)=>({candidateId:c.candidateId,candidateRevision:await revision(c.candidateId),host:c.domain});
- const charge=async(c:typeof a)=>{const r=await reservePeopleLookup(world.ctx(),{provider:'millionverifier',company:await company(c),credits:1});if(r.kind==='reserved')await settlePeopleLookup(world.ctx(),r.id,{state:'none',reason:'verdict_invalid',credits:1});return r.kind;};
+ const charge=async(c:typeof a)=>{const r=await reservePeopleLookup(world.ctx(),{provider:'millionverifier',company:await company(c),credits:1});if(r.kind==='reserved')await settlePeopleLookup(world.ctx(),r.id,{state:'none',reason:'verdict_ok',credits:1});return r.kind;};
  const before=await spent();
  await world.setPeople({enabled:true,dailyCredits:before+2});
  expect(await charge(a)).toBe('reserved');
