@@ -1,8 +1,8 @@
 import {expect,it} from 'vitest';
 import type {SourceObservation} from '@fss/contracts';
-import type {ClassifierRequest} from '@fss/domain/classification/prompt.ts';
+import {QUALIFICATION_MODEL_NAME} from '@fss/domain/sourcing/qualificationModel.ts';
 import {PREPARED_IDENTITY_PRODUCER} from '@fss/domain/sourcing/preparedIdentity.ts';
-import {qualificationRequest,type QualificationExtractionRequest} from '@fss/domain/sourcing/qualificationPrompt.ts';
+import {qualificationRequest,QUALIFICATION_OUTPUT_TOKENS,type QualificationExtractionRequest,type QualificationGeminiRequest} from '@fss/domain/sourcing/qualificationPrompt.ts';
 import {qualificationExtraction} from '../src/sourcing/qualificationExtraction.ts';
 
 const observation:SourceObservation={id:'11111111-1111-4111-8111-111111111111',url:'https://harbor.example.test/',contentHash:'a'.repeat(64),relevantTextHash:'b'.repeat(64),retrievedAt:'2026-10-30T12:00:00.000Z',publishedAt:null,publishedAtBlockId:null,firstParty:true,truncated:false,blocks:[
@@ -10,19 +10,19 @@ const observation:SourceObservation={id:'11111111-1111-4111-8111-111111111111',u
  {id:'city',text:'Boston, Massachusetts'},
  {id:'description',text:'Harbor Residential Management manages residential homes in Boston, Massachusetts.'},
 ]};
-const input={candidate:{firmName:'Home | HRM',website:observation.url,locality:'Boston',region:'MA'},observations:[observation],modelName:'claude-haiku-4-5',maxInputTokens:100,maxOutputTokens:2048,producerVersion:PREPARED_IDENTITY_PRODUCER} satisfies QualificationExtractionRequest;
-it('prepares a source identity in the same unchanged v7 request, preserving all original selections',async()=>{
- let creates=0,counted:ClassifierRequest|undefined,sent:ClassifierRequest|undefined;
- const provider=qualificationExtraction({kind:'bedrock',countTokens:async r=>{counted=r;return 100;},create:async r=>{creates++;sent=r;return {usage:{input_tokens:100,output_tokens:50},content:[{type:'text',text:JSON.stringify({selections:[
+const input={candidate:{firmName:'Home | HRM',website:observation.url,locality:'Boston',region:'MA'},observations:[observation],modelName:QUALIFICATION_MODEL_NAME,maxInputTokens:100,maxOutputTokens:QUALIFICATION_OUTPUT_TOKENS,producerVersion:PREPARED_IDENTITY_PRODUCER} satisfies QualificationExtractionRequest;
+it('prepares a source identity in the same request as the legacy producer, preserving all original selections',async()=>{
+ let creates=0,counted:Parameters<Parameters<typeof qualificationExtraction>[0]['countTokens']>[0]|undefined,sent:QualificationGeminiRequest|undefined;
+ const provider=qualificationExtraction({countTokens:async r=>{counted=r;return 100;},generate:async r=>{creates++;sent=r;return {usageMetadata:{promptTokenCount:100,candidatesTokenCount:50,totalTokenCount:150},candidates:[{finishReason:'STOP',content:{parts:[{text:JSON.stringify({selections:[
   {kind:'firm_identity',observationId:observation.id,blockId:'name'},
   {kind:'residential_management',observationId:observation.id,blockId:'description'},
   {kind:'service_area',observationId:observation.id,blockId:'city'},
- ],openingQuestion:null})}]};}});
+ ],openingQuestion:null})}]}}]};}});
  const before=JSON.stringify(input);await provider.countInputTokens(input);const result=await provider.extract(input);
  expect(result).toMatchObject({ok:true,value:{preparedIdentity:{producerVersion:PREPARED_IDENTITY_PRODUCER,observationId:observation.id,blockId:'name'},facts:[
   {kind:'firm_identity',blockId:'name'},{kind:'residential_management',blockId:'description'},{kind:'service_area',blockId:'city'},{kind:'service_area',blockId:'description'},
  ]}});
- expect(creates).toBe(1);expect(sent).toEqual(counted);expect(sent).toEqual(qualificationRequest({candidate:input.candidate,observations:input.observations,modelName:input.modelName,maxInputTokens:input.maxInputTokens,maxOutputTokens:input.maxOutputTokens}));expect(JSON.stringify(input)).toBe(before);
+ expect(creates).toBe(1);expect(sent).toMatchObject(counted!);expect(sent).toEqual(qualificationRequest({candidate:input.candidate,observations:input.observations,modelName:input.modelName,maxInputTokens:input.maxInputTokens,maxOutputTokens:input.maxOutputTokens}));expect(JSON.stringify(input)).toBe(before);
 });
 
 import {effectivePreparedCandidate,LEGACY_QUALIFICATION_PRODUCER,preparedIdentityCitationRoles} from '@fss/domain/sourcing/preparedIdentity.ts';

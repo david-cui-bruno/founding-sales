@@ -62,7 +62,7 @@ it.each(['serialization', 'ordinary-fetch-error'] as const)('risk STD1 qualifica
     try {
       await runQualification(f.worker, { runId: requested.value.runId }, {
         pageFetch: { providerKey: 'company_page', fetchPages },
-        extraction: { providerKey: 'aws_bedrock.sourcing_qualification', countInputTokens, extract },
+        extraction: { providerKey: 'google_vertex.sourcing_qualification', countInputTokens, extract },
       });
     } catch (error) { failure = error; }
     finally { await gate.query('ROLLBACK'); }

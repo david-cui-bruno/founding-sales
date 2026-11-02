@@ -47,7 +47,7 @@ async function captured(page:string,options:{moved?:boolean}={}){
   return {statusCode:404,headers:{},body:null,abortedOverCap:false};
  }});
  const target={candidateId:saved.value.id,candidateRevision:1,runId:requested.value.runId};
- await runQualification(ctx(runtime,true),target,{pageFetch:provider,extraction:{providerKey:'aws_bedrock.sourcing_qualification',countInputTokens:async()=>100,extract:async()=>({ok:false,failureCode:'invalid_evidence',costCents:1})}});
+ await runQualification(ctx(runtime,true),target,{pageFetch:provider,extraction:{providerKey:'google_vertex.sourcing_qualification',countInputTokens:async()=>100,extract:async()=>({ok:false,failureCode:'invalid_evidence',costCents:1})}});
  return {target,candidateId:saved.value.id,final};
 }
 const list=(candidateId:string,includeManualPhone=true)=>tx(()=>listManualProspects(ctx(),{state:'all',offset:0,candidateId,expectedRevision:1,...(includeManualPhone?{includeManualPhone:true}:{})}));

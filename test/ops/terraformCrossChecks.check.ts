@@ -12,6 +12,7 @@ import {
 import { LIVENESS_PATH, NOT_READY_STATUS, READINESS_PATH } from '../../apps/api/src/bootstrap/readiness.ts';
 import { DEFAULT_UPGRADE_URL } from '../../apps/api/src/routes/types.ts';
 import { DEPLOYMENT_ENVIRONMENT_VARIABLES as WORKER_VARIABLES } from '../../apps/worker/src/bootstrap/deployment.ts';
+import { VERTEX_VARIABLES, readVertexConfig } from '../../apps/worker/src/sourcing/vertexGemini.ts';
 // Retained signed restore manifests still back existing client-version refusals; no publishing workflow remains.
 const CHANNEL_MANIFEST_PATH = 'releases/darwin-arm64/latest.json';
 import { readRepositoryFile, repositoryPath } from './support/repository.ts';
@@ -368,4 +369,48 @@ it('keeps CRM adapter presence absent by default and uses one optional non-secre
   })`);
  expect(production).toMatch(/crm_capability_adapters\s*=\s*local\.crm_capability_adapters/u);
  expect(readRepositoryFile('infra/roots/rehearsal/main.tf')).not.toContain('crm_capability_adapters');
+});
+
+describe('the Vertex qualification setup script, Terraform and the worker agree', () => {
+  const SCRIPT = readRepositoryFile('infra/scripts/gcp-vertex-qualification-setup.sh');
+  const shell = (name: string): string => new RegExp(`^${name}='([^']+)'`, 'mu').exec(SCRIPT)?.[1] ?? '';
+  const terraform = (name: string): string => new RegExp(`^\\s+${name}\\s*=\\s*"([^"]+)"`, 'mu').exec(STACK)?.[1] ?? '';
+
+  it('names one project, pool, provider and service account in the script and in the worker environment', () => {
+    expect(shell('PROJECT_ID')).toBe(terraform('vertex_project_id'));
+    expect(shell('PROJECT_NUMBER')).toBe(terraform('vertex_project_number'));
+    expect(shell('POOL_ID')).toBe(terraform('vertex_pool_id'));
+    expect(shell('PROVIDER_ID')).toBe(terraform('vertex_provider_id'));
+    expect(`${shell('SERVICE_ACCOUNT_NAME')}@${shell('PROJECT_ID')}.iam.gserviceaccount.com`).toBe(terraform('vertex_service_account'));
+    expect(shell('PROJECT_ID')).not.toBe('');
+  });
+
+  it('admits only the production worker task role of the production AWS account', () => {
+    expect(shell('AWS_WORKER_ROLE')).toBe(`${'fss-prod'}-worker-task`);
+    expect(STACK).toContain('production_name_prefix = "fss-prod"');
+    expect(STACK).toContain('worker_task_role_name = "${var.name_prefix}-worker-task"');
+    expect(SCRIPT).toContain("assertion.arn.startsWith('${AWS_ROLE_ARN}/')");
+    expect(SCRIPT).toContain('--role=roles/aiplatform.user');
+    expect(SCRIPT.match(/--role=roles\/[A-Za-z.]+/gu)).toEqual(['--role=roles/aiplatform.user', '--role=roles/iam.workloadIdentityUser']);
+    expect(SCRIPT).not.toMatch(/service-accounts keys|keys create/u);
+  });
+
+  it('sets exactly the variables the worker reads, in production only, and the worker accepts what Terraform builds', () => {
+    const block = /vertex_qualification_environment = local\.is_production \? \{([\s\S]*?)\n {2}\} : \{\}/u.exec(STACK)?.[1] ?? '';
+    expect([...block.matchAll(/^\s+(FSS_VERTEX_[A-Z_]+)\s+=/gmu)].map(match => match[1]).sort()).toEqual([...VERTEX_VARIABLES].sort());
+    const environment = {
+      FSS_VERTEX_PROJECT: terraform('vertex_project_id'),
+      FSS_VERTEX_LOCATION: 'global',
+      AWS_REGION: 'us-east-1',
+      FSS_VERTEX_CREDENTIAL_CONFIG: JSON.stringify({
+        type: 'external_account',
+        audience: `//iam.googleapis.com/projects/${terraform('vertex_project_number')}/locations/global/workloadIdentityPools/${terraform('vertex_pool_id')}/providers/${terraform('vertex_provider_id')}`,
+        subject_token_type: 'urn:ietf:params:aws:token-type:aws4_request',
+        token_url: 'https://sts.googleapis.com/v1/token',
+        service_account_impersonation_url: `https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${terraform('vertex_service_account')}:generateAccessToken`,
+      }),
+    };
+    expect(readVertexConfig(environment)).toMatchObject({ problem: null, config: { project: 'colormyworld-prod-dc824', location: 'global' } });
+    expect(STACK).toContain('FSS_VERTEX_LOCATION = "global"');
+  });
 });

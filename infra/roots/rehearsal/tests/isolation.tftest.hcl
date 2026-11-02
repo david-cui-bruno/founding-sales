@@ -286,6 +286,13 @@ run "the_rehearsal_deploys_on_live_dependencies_with_sending_off" {
     condition     = !contains(keys(module.stack.worker_environment), "FSS_MODEL_TRANSPORT")
     error_message = "A rehearsal worker is not given the Bedrock transport."
   }
+
+  # Only production has the Google project and the federation pool; a rehearsal worker
+  # composes no qualification model and spends none of its credits.
+  assert {
+    condition     = alltrue([for name in ["FSS_VERTEX_PROJECT", "FSS_VERTEX_LOCATION", "FSS_VERTEX_CREDENTIAL_CONFIG"] : !contains(keys(module.stack.worker_environment), name)])
+    error_message = "A rehearsal worker is given no Vertex configuration."
+  }
 }
 
 run "both_services_are_told_the_workspace_domain" {

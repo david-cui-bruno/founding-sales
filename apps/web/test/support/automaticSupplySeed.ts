@@ -71,7 +71,7 @@ export async function completeAutomaticSupply(app: ThinHostApp, options: { ambig
       const emailBody = `<p>${c.firmName} ${c.locality} ${c.region} office info@${new URL(c.website).hostname}</p>${c.firmName === options.ambiguous ? '<p>Competing Residential Management LLC</p>' : ''}`;
       return { ok: true, costCents: 0, value: { pages: [body, emailBody].map((text, i) => ({ url: i === 0 ? c.website : `${c.website}contact`, contentHash: createHash('sha256').update(text).digest('hex'), contentType: 'text/html', body: new TextEncoder().encode(text), retrievedAt: new Date().toISOString(), firstParty: true })), skipped: {} } };
     } },
-    extraction: { providerKey: 'aws_bedrock.sourcing_qualification', countInputTokens: async () => 300, extract: async input => {
+    extraction: { providerKey: 'google_vertex.sourcing_qualification', countInputTokens: async () => 300, extract: async input => {
       extractions += 1;
       const native = input.observations[0]!, email = input.observations[1]!;
       const facts: QualificationFact[] = (['firm_identity', 'service_area', 'residential_management'] as const).map(kind => ({ kind, value: native.blocks[0]!.text, observationId: native.id, blockId: native.blocks[0]!.id }));

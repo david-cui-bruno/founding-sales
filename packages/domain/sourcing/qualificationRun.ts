@@ -10,7 +10,7 @@ import {readResearchSettings} from '../research/settings.ts';
 import {lockResearchBudget} from '../research/ceilings.ts';
 import {readCreditSpend,workspaceBusinessZone} from '../research/ledger.ts';
 import {reserveAttempt,markCalling,settleAttempt} from '../research/reservations.ts';
-import {centsOf,isPricedModel} from '../research/pricing.ts';
+import {QUALIFICATION_PROVIDER_KEY,isPricedQualificationModel,qualificationReservationCents} from './qualificationModel.ts';
 import {parsePageText} from '../research/pageText.ts';
 import {isPublicResearchUrl,withoutFragment} from '../research/sourcePolicy.ts';
 import type {PageFetchProvider,FetchedPage} from '../research/providers.ts';
@@ -83,7 +83,7 @@ export async function runQualification(ctx:RepositoryContext,input:{runId:string
  };
  if(run.prompt_version!==QUALIFICATION_PROMPT_VERSION||run.policy_version!==QUALIFICATION_POLICY_VERSION){await finish('qualification_version_changed');return;}
  const extraction=deps.extraction;
- if(!extraction||extraction.providerKey!=='aws_bedrock.sourcing_qualification'||!isPricedModel(run.model_name,'bedrock')){await finish('credit_route_unavailable');return;}
+ if(!extraction||extraction.providerKey!==QUALIFICATION_PROVIDER_KEY||!isPricedQualificationModel(run.model_name)){await finish('credit_route_unavailable');return;}
  const website=run.payload.website,source=withoutFragment(run.payload.sourceUrl);
  if(!website||!isPublicResearchUrl(website)||!isPublicResearchUrl(source)){await finish('official_site_unknown');return;}
  // A search hit on another host is not authority to read that host as this business.
@@ -145,7 +145,7 @@ export async function runQualification(ctx:RepositoryContext,input:{runId:string
  try{tokens=await extraction.countInputTokens(request);}catch{await finish('token_count_unavailable');return;}
  if(!Number.isSafeInteger(tokens)||tokens<1||tokens>100000){await finish('input_over_budget');return;}
  request.maxInputTokens=tokens;
- const cents=centsOf(run.model_name,{inputTokens:tokens,outputTokens:QUALIFICATION_OUTPUT_TOKENS},'bedrock');
+ const cents=qualificationReservationCents(run.model_name,{inputTokens:tokens,outputTokens:QUALIFICATION_OUTPUT_TOKENS},await databaseNow(ctx));
  const reservation=await withTransaction(db,async()=>{
   await lockResearchBudget(ctx);
   if(!await allowed(ctx,run.id))return null;

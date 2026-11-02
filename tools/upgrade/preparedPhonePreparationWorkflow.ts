@@ -85,7 +85,7 @@ export async function runPreparedPhonePreparationUpgradeWorkflow(ctx:RepositoryC
   if(input.url===final)return response('<main><p>Our property management team manages residential homes and coordinates tenant maintenance requests.</p><p>Office phone: (972) 555-0182</p></main>');
   return {statusCode:404,headers:{},body:null,abortedOverCap:false};
  }});
- await runQualification(worker,{runId:qualification.value.runId},{pageFetch,extraction:{providerKey:'aws_bedrock.sourcing_qualification',countInputTokens:async()=>100,extract:async()=>{modelCalls++;return {ok:false,failureCode:'invalid_evidence',costCents:1};}}});
+ await runQualification(worker,{runId:qualification.value.runId},{pageFetch,extraction:{providerKey:'google_vertex.sourcing_qualification',countInputTokens:async()=>100,extract:async()=>{modelCalls++;return {ok:false,failureCode:'invalid_evidence',costCents:1};}}});
  assert.equal(modelCalls,1);
  await exercise(inputFor(capture.value.id,await choiceOf(capture.value.id),name,website),'prepared_capture',middle);
  assert.deepEqual(await counts(ctx),before);

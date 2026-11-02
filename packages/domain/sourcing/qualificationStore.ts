@@ -18,6 +18,7 @@ import { enqueueJob } from '../jobs/jobStore.ts';
 import { jobIdempotencyKey } from '../jobs/jobKinds.ts';
 import { normalizeQualificationDiagnostic } from './qualificationDiagnostics.ts';
 import {isCurrentPreparedCandidatePayload} from './discoveryIntake.ts';
+import {QUALIFICATION_MODEL_NAME} from './qualificationModel.ts';
 import {retainedCandidateOnly,retainedWallNow} from './retainedAcquisition.ts';
 import {LEGACY_QUALIFICATION_PRODUCER,PREPARED_IDENTITY_PRODUCER,effectivePreparedCandidate,type PreparedIdentityProof} from './preparedIdentity.ts';
 import {preparedIdentityProducerAuthority} from './preparedIdentityAuthority.ts';
@@ -51,7 +52,7 @@ export async function requestQualification(context:RepositoryContext,input:{cand
   if(candidate.qualification_blocked)return refused('identity_review_required');
   if(await retainedCandidateOnly(context,candidate.id))return refused('retained_only');
   const now=await databaseNow(context),settings=await readResearchSettings(context);
-  const fingerprint=createHash('sha256').update(JSON.stringify([candidate.revision,QUALIFICATION_PROMPT_VERSION,QUALIFICATION_POLICY_VERSION,settings.modelName,now.slice(0,10)])).digest('hex');
+  const fingerprint=createHash('sha256').update(JSON.stringify([candidate.revision,QUALIFICATION_PROMPT_VERSION,QUALIFICATION_POLICY_VERSION,QUALIFICATION_MODEL_NAME,now.slice(0,10)])).digest('hex');
   const previous=(await context.db.query<{id:string}>(
     'SELECT id FROM sourcing_qualification_runs WHERE workspace_id=$1 AND candidate_id=$2 AND fingerprint=$3',
     [workspaceId,candidate.id,fingerprint])).rows[0];
@@ -65,7 +66,7 @@ export async function requestQualification(context:RepositoryContext,input:{cand
   const runId=randomUUID();
   await context.db.query(`INSERT INTO sourcing_qualification_runs
     (workspace_id,id,candidate_id,candidate_revision,fingerprint,prompt_version,policy_version,model_name,producer_version,capture_policy_version)
-    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,[workspaceId,runId,candidate.id,candidate.revision,fingerprint,QUALIFICATION_PROMPT_VERSION,QUALIFICATION_POLICY_VERSION,settings.modelName,producerVersion,PREPARED_CAPTURE_POLICY]);
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,[workspaceId,runId,candidate.id,candidate.revision,fingerprint,QUALIFICATION_PROMPT_VERSION,QUALIFICATION_POLICY_VERSION,QUALIFICATION_MODEL_NAME,producerVersion,PREPARED_CAPTURE_POLICY]);
   if(options.enqueue!==false)await enqueueJob(context.db,{workspaceId,kind:'sourcing.qualify',idempotencyKey:jobIdempotencyKey.sourcingQualify(runId),
     payload:{runId,candidateId:candidate.id,candidateRevision:candidate.revision,promptVersion:QUALIFICATION_PROMPT_VERSION,policyVersion:QUALIFICATION_POLICY_VERSION},maxAttempts:1});
   await recordCrmAuditEvent(context,{action:'sourcing.qualification_requested',subjectKind:'sourcing_candidate',subjectId:candidate.id,detail:{runId,candidateRevision:candidate.revision}});

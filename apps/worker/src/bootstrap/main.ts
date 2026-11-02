@@ -28,7 +28,8 @@ import {socialAssetsHandler,socialAssetsSource,socialDeletionPort,type SocialDel
 import {outreachReplySource} from '../handlers/outreach.ts';
 import {sourcingQualificationHandler,sourcingQualificationSource} from '../handlers/sourcingQualification.ts';
 import {prospectPhoneDiscoveryHandler,prospectPhoneDiscoverySource} from '../handlers/prospectPhoneDiscovery.ts';
-import {qualificationExtraction} from '../sourcing/qualificationExtraction.ts';
+import {readQualificationComposition} from '../sourcing/qualificationExtraction.ts';
+import type {QualificationExtractionProvider} from '@fss/domain/sourcing/qualificationPrompt.ts';
 import {sourcingDiscoveryHandler,sourcingDiscoverySource,apolloDiscoverySource} from '../handlers/sourcingDiscovery.ts';
 import {apolloFromEnvironment} from '../sourcing/apolloSearch.ts';
 import type {ApolloDiscoveryDependencies,ApolloBinding} from '@fss/domain/sourcing/apolloAllowance.ts';
@@ -173,6 +174,12 @@ export interface HandlerComposition extends CaptureReadComposition {
    * is. Absent, `call.analyze` is not registered and its source finds nothing.
    */
   readonly analysis?: CallAnalyzeOptions | undefined;
+  /**
+   * Prepared-prospect qualification through Google Vertex AI (`FSS_VERTEX_*`, keyless AWS->GCP
+   * federation). Absent, no qualification run is scheduled or started: there is no fallback to
+   * Bedrock. `FSS_CLASSIFIER=off` composes none (`readQualificationComposition`), with or without a classifier.
+   */
+  readonly qualification?: QualificationExtractionProvider | undefined;
 }
 
 /**
@@ -292,7 +299,7 @@ export function registerHandlers(
   const search=composition.discovery&&composition.research?{provider:composition.discovery,pageFetch:composition.research.pageFetch}:undefined;
   if(search||composition.apolloDiscovery)registry.register(sourcingDiscoveryHandler(search,composition.apolloDiscovery));
   if(composition.research){
-    registry.register(sourcingQualificationHandler({pageFetch:composition.research.pageFetch,extraction:composition.classifier?.processEnabled?qualificationExtraction(composition.classifier.transport):null}));
+    registry.register(sourcingQualificationHandler({pageFetch:composition.research.pageFetch,extraction:composition.qualification??null}));
     registry.register(prospectPhoneDiscoveryHandler({pageFetch:composition.research.pageFetch,...log?{log}:{}}));
     registry.register(sourcingCheckHandler(composition.research.pageFetch));
     registry.register(sourcingMonitorHandler());
@@ -478,7 +485,7 @@ export function readTranscriptionComposition(
 }
 
 /** Which optional sources materialize work, from what this worker composed. */
-export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom' | 'transcription' | 'summary' | 'analysis' | 'meetingTranscription' | 'meetingAnalysis' | 'meetingAutoRecording'> & Partial<Pick<HandlerComposition,'research'|'discovery'|'apolloDiscovery'|'classifier'|'crmExtraction'|'crmCaptureRead'>>): {
+export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom' | 'transcription' | 'summary' | 'analysis' | 'meetingTranscription' | 'meetingAnalysis' | 'meetingAutoRecording'> & Partial<Pick<HandlerComposition,'research'|'discovery'|'apolloDiscovery'|'classifier'|'crmExtraction'|'crmCaptureRead'|'qualification'>>): {
   readonly crmMailProcessing?:CrmMailEvidencePort; readonly crmCaptureRead?:boolean;
   readonly socialDraft: boolean;
   readonly qualification: boolean;
@@ -497,7 +504,7 @@ export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom'
   return {
     ...composition.crmExtraction?.mailEvidence===undefined?{}:{crmMailProcessing:composition.crmExtraction.mailEvidence},
     socialDraft: composition.classifier?.processEnabled===true, crmCaptureRead:composition.crmCaptureRead!==undefined,
-    qualification: composition.research !== undefined && composition.classifier?.processEnabled===true,
+    qualification: composition.research !== undefined && composition.qualification !== undefined,
     discovery: composition.discovery !== undefined && composition.research !== undefined,
     ...composition.apolloDiscovery?{apolloDiscovery:{accountRef:composition.apolloDiscovery.accountRef,keyRef:composition.apolloDiscovery.keyRef}}:{},
     sourcing: composition.research !== undefined,
@@ -677,6 +684,7 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
   const crmRuntime=createCrmCapabilityRuntime(crmConfiguration,{implementationCommit:buildCommit(environment),imageDigest:identity.digest,side:'worker',schemaVersion:REQUIRED_SCHEMA,gmailAvailable:deployment.gmail!==undefined});
   const crm=await composeCrmCapabilities({configuration:crmConfiguration,runtime:crmRuntime,openSession:async()=>{const client=new pg.Client({connectionString:config.database.connectionString,application_name:'fss-crm-authority'});await client.connect();return {session:asSession(client),close:()=>client.end()};},...deployment.gmail?{gmail:{...deployment.gmail,openSession:async()=>{const client=new pg.Client({connectionString:config.database.connectionString,application_name:'fss-crm-oauth'});await client.connect();return {session:asSession(client),close:()=>client.end()};}}}:{}});
   const apolloDiscovery=apolloFromEnvironment(environment);
+  const qualification=await readQualificationComposition(environment);
   const composition: HandlerComposition = {
     ...composed,
     ...crm.handlers,
@@ -693,12 +701,15 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
     ...(transcription.options === null ? {} : { transcription: transcription.options }),
     ...(summary.options === null ? {} : { summary: summary.options }),
     ...(analysis.options === null ? {} : { analysis: analysis.options }),
+    ...(qualification.extraction === null ? {} : { qualification: qualification.extraction }),
   };
   log.log('info', 'worker_configuration', {
     ...describeWorkerConfig(config),
     ...describeClassifier(classifier),
     ...describeResearch(composition.research),
     opening_selector_configured: composition.openingModel != null,
+    // Whether qualification can call Vertex, and if not why, by variable name only.
+    qualification_model: qualification.problem ?? (qualification.extraction === null ? 'vertex_unset' : 'configured'),
     ...describeDeployment(deployment),
     image_digest: identity.digest,
     image_digest_source: identity.source,

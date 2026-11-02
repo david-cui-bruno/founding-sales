@@ -1,7 +1,7 @@
 import {randomUUID} from 'node:crypto';
 import {afterEach,beforeEach,expect,it} from 'vitest';
 import {z} from 'zod';
-import type {ClassifierRequest} from '@fss/domain/classification/prompt.ts';
+import type {QualificationGeminiRequest} from '@fss/domain/sourcing/qualificationPrompt.ts';
 import type {PageFetchProvider} from '@fss/domain/research/providers.ts';
 import {preparedSourceIdentityPgFixture} from '../../../packages/domain/test/sourcing/preparedSourceIdentityPgFixture.ts';
 import {qualificationExtraction} from '../src/sourcing/qualificationExtraction.ts';
@@ -12,25 +12,27 @@ import {readQualification} from '@fss/domain/sourcing/qualificationStore.ts';
 import {nativeFirmCitations} from '@fss/domain/sourcing/nativeFirmEligibility.ts';
 import {PREPARED_IDENTITY_PRODUCER,LEGACY_QUALIFICATION_PRODUCER} from '@fss/domain/sourcing/preparedIdentity.ts';
 import {qualificationEvidenceSchema} from '@fss/contracts';
+import {QUALIFICATION_PROMPT_VERSION} from '@fss/domain/sourcing/qualificationVersions.ts';
+import {QUALIFICATION_MODEL_NAME} from '@fss/domain/sourcing/qualificationModel.ts';
 
 let f:Awaited<ReturnType<typeof preparedSourceIdentityPgFixture>>;
 beforeEach(async()=>{f=await preparedSourceIdentityPgFixture();});
 afterEach(async()=>f?.drop());
 const offeredSchema=z.object({candidate:z.object({firmName:z.string()}),observations:z.array(z.object({id:z.string(),blocks:z.array(z.object({id:z.string(),text:z.string()}))}))});
 async function execute(runId:string,options:{competing?:boolean;beforeCount?:()=>Promise<void>;beforeCreate?:()=>Promise<void>}={}){
- let counts=0,creates=0;const counted:ClassifierRequest[]=[],created:ClassifierRequest[]=[];
+ let counts=0,creates=0;const counted:Pick<QualificationGeminiRequest,'systemInstruction'|'contents'>[]=[],created:QualificationGeminiRequest[]=[];
  const description=`${f.name} manages residential homes in Boston, Massachusetts.`;
  const contact=`Contact ${f.name} office in Boston, MA at info@${new URL(f.website).hostname}.`;
  const pageFetch:PageFetchProvider={providerKey:'company_page',fetchPages:async()=>({ok:true,costCents:0,value:{pages:[
   {url:f.website,contentHash:'a'.repeat(64),contentType:'text/html',body:new TextEncoder().encode(`<h1>${f.name}</h1><p>${description}</p>${options.competing?'<h2>Different Actual Management LLC</h2>':''}`),retrievedAt:new Date().toISOString(),firstParty:true},
   {url:f.website+'contact',contentHash:'c'.repeat(64),contentType:'text/html',body:new TextEncoder().encode(`<p>${contact}</p>`),retrievedAt:new Date().toISOString(),firstParty:true},
  ],skipped:{}}})};
- const extraction=qualificationExtraction({kind:'bedrock',countTokens:async request=>{counts++;counted.push(request);await options.beforeCount?.();return 200;},create:async request=>{
+ const extraction=qualificationExtraction({countTokens:async request=>{counts++;counted.push(request);await options.beforeCount?.();return 200;},generate:async request=>{
   creates++;created.push(request);
   const committed=await f.database.appRuntimeSession();
   expect((await committed.query('SELECT state FROM provider_reservations WHERE workspace_id=$1 AND subject_id=$2',[f.workspace,runId])).rows).toEqual([{state:'calling'}]);
   await options.beforeCreate?.();
-  const offered=offeredSchema.parse(JSON.parse(String(request.messages[0]?.content)));
+  const offered=offeredSchema.parse(JSON.parse(request.contents[0].parts[0].text));
   expect(offered.candidate.firmName).toBe(f.label);
   const select=(kind:string,text:string)=>{
    const source=offered.observations.find(s=>s.blocks.some(b=>b.text===text));
@@ -39,7 +41,7 @@ async function execute(runId:string,options:{competing?:boolean;beforeCount?:()=
   };
   const selections=[select('firm_identity',f.name),select('residential_management',description),select('service_area',description),select('business_email',contact)];
   if(options.competing)selections.push(select('firm_identity','Different Actual Management LLC'));
-  return {usage:{input_tokens:200,output_tokens:80},content:[{type:'text',text:JSON.stringify({selections,openingQuestion:null})}]};
+  return {usageMetadata:{promptTokenCount:200,candidatesTokenCount:80,totalTokenCount:280},candidates:[{finishReason:'STOP',content:{parts:[{text:JSON.stringify({selections,openingQuestion:null})}]}}]};
  }});
  const handler=sourcingQualificationHandler({pageFetch,extraction});
  const input={session:f.runtime,scope:f.worker.scope,job:{id:randomUUID(),workspaceId:f.workspace,kind:'sourcing.qualify',idempotencyKey:'controlled-prepared-identity-'+runId,payload:{runId},attempt:1,maxAttempts:1,fencingToken:'1',leaseOwner:'controlled-fixture',leaseExpiresAt:new Date(Date.now()+180000).toISOString()}};
@@ -50,7 +52,7 @@ async function execute(runId:string,options:{competing?:boolean;beforeCount?:()=
 it('composes actual search intake, one conserved extraction, immutable label and source-derived automatic current read through app_runtime',async()=>{
  const beforeCandidate=await f.candidateBytes(),beforeHit=await f.hitBytes(),runId=await f.request();
  expect((await f.run(runId)).producer_version).toBe(PREPARED_IDENTITY_PRODUCER);
- const result=await execute(runId);expect(result.counts).toBe(1);expect(result.creates).toBe(1);expect(result.created).toEqual(result.counted);
+ const result=await execute(runId);expect(result.counts).toBe(1);expect(result.creates).toBe(1);expect(result.created.map(({systemInstruction,contents})=>({systemInstruction,contents}))).toEqual(result.counted);
  await result.replay();expect(result.created).toHaveLength(1);
  const stored=await f.run(runId);expect(stored.prepared_identity).toMatchObject({producerVersion:PREPARED_IDENTITY_PRODUCER,observationId:expect.any(String),blockId:expect.any(String),blockTextHash:expect.stringMatching(/^[a-f0-9]{64}$/u)});
  expect(JSON.stringify(stored.prepared_identity)).not.toContain(f.name);
@@ -96,7 +98,7 @@ it('advances recovery fairness past twenty-five proof-bearing nonlegacy-region r
   const candidate=randomUUID(),run=randomUUID(),prepared=n<26,region=prepared?'CA':'TX',locality=prepared?'Los Angeles':'Dallas';runs.push(run);
   await f.runtime.query('INSERT INTO sourcing_candidates(workspace_id,id,identity_key,payload) VALUES($1,$2,$3,$4::jsonb)',[f.workspace,candidate,candidate.replaceAll('-','').padEnd(64,'0'),JSON.stringify({firmName:`Synthetic retained title ${n}`,website:`https://recovery-${n}.example.test/`,sourceUrl:`https://recovery-${n}.example.test/`,locality,region,signal:'fit_only',evidence:'Controlled erased-source recovery row',observedOn:'2026-10-01',preparedBy:'Tavily Basic search · not verified'})]);
   await f.runtime.query(`INSERT INTO sourcing_qualification_runs(workspace_id,id,candidate_id,candidate_revision,fingerprint,prompt_version,policy_version,model_name,producer_version,requested_at,deadline_at)
-   VALUES($1,$2,$3,1,$4,'qualification-context-v7','qualification-v5','claude-haiku-4-5',$5,now()-interval '30 minutes'+$6::integer*interval '1 second',now()+interval '1 minute'+$6::integer*interval '1 second')`,[f.workspace,run,candidate,run.replaceAll('-','').padEnd(64,'0'),prepared?PREPARED_IDENTITY_PRODUCER:LEGACY_QUALIFICATION_PRODUCER,n]);
+   VALUES($1,$2,$3,1,$4,'${QUALIFICATION_PROMPT_VERSION}','qualification-v5','${QUALIFICATION_MODEL_NAME}',$5,now()-interval '30 minutes'+$6::integer*interval '1 second',now()+interval '1 minute'+$6::integer*interval '1 second')`,[f.workspace,run,candidate,run.replaceAll('-','').padEnd(64,'0'),prepared?PREPARED_IDENTITY_PRODUCER:LEGACY_QUALIFICATION_PRODUCER,n]);
   // A structurally bound but erased/expired source stays unreadable. Recovery
   // must account for the terminal visit without granting identity or retrying it.
   const proof=prepared?{producerVersion:PREPARED_IDENTITY_PRODUCER,observationId:randomUUID(),blockId:'erased-original',contentHash:'a'.repeat(64),relevantTextHash:'b'.repeat(64),blockTextHash:'c'.repeat(64)}:null;

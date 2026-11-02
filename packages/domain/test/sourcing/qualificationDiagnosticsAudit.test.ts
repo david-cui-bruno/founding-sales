@@ -36,7 +36,7 @@ it.each(failures)('records %s without changing terminal reason, admission or dis
  if(phase==='fetch_exception')pageFetch={providerKey:'company_page',fetchPages:async()=>{throw Error('private exception https://private.test');}};
  if(phase==='no_observations')pageFetch=fetcher([page('')],{status_403:1,status_418:2,'https://private.test':9});
  if(phase==='no_complete_first_party')pageFetch=fetcher([page('<p>Third party detail</p>',false),page(Array.from({length:101},(_,i)=>`<p>Detail ${i}</p>`).join(''))],{page_budget_reached:1});
- const extraction:QualificationExtractionProvider={providerKey:'aws_bedrock.sourcing_qualification',countInputTokens:async()=>{counted++;return 300;},extract:async input=>{
+ const extraction:QualificationExtractionProvider={providerKey:'google_vertex.sourcing_qualification',countInputTokens:async()=>{counted++;return 300;},extract:async input=>{
   paid++;return {ok:true,costCents:1,value:{openingQuestion:null,facts:[{kind:'firm_identity',value:'not published',observationId:phase==='unoffered_observation'?randomUUID():input.observations[0]!.id,blockId:'missing'}]}};
  }};
  await runQualification(ctx(),ids,{pageFetch,extraction});await runQualification(ctx(),ids,{pageFetch,extraction});
@@ -56,7 +56,7 @@ it.each(failures)('records %s without changing terminal reason, admission or dis
 it('trims pages that together exceed the observation bound and offers the rest to the model once',async()=>{
  const ids=await pending();let counted=0,offered=0;
  const pageFetch=fetcher(Array.from({length:4},()=>page(Array.from({length:7},()=>`<p>${'界'.repeat(1500)}</p>`).join(''))));
- await runQualification(ctx(),ids,{pageFetch,extraction:{providerKey:'aws_bedrock.sourcing_qualification',countInputTokens:async input=>{counted++;offered=input.observations.length;return 300;},
+ await runQualification(ctx(),ids,{pageFetch,extraction:{providerKey:'google_vertex.sourcing_qualification',countInputTokens:async input=>{counted++;offered=input.observations.length;return 300;},
   extract:async input=>({ok:true,costCents:1,value:{openingQuestion:null,facts:[{kind:'firm_identity',value:'not published',observationId:input.observations[0]!.id,blockId:'missing'}]}})}});
  expect(counted).toBe(1);expect(offered).toBe(3);
  const events=await audit(ids.runId);expect(events).toHaveLength(1);
@@ -69,7 +69,7 @@ it('honestly records eight configured pages and omits over-ceiling capture, with
   const ids=await pending();let calls=0;
   const pageFetch=fetcher(Array.from({length:count},()=>page('<p>Third party</p>',false)));
   const base=pageFetch.fetchPages;pageFetch.fetchPages=async request=>{expect(request.maxPagesPerFirm).toBe(8);return base(request);};
-  await runQualification(ctx(),ids,{pageFetch,extraction:{providerKey:'aws_bedrock.sourcing_qualification',countInputTokens:async()=>{calls++;return 1;},extract:async()=>{throw Error('must not extract');}}});
+  await runQualification(ctx(),ids,{pageFetch,extraction:{providerKey:'google_vertex.sourcing_qualification',countInputTokens:async()=>{calls++;return 1;},extract:async()=>{throw Error('must not extract');}}});
   expect(calls).toBe(0);expect(await readQualification(ctx(),ids)).toMatchObject({status:'unavailable',reason:'source_incomplete_or_unverified'});
   const event=(await audit(ids.runId))[0]!;
   if(count===8)expect(event['diagnostic']).toMatchObject({fetchedPages:8,observations:8});else expect(event).not.toHaveProperty('diagnostic');
@@ -98,7 +98,7 @@ it.each(['finished','corrected','deleted'] as const)('preserves %s caller refusa
 });
 it.each(['invalid_evidence','malformed_answer'] as const)('audits internal extraction rejection while preserving %s settlement, refusal and once-only dispatch',async reason=>{
  const ids=await pending();let calls=0;
- const extraction:QualificationExtractionProvider={providerKey:'aws_bedrock.sourcing_qualification',countInputTokens:async()=>100,extract:async input=>{
+ const extraction:QualificationExtractionProvider={providerKey:'google_vertex.sourcing_qualification',countInputTokens:async()=>100,extract:async input=>{
   calls++;
   const diagnostic={stage:'selection' as const,code:'block_missing' as const,selectionIndex:0,selectionCount:1,observationId:input.observations[0]!.id,blockId:'private missing block',stopReason:'max_tokens' as const,payload:'private provider text',schemaPath:['private'],message:'private'};
   return {ok:false,costCents:1,failureCode:reason,diagnostic};
@@ -114,7 +114,7 @@ it.each(['invalid_evidence','malformed_answer'] as const)('audits internal extra
 });
 it('drops hostile extraction metadata after settlement, never changing finish or replay safety',async()=>{
  const ids=await pending();let calls=0;
- const extraction:QualificationExtractionProvider={providerKey:'aws_bedrock.sourcing_qualification',countInputTokens:async()=>100,extract:async()=>{
+ const extraction:QualificationExtractionProvider={providerKey:'google_vertex.sourcing_qualification',countInputTokens:async()=>100,extract:async()=>{
   calls++;return Object.defineProperty({ok:false as const,failureCode:'invalid_evidence',costCents:1},'diagnostic',{get(){throw Error('private hostile getter');}});
  }};
  await runQualification(ctx(),ids,{pageFetch:fetcher([page()]),extraction});await runQualification(ctx(),ids,{pageFetch:fetcher([page()]),extraction});

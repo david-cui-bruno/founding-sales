@@ -7,10 +7,10 @@ import {repositoryContext,workspaceScope} from '../../db/workspaceScope.ts';
 import {seedTwoWorkspaces,type TwoWorkspaces} from '../db/support/fixtures.ts';
 import {saveCandidate} from '../../sourcing/candidates.ts';
 import {requestQualification,QUALIFICATION_PROMPT_VERSION,QUALIFICATION_POLICY_VERSION} from '../../sourcing/qualificationStore.ts';
+import {QUALIFICATION_MODEL_NAME} from '../../sourcing/qualificationModel.ts';
 import {runQualification} from '../../sourcing/qualificationRun.ts';
 import {readPreparedProspect} from '../../sourcing/preparedProspects.ts';
 import {researchPageFetch,type RawResponse} from '../../../../apps/worker/src/research/companyPageFetch.ts';
-import {readResearchSettings} from '../../research/settings.ts';
 import {lockDiscoveryReviewSources} from '../../sourcing/discoveryReviewVisibility.ts';
 import {databaseNow} from '../../policy/clock.ts';
 import {preparedProspectsBusinessSnapshot} from './preparedProspectsPgFixture.ts';
@@ -31,8 +31,8 @@ async function fixture(policy?:'legacy'|'prepared-source-association-v1'){
  if(!saved.ok)throw Error(saved.reason);const candidateId=saved.value.id;
  await runtime.query('INSERT INTO research_settings(workspace_id,enabled,max_pages_per_firm) VALUES($1,true,1)',[seed.alpha.workspaceId]);
  let runId:string;
- if(policy){const now=await databaseNow(ctx()),settings=await readResearchSettings(ctx()),fingerprint=createHash('sha256').update(JSON.stringify([1,QUALIFICATION_PROMPT_VERSION,QUALIFICATION_POLICY_VERSION,settings.modelName,now.slice(0,10)])).digest('hex');
-  runId=(await runtime.query<{id:string}>(`INSERT INTO sourcing_qualification_runs(workspace_id,candidate_id,candidate_revision,fingerprint,prompt_version,policy_version,model_name,capture_policy_version) VALUES($1,$2,1,$3,$4,$5,$6,$7) RETURNING id`,[seed.alpha.workspaceId,candidateId,fingerprint,QUALIFICATION_PROMPT_VERSION,QUALIFICATION_POLICY_VERSION,settings.modelName,policy])).rows[0]!.id;
+ if(policy){const now=await databaseNow(ctx()),fingerprint=createHash('sha256').update(JSON.stringify([1,QUALIFICATION_PROMPT_VERSION,QUALIFICATION_POLICY_VERSION,QUALIFICATION_MODEL_NAME,now.slice(0,10)])).digest('hex');
+  runId=(await runtime.query<{id:string}>(`INSERT INTO sourcing_qualification_runs(workspace_id,candidate_id,candidate_revision,fingerprint,prompt_version,policy_version,model_name,capture_policy_version) VALUES($1,$2,1,$3,$4,$5,$6,$7) RETURNING id`,[seed.alpha.workspaceId,candidateId,fingerprint,QUALIFICATION_PROMPT_VERSION,QUALIFICATION_POLICY_VERSION,QUALIFICATION_MODEL_NAME,policy])).rows[0]!.id;
  }else{const requested=await tx(()=>requestQualification(ctx(runtime,true),{candidateId,expectedRevision:1},{enqueue:false}));if(!requested.ok)throw Error(requested.reason);runId=requested.value.runId;}
  const target={candidateId,candidateRevision:1,runId};
  const stored=async()=>(await runtime.query<{fingerprint:string;producer_version:string;prompt_version:string;policy_version:string;model_name:string;prepared_capture:unknown}>('SELECT state,reason,capture_policy_version,prepared_capture,observations,facts,fingerprint,producer_version,prompt_version,policy_version,model_name FROM sourcing_qualification_runs WHERE id=$1',[runId])).rows[0]!;
@@ -41,7 +41,7 @@ async function fixture(policy?:'legacy'|'prepared-source-association-v1'){
 async function capture(f:Awaited<ReturnType<typeof fixture>>,afterExtract:()=>Promise<void>=async()=>{}){
  const requests:string[]=[],inputs:string[]=[];
  const provider=researchPageFetch({lookup:async()=>['93.184.216.34'],request:async input=>{requests.push(input.url);if(input.url.endsWith('/robots.txt'))return response('User-agent: *\nDisallow:\n','text/plain');if(input.url===f.sourceUrl)return {statusCode:301,headers:{location:f.middle},body:null,abortedOverCap:false};if(input.url===f.middle)return {statusCode:302,headers:{location:f.final},body:null,abortedOverCap:false};if(input.url===f.final)return response('<main><p>Our property management company manages residential homes for owners and coordinates tenant maintenance requests.</p></main>');return {statusCode:404,headers:{},body:null,abortedOverCap:false};}});
- await runQualification(ctx(runtime,true),f.target,{pageFetch:provider,extraction:{providerKey:'aws_bedrock.sourcing_qualification',countInputTokens:async input=>{inputs.push(JSON.stringify(input));return 100;},extract:async input=>{inputs.push(JSON.stringify(input));await afterExtract();return {ok:false,failureCode:'invalid_evidence',costCents:1};}}});
+ await runQualification(ctx(runtime,true),f.target,{pageFetch:provider,extraction:{providerKey:'google_vertex.sourcing_qualification',countInputTokens:async input=>{inputs.push(JSON.stringify(input));return 100;},extract:async input=>{inputs.push(JSON.stringify(input));await afterExtract();return {ok:false,failureCode:'invalid_evidence',costCents:1};}}});
  return {requests,inputs};
 }
 

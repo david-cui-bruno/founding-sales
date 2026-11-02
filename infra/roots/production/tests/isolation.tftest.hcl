@@ -262,6 +262,27 @@ run "the_deployment_flags_reach_both_containers" {
     condition     = module.stack.worker_environment["FSS_MODEL_TRANSPORT"] == "bedrock"
     error_message = "The production worker sends its model calls through Bedrock."
   }
+
+  # Prepared-prospect qualification calls Gemini on Vertex AI (GCP credits) through keyless
+  # federation of the worker task role; every other model call stays on Bedrock above. The
+  # credential configuration is public and holds no key, and the API is told none of it.
+  assert {
+    condition = (
+      module.stack.worker_environment["FSS_VERTEX_PROJECT"] == "colormyworld-prod-dc824"
+      && module.stack.worker_environment["FSS_VERTEX_LOCATION"] == "global"
+      && jsondecode(module.stack.worker_environment["FSS_VERTEX_CREDENTIAL_CONFIG"]) == {
+        type                              = "external_account"
+        audience                          = "//iam.googleapis.com/projects/873586425850/locations/global/workloadIdentityPools/fss-prod-aws/providers/fss-prod-worker"
+        subject_token_type                = "urn:ietf:params:aws:token-type:aws4_request"
+        token_url                         = "https://sts.googleapis.com/v1/token"
+        service_account_impersonation_url = "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/callie-qualification@colormyworld-prod-dc824.iam.gserviceaccount.com:generateAccessToken"
+      }
+      && !strcontains(module.stack.worker_environment["FSS_VERTEX_CREDENTIAL_CONFIG"], "private_key")
+      && alltrue([for name in ["FSS_VERTEX_PROJECT", "FSS_VERTEX_LOCATION", "FSS_VERTEX_CREDENTIAL_CONFIG"] : !contains(keys(module.stack.api_environment), name)])
+      && module.stack.worker_environment["FSS_MODEL_TRANSPORT"] == "bedrock"
+    )
+    error_message = "The production worker alone is given the Vertex project, the global location and the keyless external-account configuration for qualification, beside the unchanged Bedrock transport."
+  }
 }
 
 run "gmail_push_wires_the_audience_the_webhook_must_require" {

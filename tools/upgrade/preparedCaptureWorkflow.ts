@@ -39,7 +39,7 @@ export async function runPreparedCaptureUpgradeWorkflow(ctx:RepositoryContext&{d
   if(input.url===final)return response('<main><p>Our property management team manages residential homes and coordinates tenant maintenance requests.</p></main>');
   return {statusCode:404,headers:{},body:null,abortedOverCap:false};
  }});
- await runQualification(worker,{runId},{pageFetch,extraction:{providerKey:'aws_bedrock.sourcing_qualification',countInputTokens:async()=>100,extract:async input=>{modelCalls++;assert(!JSON.stringify(input).includes('redirectUrls'));return {ok:false,failureCode:'invalid_evidence',costCents:1};}}});
+ await runQualification(worker,{runId},{pageFetch,extraction:{providerKey:'google_vertex.sourcing_qualification',countInputTokens:async()=>100,extract:async input=>{modelCalls++;assert(!JSON.stringify(input).includes('redirectUrls'));return {ok:false,failureCode:'invalid_evidence',costCents:1};}}});
  const stored=(await ctx.db.query<{fingerprint:string;capture_policy_version:string;prepared_capture:{version:string;sourceUrl:string;pages:{url:string;redirectUrls:string[]}[]};state:string;reason:string}>('SELECT fingerprint,capture_policy_version,prepared_capture,state,reason FROM sourcing_qualification_runs WHERE workspace_id=$1 AND id=$2',[ctx.scope.workspaceId,runId])).rows[0]!;
  assert.equal(stored.capture_policy_version,'prepared-source-association-v2');assert.equal(stored.prepared_capture.version,'prepared-source-association-v2');assert.equal(stored.fingerprint,request.fingerprint);
  assert.equal(stored.state,'unavailable');assert.equal(stored.reason,'invalid_evidence');assert.equal(stored.prepared_capture.sourceUrl,sourceUrl);

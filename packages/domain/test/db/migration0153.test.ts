@@ -31,7 +31,7 @@ beforeAll(async()=>{
  await runtime.query('INSERT INTO research_settings(workspace_id,enabled,daily_cost_ceiling_cents,monthly_cost_ceiling_cents) VALUES($1,true,1000,20000)',[w]);
  await runtime.query("INSERT INTO daily_counters(workspace_id,subject_kind,subject_key,counter_kind,business_date,business_time_zone,count) VALUES($1,'workspace',$2,'research_firm_runs',current_date,'America/New_York',17)",[w,w]);
  const ctx=repositoryContext(workspaceScope(w,{kind:'system',component:'worker'}),runtime);
- await withTransaction(runtime,async()=>{const r=await reserveAttempt(ctx,{subjectKind:'sourcing_qualification',subjectId:pending,attempt:1,providerKey:'aws_bedrock.sourcing_qualification',at:new Date().toISOString(),businessTimeZone:'America/New_York',cents:2,modelName:'claude-haiku-4-5',maxInputTokens:100,maxOutputTokens:2048});await markCalling(ctx,r.id);});
+ await withTransaction(runtime,async()=>{const r=await reserveAttempt(ctx,{subjectKind:'sourcing_qualification',subjectId:pending,attempt:1,providerKey:'google_vertex.sourcing_qualification',at:new Date().toISOString(),businessTimeZone:'America/New_York',cents:2,modelName:'gemini-3.8-flash',maxInputTokens:100,maxOutputTokens:2048});await markCalling(ctx,r.id);});
  const f={session:runtime,seeded:seed};await pendingPreparedCapture(f);const v1=await pendingPreparedCapture(f);await completePreparedCapture(f,v1);
  before=await retained();await applyMigrations(db.session,{throughVersion:153});
 });

@@ -32,7 +32,7 @@ beforeAll(async()=>{
  await runtime.query("INSERT INTO workspace_settings(workspace_id,setting_key,version,value,changed_by_user_id) VALUES($1,'sending_enabled',4,'{\"enabled\":false}'::jsonb,$2)",[w,seed.alpha.admin.userId]);
  await runtime.query('INSERT INTO research_settings(workspace_id,enabled,daily_cost_ceiling_cents,monthly_cost_ceiling_cents) VALUES($1,true,1000,20000)',[w]);
  await runtime.query("INSERT INTO daily_counters(workspace_id,subject_kind,subject_key,counter_kind,business_date,business_time_zone,count) VALUES($1,'workspace',$2,'research_firm_runs',current_date,'America/New_York',17)",[w,w]);
- await withTransaction(runtime,async()=>{const r=await reserveAttempt(ctx,{subjectKind:'sourcing_qualification',subjectId:run,attempt:1,providerKey:'aws_bedrock.sourcing_qualification',at:new Date().toISOString(),businessTimeZone:'America/New_York',cents:2,modelName:'claude-haiku-4-5',maxInputTokens:100,maxOutputTokens:2048});await markCalling(ctx,r.id);});
+ await withTransaction(runtime,async()=>{const r=await reserveAttempt(ctx,{subjectKind:'sourcing_qualification',subjectId:run,attempt:1,providerKey:'google_vertex.sourcing_qualification',at:new Date().toISOString(),businessTimeZone:'America/New_York',cents:2,modelName:'gemini-3.8-flash',maxInputTokens:100,maxOutputTokens:2048});await markCalling(ctx,r.id);});
  before=await retained();await applyMigrations(db.session,{throughVersion:151});
 });
 afterAll(async()=>db?.drop());
