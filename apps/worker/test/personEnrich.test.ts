@@ -53,8 +53,9 @@ it('guesses the address of a named person with none through the same handler and
   expect(await runOnce(world.runtime, { registry, owner: 'person-enrich-guess', limit: 5 })).toMatchObject({ claimed: 1, completed: 1, failed: 0 });
   expect(paid.calls).toEqual([`ryan@${company.domain}`]);
   expect((await world.runtime.query('SELECT l.provider,l.state,l.credits,c.email,c.email_status FROM outreach_people_lookups l JOIN outreach_people_contacts c ON c.lookup_id=l.id WHERE l.workspace_id=$1 AND l.candidate_id=$2 ORDER BY l.provider', [world.ws, company.candidateId])).rows).toEqual([
-    { provider: 'millionverifier', state: 'found', credits: 1, email: `ryan@${company.domain}`, email_status: 'verified_guess' },
+    { provider: 'millionverifier', state: 'found', credits: 0, email: `ryan@${company.domain}`, email_status: 'verified_guess' },
     { provider: 'own_site', state: 'found', credits: 0, email: null, email_status: 'unavailable' }]);
+  expect((await world.runtime.query('SELECT kind,state,reason,credits FROM outreach_people_paid_checks WHERE workspace_id=$1 AND candidate_id=$2', [world.ws, company.candidateId])).rows).toEqual([{ kind: 'guess', state: 'none', reason: 'verdict_ok', credits: 1 }]);
   const guessLine = lines.find(line => line.includes('address_guessing'))!;
   expect(JSON.parse(guessLine).fields).toEqual({ looked: 1, verified: 1, refused: 0, credits: 1, halted: null, stopped: null });
   expect(lines.join('\n')).not.toMatch(/ryan@|peak-/u);
@@ -62,5 +63,5 @@ it('guesses the address of a named person with none through the same handler and
   expect((await schedule(true, 9)).inserted).toBe(1);
   const plain = new HandlerRegistry().register(personEnrichHandler({ provider: ownSitePeople() }));
   expect(await runOnce(world.runtime, { registry: plain, owner: 'person-enrich-no-key', limit: 5 })).toMatchObject({ claimed: 1, completed: 1, failed: 0 });
-  expect((await world.runtime.query("SELECT 1 FROM outreach_people_lookups WHERE workspace_id=$1 AND candidate_id=$2 AND provider='millionverifier'", [world.ws, other.candidateId])).rows).toEqual([]);
+  expect((await world.runtime.query('SELECT 1 FROM outreach_people_paid_checks WHERE workspace_id=$1 AND candidate_id=$2', [world.ws, other.candidateId])).rows).toEqual([]);
 });

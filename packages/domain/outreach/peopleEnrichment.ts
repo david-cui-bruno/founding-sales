@@ -9,22 +9,21 @@ import {listPreparedEmailCandidates} from '../sourcing/preparedEmailRead.ts';
 import {preparedAdmissionRefusedInAdvance} from './preparedEmailAssessment.ts';
 import {admittedCandidateIds} from './preparedEmailSelection.ts';
 import {PEOPLE_CONTACT_VALID_DAYS} from './peopleContacts.ts';
-import {acceptablePerson,MILLIONVERIFIER_PROVIDER,OWN_SITE_PROVIDER,type AcceptedPerson,type AddressRefusal,type PeopleProvider,type PersonRefusal} from './peopleProvider.ts';
+import {acceptablePerson,MILLIONVERIFIER_PROVIDER,OWN_SITE_PROVIDER,type AcceptedPerson,type PeopleProvider,type PersonRefusal} from './peopleProvider.ts';
 
-/** ADR0036. A refused uncharged call is tried again after an hour; nothing else is retried. A free source (`own_site`, ADR0037) takes 50 companies a pass: it has no call to pay for.
- * Only the free `own_site` row is read again in place (its thirty days pass or its candidate revision changes). A paid `millionverifier` row is NEVER renewed: its credits and business date are the spend ledger `creditsOnDate` sums, so a changed revision gets a new row (ADR0038). */
-const FAILED_COOLDOWN_HOURS=1,STALE_RESERVATION_MINUTES=5,PASS_LOOKUPS=10,FREE_PASS_LOOKUPS=50,RENEWED_PROVIDERS:readonly string[]=[OWN_SITE_PROVIDER],OWN_ROWS_PROVIDERS:readonly string[]=[OWN_SITE_PROVIDER,MILLIONVERIFIER_PROVIDER];
+/** ADR0036. A refused uncharged call is tried again after an hour; nothing else is retried. A free source (`own_site`, ADR0037) takes 50 companies a pass: it has no call to pay for. */
+const FAILED_COOLDOWN_HOURS=1,STALE_RESERVATION_MINUTES=5,PASS_LOOKUPS=10,FREE_PASS_LOOKUPS=50;
 export interface PeopleCompany {candidateId:string;candidateRevision:number;host:string}
-/** Credits reserved or spent on this business date, the one number the daily cap is held to. */
+/** Credits reserved or spent on this business date, the one number the daily cap is held to: the provider-lookup custody and the paid single-address checks (ADR0038, `outreach_people_paid_checks`) both count. */
 export async function creditsOnDate(ctx:RepositoryContext,date:string):Promise<number>{
- return Number((await ctx.db.query<{used:string}>('SELECT coalesce(sum(credits),0)::text AS used FROM outreach_people_lookups WHERE workspace_id=$1 AND business_date=$2::date',[ctx.scope.workspaceId,date])).rows[0]!.used);
+ return Number((await ctx.db.query<{used:string}>('SELECT (coalesce((SELECT sum(credits) FROM outreach_people_lookups WHERE workspace_id=$1 AND business_date=$2::date),0)+coalesce((SELECT sum(credits) FROM outreach_people_paid_checks WHERE workspace_id=$1 AND business_date=$2::date),0))::text AS used',[ctx.scope.workspaceId,date])).rows[0]!.used);
 }
 export const businessDateNow=async(ctx:RepositoryContext):Promise<{zone:string;date:string}>=>{const zone=await workspaceBusinessZone(ctx);return {zone,date:localDate((await ctx.db.query<{at:Date}>('SELECT clock_timestamp() AS at')).rows[0]!.at.toISOString(),zone)};};
 export type PeopleReservation={kind:'reserved';id:string;credits:number}|{kind:'taken'}|{kind:'cap'}|{kind:'disabled'}|{kind:'gone'};
 /** Commits (its own transaction) one reservation row BEFORE the paid call (a free source's row holds 0 credits). Under the `people_enrichment` setting's read lock (so an admin's
  * disable or cap change is ordered against it) and the workspace advisory lock it re-reads the switch and the cap, then requires the day's
  * reserved and spent credits plus this lookup's maximum to fit the cap, and the company's HOST to have no custody row (a refused uncharged
- * call's row is reused once its cool-down passes, because it holds no spend; so is the free `own_site` row (`RENEWED_PROVIDERS`) once its thirty days pass or its candidate
+ * call's row is reused once its cool-down passes, because it holds no spend; so is an `own_site` row once its thirty days pass or its candidate
  * revision changes: the company's pages are read again and the old person copy is replaced). The daily cap applies only to a lookup that costs
  * credits. A committed reservation counts as spent whatever happens next. */
 export async function reservePeopleLookup(ctx:RepositoryContext,input:{provider:string;company:PeopleCompany;credits:number}):Promise<PeopleReservation>{
@@ -37,32 +36,33 @@ export async function reservePeopleLookup(ctx:RepositoryContext,input:{provider:
   if(input.credits>0&&await creditsOnDate(ctx,date)+input.credits>setting.dailyCredits)return {kind:'cap'};
   // Custody has no foreign key to the candidate, so the candidate is checked and share-locked here: one deleted since the list was read is neither reserved nor called.
   if(!(await ctx.db.query('SELECT 1 FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2 FOR SHARE',[w,input.company.candidateId])).rows.length)return {kind:'gone'};
-  // A paid attempt whose outcome is uncertain (`unknown`: the request went out and may have charged; `reserved`: in flight) and a settled negative answer (`verdict_invalid`/`verdict_disposable`) fence the COMPANY, by candidate OR host, for their thirty days whatever the candidate revision or person expiry: a revision change or a replacement candidate on the same host never makes a second paid call (the database no longer holds the per-host fence for this provider; this check, under the workspace advisory lock, does).
-  if(!RENEWED_PROVIDERS.includes(input.provider)&&(await ctx.db.query("SELECT 1 FROM outreach_people_lookups WHERE workspace_id=$1 AND provider=$3 AND (candidate_id=$2 OR host=$4) AND expires_at>clock_timestamp() AND (state IN ('unknown','reserved') OR (state='none' AND reason IN ('verdict_invalid','verdict_disposable'))) LIMIT 1",[w,input.company.candidateId,input.provider,input.company.host])).rows.length)return {kind:'taken'};
   const reused=(await ctx.db.query<{id:string}>(`UPDATE outreach_people_lookups SET state='reserved',reason=NULL,candidate_id=$2,candidate_revision=$4,credits=$5,business_date=$6::date,business_time_zone=$7,reserved_at=clock_timestamp(),observed_at=NULL,expires_at=clock_timestamp()+make_interval(days=>$8)
-   WHERE workspace_id=$1 AND host=$9 AND provider=$3 AND ((state='failed' AND expires_at<=clock_timestamp() AND ($10 OR (candidate_id=$2 AND candidate_revision=$4))) OR ($10 AND state<>'reserved' AND (expires_at<=clock_timestamp() OR candidate_revision<>$4))) RETURNING id`,[w,input.company.candidateId,input.provider,input.company.candidateRevision,input.credits,date,zone,PEOPLE_CONTACT_VALID_DAYS,input.company.host,RENEWED_PROVIDERS.includes(input.provider)])).rows[0];
+   WHERE workspace_id=$1 AND host=$9 AND provider=$3 AND ((state='failed' AND expires_at<=clock_timestamp()) OR ($10 AND state<>'reserved' AND (expires_at<=clock_timestamp() OR candidate_revision<>$4))) RETURNING id`,[w,input.company.candidateId,input.provider,input.company.candidateRevision,input.credits,date,zone,PEOPLE_CONTACT_VALID_DAYS,input.company.host,input.provider===OWN_SITE_PROVIDER||input.provider===MILLIONVERIFIER_PROVIDER])).rows[0];
   if(reused){await ctx.db.query('DELETE FROM outreach_people_contacts WHERE workspace_id=$1 AND lookup_id=$2',[w,reused.id]);return {kind:'reserved',id:reused.id,credits:input.credits};}
   const row=(await ctx.db.query<{id:string}>(`INSERT INTO outreach_people_lookups(workspace_id,candidate_id,candidate_revision,host,provider,state,credits,business_date,business_time_zone,expires_at)
    VALUES($1,$2,$3,$4,$5,'reserved',$6,$7::date,$8,clock_timestamp()+make_interval(days=>$9)) ON CONFLICT DO NOTHING RETURNING id`,[w,input.company.candidateId,input.company.candidateRevision,input.company.host,input.provider,input.credits,date,zone,PEOPLE_CONTACT_VALID_DAYS])).rows[0];
   return row?{kind:'reserved',id:row.id,credits:input.credits}:{kind:'taken'};
  });
 }
-export type Settlement={state:'found';person:AcceptedPerson;credits:number;/** ms epoch of the cited page's own deadline (an own-site person): the person is current no longer than it. */citedDeadline:number|null}|{state:'none';reason:PersonRefusal|AddressRefusal;credits:number}|{state:'failed';reason:string}|{state:'unknown';reason:string};
+export type Settlement={state:'found';person:AcceptedPerson;credits:number;/** ms epoch of the cited page's own deadline (an own-site person): the person is current no longer than it. */citedDeadline:number|null;/** Work committed in the same transaction as the person copy (the guessed address's paid-check settlement, ADR0038). */alongside?:()=>Promise<void>}|{state:'none';reason:PersonRefusal;credits:number}|{state:'failed';reason:string}|{state:'unknown';reason:string};
 /** One statement settles a reservation that is still reserved. A failed settle leaves it reserved; the next pass reads it as unknown. */
 export async function settlePeopleLookup(ctx:RepositoryContext,id:string,s:Settlement):Promise<void>{
  const w=ctx.scope.workspaceId;
  if(s.state==='found')await withTransaction(ctx.db,async()=>{
   const settled=await ctx.db.query(`UPDATE outreach_people_lookups SET state='found',reason=NULL,credits=$3,observed_at=clock_timestamp(),expires_at=CASE WHEN $4::double precision IS NULL THEN expires_at ELSE greatest(reserved_at+interval '1 millisecond',least(expires_at,to_timestamp($4::double precision/1000))) END WHERE workspace_id=$1 AND id=$2 AND state='reserved'`,[w,id,s.credits,s.citedDeadline]);
-  if(settled.rowCount)await ctx.db.query(`INSERT INTO outreach_people_contacts(workspace_id,lookup_id,candidate_id,host,provider_person_id,first_name,last_name,title,email,email_status,match_confidence,source_url,source_block_id,source_quote)
-   SELECT workspace_id,id,candidate_id,host,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12 FROM outreach_people_lookups WHERE workspace_id=$1 AND id=$2`,[w,id,s.person.providerPersonId,s.person.firstName,s.person.lastName,s.person.title,s.person.email,s.person.emailStatus,s.person.confidence,s.person.source?.url??null,s.person.source?.blockId??null,s.person.source?.quote??null]);
+  if(settled.rowCount){
+   await ctx.db.query(`INSERT INTO outreach_people_contacts(workspace_id,lookup_id,candidate_id,host,provider_person_id,first_name,last_name,title,email,email_status,match_confidence,source_url,source_block_id,source_quote)
+    SELECT workspace_id,id,candidate_id,host,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12 FROM outreach_people_lookups WHERE workspace_id=$1 AND id=$2`,[w,id,s.person.providerPersonId,s.person.firstName,s.person.lastName,s.person.title,s.person.email,s.person.emailStatus,s.person.confidence,s.person.source?.url??null,s.person.source?.blockId??null,s.person.source?.quote??null]);
+   await s.alongside?.();
+  }
  });
  else if(s.state==='none')await ctx.db.query(`UPDATE outreach_people_lookups SET state='none',reason=$3,credits=$4,observed_at=clock_timestamp() WHERE workspace_id=$1 AND id=$2 AND state='reserved'`,[w,id,s.reason,s.credits]);
  else if(s.state==='failed')await ctx.db.query(`UPDATE outreach_people_lookups SET state='failed',reason=$3,credits=0,expires_at=clock_timestamp()+make_interval(hours=>$4) WHERE workspace_id=$1 AND id=$2 AND state='reserved'`,[w,id,s.reason,FAILED_COOLDOWN_HOURS]);
  else await ctx.db.query(`UPDATE outreach_people_lookups SET state='unknown',reason=$3 WHERE workspace_id=$1 AND id=$2 AND state='reserved'`,[w,id,s.reason]);
 }
-/** A reservation whose call never settled (a crash, a lost connection, a rolled-back write) may have been charged: it is unknown (reason `interrupted`, told apart from a call's own failure), keeps its credits and is never retried. */
-export async function markStaleReservations(ctx:RepositoryContext):Promise<void>{
- await ctx.db.query(`UPDATE outreach_people_lookups SET state='unknown',reason='interrupted' WHERE workspace_id=$1 AND state='reserved' AND reserved_at<clock_timestamp()-make_interval(mins=>$2)`,[ctx.scope.workspaceId,STALE_RESERVATION_MINUTES]);
+/** A reservation whose call never settled (a crash, a lost connection) may have been charged: it is unknown, keeps its credits and is never retried. */
+async function markStaleReservations(ctx:RepositoryContext):Promise<void>{
+ await ctx.db.query(`UPDATE outreach_people_lookups SET state='unknown',reason='unavailable' WHERE workspace_id=$1 AND state='reserved' AND reserved_at<clock_timestamp()-make_interval(mins=>$2)`,[ctx.scope.workspaceId,STALE_RESERVATION_MINUTES]);
 }
 
 export interface PeopleEnrichmentPass {looked:number;found:number;none:number;credits:number;/** The provider failure code that halted the pass, if any. */halted:string|null;/** Why nothing ran: `disabled` or `cap`. */stopped:'disabled'|'cap'|null}
@@ -71,10 +71,10 @@ export async function enrichmentRegions(ctx:RepositoryContext):Promise<string[]>
  const rows=(await ctx.db.query<{regions:string[]}>('SELECT regions FROM outreach_email_campaigns WHERE workspace_id=$1 AND revoked_at IS NULL AND expires_at>clock_timestamp()',[ctx.scope.workspaceId])).rows;
  return rows.length?[...new Set(rows.flatMap(row=>row.regions))]:[...US_BUSINESS_REGIONS];
 }
-/** Candidates and hosts the ACTIVE provider's extraction skips (ADR0037): `own_site` and `millionverifier` skip only what their OWN rows hold; an old paid provider's row blocks that provider's re-lookups only. A failed row is skipped until its cool-down passes; an `own_site` row that is expired, or older than its candidate's revision, is read again (see `reservePeopleLookup`) and holds nothing; a settled `millionverifier` row of an earlier candidate revision holds nothing for the current one (its row stays as spend), but an uncertain one (`unknown`, `reserved`) holds the company for its thirty days whatever the revision. Accounting (`creditsOnDate`, the unique fences) still sees every provider's rows. */
-export const enrichedCustody=async(ctx:RepositoryContext,provider:string):Promise<{candidates:Set<string>;hosts:Set<string>}>=>{
+/** Candidates and hosts the ACTIVE provider's extraction skips (ADR0037): a free `own_site` pass skips only what its OWN rows hold (an old paid provider's custody row blocks that provider's re-lookups, never the company's own pages being read); a paid provider is skipped by any provider's row, because its host fence guards spend. A failed row is skipped until its cool-down passes; an `own_site` row that is expired, or older than its candidate's revision, is read again (see `reservePeopleLookup`) and holds nothing. Accounting (`creditsOnDate`, the per-provider unique fences) still sees every provider's rows. */
+const enrichedCustody=async(ctx:RepositoryContext,provider:string):Promise<{candidates:Set<string>;hosts:Set<string>}>=>{
  const rows=(await ctx.db.query<{candidate_id:string;host:string}>(`SELECT l.candidate_id,l.host FROM outreach_people_lookups l LEFT JOIN sourcing_candidates c ON c.workspace_id=l.workspace_id AND c.id=l.candidate_id
-  WHERE l.workspace_id=$1 AND (l.provider=$3::text OR NOT $3::text=ANY($2::text[])) AND NOT (l.state='failed' AND l.expires_at<=clock_timestamp()) AND NOT (l.provider=$4::text AND l.state<>'reserved' AND (l.expires_at<=clock_timestamp() OR l.candidate_revision IS DISTINCT FROM c.revision)) AND NOT (l.provider=$5::text AND l.candidate_revision IS DISTINCT FROM c.revision AND NOT (l.state IN ('unknown','reserved') AND l.expires_at>clock_timestamp()))`,[ctx.scope.workspaceId,OWN_ROWS_PROVIDERS,provider,OWN_SITE_PROVIDER,MILLIONVERIFIER_PROVIDER])).rows;
+  WHERE l.workspace_id=$1 AND (l.provider=$3 OR $3<>$2) AND NOT (l.state='failed' AND l.expires_at<=clock_timestamp()) AND NOT (l.provider=$2 AND l.state<>'reserved' AND (l.expires_at<=clock_timestamp() OR l.candidate_revision IS DISTINCT FROM c.revision))`,[ctx.scope.workspaceId,OWN_SITE_PROVIDER,provider])).rows;
  return {candidates:new Set(rows.map(row=>row.candidate_id)),hosts:new Set(rows.map(row=>row.host))};
 };
 /** ADR0036/0037. The worker's enrichment pass: in the prepared list's order (one company per host; the prepared brief, business name, no existing
