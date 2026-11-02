@@ -3,10 +3,8 @@ import type {CandidateInput,SourceObservation} from '@fss/contracts';
 import type {RepositoryContext} from '../../db/workspaceScope.ts';
 import {withTransaction} from '../../db/queryable.ts';
 import {saveCandidate} from '../../sourcing/candidates.ts';
-import {residentialFacts} from './support/modelSelections.ts';
 
-/** Fictional retained pages only. Seeding never calls acquisition or qualification; the stored model
- * selections are the fixture's residential-management statements. */
+/** Fictional retained pages only. Seeding never calls acquisition or qualification. */
 export async function seedPreparedProspect(ctx:RepositoryContext,index=1,options:{pages?:boolean;sourceAgeMs?:number;truncated?:boolean;firstParty?:boolean;region?:CandidateInput['region'];extraBlocks?:SourceObservation['blocks'];businessText?:string;omitBrand?:boolean;website?:string}={}){
  const website=options.website??`https://cedar-${index}-${randomUUID()}.example.test/`,name=`Cedar ${index} Property Management`,label=`Home | Cedar ${index} PM`;
  const input:CandidateInput={firmName:label,website,locality:'Boston',region:options.region??'MA',signal:'fit_only',
@@ -23,8 +21,8 @@ export async function seedPreparedProspect(ctx:RepositoryContext,index=1,options
   publishedAt:null,publishedAtBlockId:null,firstParty:options.firstParty??true,truncated:options.truncated??false,blocks}];
  const runId=randomUUID();
  await ctx.db.query(`INSERT INTO sourcing_qualification_runs(workspace_id,id,candidate_id,candidate_revision,fingerprint,prompt_version,policy_version,model_name,state,reason,observations,facts,finished_at)
- VALUES($1,$2,$3,1,$4,'qualification-context-v7','qualification-v5','none','unavailable','invalid_evidence',$5,$6,clock_timestamp())`,
- [ctx.scope.workspaceId,runId,candidateId,createHash('sha256').update(runId).digest('hex'),JSON.stringify(observations),JSON.stringify(residentialFacts(observations))]);
+ VALUES($1,$2,$3,1,$4,'qualification-context-v7','qualification-v5','none','unavailable','invalid_evidence',$5,'[]',clock_timestamp())`,
+ [ctx.scope.workspaceId,runId,candidateId,createHash('sha256').update(runId).digest('hex'),JSON.stringify(observations)]);
  return {candidateId,runId,candidateRevision:1,website,name,label,input,observations};
 }
 

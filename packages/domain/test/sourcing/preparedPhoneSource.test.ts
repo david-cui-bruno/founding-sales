@@ -8,7 +8,6 @@ import {projectPreparedPhoneChoice} from '../../sourcing/manualProspectPhoneChoi
 import {preparedPhoneSource,PREPARED_PHONE_HORIZON_MS} from '../../sourcing/preparedPhoneSource.ts';
 import {projectPreparedProspect} from '../../sourcing/preparedProspectProjection.ts';
 import type {ManualProspectRow} from '../../sourcing/manualProspectProjection.ts';
-import {residentialFacts} from './support/modelSelections.ts';
 
 const now=Date.parse('2026-10-31T12:00:00.000Z'),candidateId=randomUUID(),runId=randomUUID(),website='https://capture.example.test/';
 const sourceUrl=website+'old',middle='https://www.capture.example.test/new',pageUrl='https://www.capture.example.test/contact';
@@ -23,7 +22,7 @@ function snapshot(pages:SourceObservation[],options:{captured?:SourceObservation
  const manifest=captured.length?buildPreparedCapture(binding,captured.map(source=>({source,trace:{version:'page-redirect-trace-v1',urls:[sourceUrl,middle,source.url]}}))):null;
  const dependencyUrls=manifest?[...new Set(manifest.pages.flatMap(entry=>entry.redirectUrls))].sort():[];
  return {id:runId,candidate_id:candidateId,candidate_revision:1,payload:{firmName:'Capture Property Management',website,sourceUrl,locality:'Columbus',region:'OH',signal:'fit_only',evidence:'Fictional',observedOn:'2026-10-30',preparedBy:'Fixture'},
-  observations:pages,facts:residentialFacts(pages),permitted_urls:options.permitted??[],capture_policy_version:'prepared-source-association-v2',capture_state:'review',prepared_capture:manifest,
+  observations:pages,facts:[],permitted_urls:options.permitted??[],capture_policy_version:'prepared-source-association-v2',capture_state:'review',prepared_capture:manifest,
   prepared_capture_authority:{dependencyUrls,denied:options.denied??false,validUntil:options.validUntil??null},prepared_source_deadlines:options.deadlines??{},
   evidence_authorities:(options.granted??[]).map(source=>({id:randomUUID(),url:source.url,contentHash:source.contentHash,retrievedAt:source.retrievedAt}))};
 }

@@ -9,7 +9,6 @@ import {seedTwoWorkspaces,type TwoWorkspaces} from '../db/support/fixtures.ts';
 import {saveCandidate} from '../../sourcing/candidates.ts';
 import {listPreparedProspects} from '../../sourcing/preparedProspects.ts';
 import {preparedProspectsBusinessSnapshot} from './preparedProspectsPgFixture.ts';
-import {residentialFacts} from './support/modelSelections.ts';
 let db:TestDatabase,seed:TwoWorkspaces,runtime:SessionQueryable;
 const ctx=(session=runtime)=>repositoryContext(workspaceScope(seed.alpha.workspaceId,{kind:'user',userId:seed.alpha.admin.userId,role:'admin'}),session);
 beforeAll(async()=>{db=await createTestDatabase();seed=await seedTwoWorkspaces(db.session);runtime=await db.appRuntimeSession();});
@@ -26,7 +25,7 @@ async function retained(index:number){
  const manifest={version:'prepared-source-association-v2',candidateId,candidateRevision:1,sourceUrl:website,pages:[{observationId:id,url,contentHash,relevantTextHash:contentHash,retrievedAt,redirectUrls:[website,url]}]};
  await runtime.query(`INSERT INTO sourcing_qualification_runs(workspace_id,id,candidate_id,candidate_revision,fingerprint,prompt_version,policy_version,model_name,capture_policy_version)
  VALUES($1,$2,$3,1,$4,'qualification-context-v7','qualification-v5','none','prepared-source-association-v2')`,[seed.alpha.workspaceId,runId,candidateId,createHash('sha256').update(runId).digest('hex')]);
- await runtime.query("UPDATE sourcing_qualification_runs SET state='unavailable',reason='invalid_evidence',observations=$2::jsonb,prepared_capture=$3::jsonb,facts=$4::jsonb,finished_at=clock_timestamp() WHERE id=$1",[runId,JSON.stringify([source]),JSON.stringify(manifest),JSON.stringify(residentialFacts([source]))]);
+ await runtime.query("UPDATE sourcing_qualification_runs SET state='unavailable',reason='invalid_evidence',observations=$2::jsonb,prepared_capture=$3::jsonb,finished_at=clock_timestamp() WHERE id=$1",[runId,JSON.stringify([source]),JSON.stringify(manifest)]);
  return {candidateId,runId};
 }
 async function measure(){
