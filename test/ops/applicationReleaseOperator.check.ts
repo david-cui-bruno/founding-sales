@@ -87,7 +87,7 @@ function cloud(fault = '', onWrite: (action: string) => void = () => {}, artifac
       case 'ecs run-task': reader.owner = value('--started-by'); return JSON.stringify({ failures: [], tasks: [{ taskArn: READER_TASK }] });
       case 'logs get-log-events': return JSON.stringify({ events: [{ message: JSON.stringify({ releaseOff: true, schema: 153, storedOff: true, effectiveOff: true, finishing: 0, versions: [4], observedAt: OBSERVED_AT }) }] });
       case 'ecs deregister-task-definition': reader.status = 'INACTIVE'; return JSON.stringify({ taskDefinition: { taskDefinitionArn: READER, status: 'INACTIVE' } });
-      case 'rds describe-db-instances': return JSON.stringify({ DBInstances: [{ DBInstanceArn: 'arn:aws:rds:us-east-1:326255650484:db:fss-prod-pg', DbiResourceId: 'db-test', DBInstanceStatus: 'available', BackupRetentionPeriod: 35 }] });
+      case 'rds describe-db-instances': return JSON.stringify({ DBInstances: [{ DBInstanceArn: 'arn:aws:rds:us-east-1:326255650484:db:fss-prod-pg', DbiResourceId: 'db-test', DBInstanceStatus: fault === 'backing-up' ? 'backing-up' : 'available', BackupRetentionPeriod: 35, PreferredBackupWindow: fault === 'backup-window-near' ? '21:30-22:00' : '07:30-08:00', PreferredMaintenanceWindow: fault === 'maintenance-window-near' ? 'sat:22:00-sat:23:00' : 'tue:05:00-tue:06:00' }] });
       case 'rds describe-db-instance-automated-backups': return JSON.stringify({ DBInstanceAutomatedBackups: [{ RestoreWindow: { EarliestTime: '2026-09-26T21:43:18+00:00', LatestTime: '2026-10-31T21:43:18+00:00' } }] });
     }
     if (program === 'gh' && args.slice(0, 3).join(' ') === 'api --method GET') {
@@ -190,6 +190,13 @@ describe('preflight', () => {
     const count = stub.calls.length;
     await expect(run.preflight()).rejects.toThrow('observation_already_saved');
     expect(stub.calls).toHaveLength(count);
+  });
+
+  it.each([['backup-window-near', 'backup_window_near'], ['backing-up', 'backup_window_near'], ['maintenance-window-near', 'maintenance_window_near']])('refuses %s before saving, with only read-only cloud calls', async (fault, reason) => {
+    const directory = runDirectory({ 'release-bindings.json': bindings() }), stub = cloud(fault);
+    await expect(operator.createOperator({ directory, run: stub.run, fetchJson: stub.fetchJson, now: () => Date.parse('2026-10-31T21:48:12.586Z') }).preflight()).rejects.toThrow(reason);
+    expect(existsSync(join(directory, 'release-preflight.json'))).toBe(false);
+    expect(stub.calls.filter(c => c[0] === 'aws').every(c => /^(describe|list|get)-/u.test(c[2] ?? ''))).toBe(true);
   });
 
   it('refuses unbound bindings, a schema-changing source, a candidate already live and a mixed runtime before saving', async () => {
