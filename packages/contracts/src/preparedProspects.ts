@@ -25,7 +25,7 @@ export const preparedProspectSummarySchema=z.strictObject({target:preparedProspe
  // ADR0034 company host (lowercase hostname without www.) of the website; grouping, never identity.
  companyHost:z.string().min(1).max(253).regex(/^[a-z0-9.:[\]-]+$/u).nullable()});
 export const preparedProspectListInputSchema=z.strictObject({offset:z.number().int().min(0).max(1000000).default(0),viewRevision:z.string().regex(/^[a-f0-9]{64}$/u).optional(),
- order:z.enum(['priority','newest']).default('priority')})
+ order:z.enum(['priority','callable']).default('priority')})
  .refine(v=>v.offset===0||v.viewRevision!==undefined,'Continuation requires the current view revision');
 export const preparedProspectListSchema=z.strictObject({prospects:z.array(preparedProspectSummarySchema).max(50),hasMore:z.boolean(),viewRevision:z.string().regex(/^[a-f0-9]{64}$/u),checkedAt:instant});
 export const preparedProspectReadInputSchema=preparedProspectTargetSchema;

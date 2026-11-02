@@ -217,22 +217,22 @@ it('does not group records without a website or across distinct directory paths,
 
 const callable:PreparedProspectCallable={state:'callable',missing:[],phone:'(804) 555-0142',person:'Jordan Reyes, Owner',residential:true,businessContext:true,software:false};
 const listUrl='/browser/api/sourcing/prepared-prospects/list';
-it('badges callable rows and Callable today reads newest order, showing only callable rows of this page honestly',async()=>{
+it('badges callable rows and Callable today reads the callable order, showing only callable rows of this page honestly',async()=>{
  const f=await mounted();await screen.findByRole('heading',{name:row().displayName});
  expect(screen.queryByText('Callable',{exact:true})).toBeNull();
  f.rows([row(1),row(2,callable)],true);
  const toggle=screen.getByRole('button',{name:'Callable today'});expect(toggle.getAttribute('aria-pressed')).toBe('false');
  fireEvent.click(toggle);await screen.findByRole('heading',{name:row(2).displayName});
- expect(f.requests.at(-1)).toEqual({url:listUrl,body:{offset:0,order:'newest'}});
+ expect(f.requests.at(-1)).toEqual({url:listUrl,body:{offset:0,order:'callable'}});
  expect(screen.getByRole('button',{name:'Callable today'}).getAttribute('aria-pressed')).toBe('true');
  expect(screen.queryByRole('heading',{name:row(1).displayName})).toBeNull();
  expect(screen.getByText('Callable',{exact:true})).toBeTruthy();
  expect(screen.getByText('Published phone: (804) 555-0142 · Person in sources: Jordan Reyes, Owner · Residential context observed')).toBeTruthy();
  expect(screen.queryByRole('link',{name:/555-0142/u})).toBeNull();
- expect(screen.getByText(/^1 callable company \(one per website host, not repeating earlier pages\) among 2 newest records on this page\..*not permission to call\.$/u)).toBeTruthy();
+ expect(screen.getByText(/^1 callable company on this page, best first across all pages and one per website host\..*not permission to call\.$/u)).toBeTruthy();
  f.rows([row(3)]);fireEvent.click(screen.getByRole('button',{name:'Next companies'}));
- await screen.findByText('No callable companies on this page. Later pages may include more.');
- expect(f.requests.at(-1)).toEqual({url:listUrl,body:{offset:50,viewRevision:revision,order:'newest'}});
+ await screen.findByText('No ranked callable companies. Ranks refresh in the background, so try again shortly.');
+ expect(f.requests.at(-1)).toEqual({url:listUrl,body:{offset:50,viewRevision:revision,order:'callable'}});
  f.rows([row(1),row(2,callable)]);fireEvent.click(screen.getByRole('button',{name:'Callable today'}));
  await screen.findByRole('heading',{name:row(1).displayName});
  expect(f.requests.at(-1)).toEqual({url:listUrl,body:{offset:0}});
@@ -264,43 +264,20 @@ it('offers no Calling action for a brief that is not callable',async()=>{
  expect(within(detail).queryByRole('button',{name:'Open in Calling'})).toBeNull();expect(within(detail).queryByText('Callable',{exact:true})).toBeNull();f.client.dispose();
 });
 
-it('Callable today shows and counts one callable company per host while the normal view keeps every research row',async()=>{
- const f=await mounted();await screen.findByRole('heading',{name:row().displayName});
- const other={...row(3,callable),website:'https://other.example.test/',companyHost:'other.example.test'};
- f.rows([row(1,callable),row(2,callable),other]);
- fireEvent.click(screen.getByRole('button',{name:'Callable today'}));await screen.findByRole('heading',{name:other.displayName});
- expect(screen.getByRole('heading',{name:row(1).displayName})).toBeTruthy();expect(screen.queryByRole('heading',{name:row(2).displayName})).toBeNull();
- expect(screen.getByText(/^2 callable companies \(one per website host, not repeating earlier pages\) among 3 newest records on this page\./u)).toBeTruthy();
- fireEvent.click(screen.getByRole('button',{name:'Callable today'}));await screen.findByRole('heading',{name:row(2).displayName});
- expect(screen.getAllByRole('button',{name:/Open company brief for/iu})).toHaveLength(3);f.client.dispose();
-});
-
-it('Callable today orders callable companies by fit signals above a bare phone-only company, newest first among equals, and says why',async()=>{
+it('Callable today keeps the server order across pages, leaves out a row that is no longer callable and says how it is ordered',async()=>{
  const f=await mounted();await screen.findByRole('heading',{name:row().displayName});
  const at=(index:number,facts:Partial<PreparedProspectCallable>)=>({...row(index,{...callable,...facts}),companyHost:`h${index}.example.test`});
  const bare={residential:false,person:null,businessContext:false};
- f.rows([at(1,bare),at(2,{...bare,businessContext:true}),at(3,{}),at(4,{...bare,software:true}),at(5,bare)]);
+ f.rows([at(3,{}),at(4,{...bare,software:true}),at(2,{...bare,businessContext:true}),row(6),at(1,bare),at(5,bare)],true);
  fireEvent.click(screen.getByRole('button',{name:'Callable today'}));await screen.findByRole('heading',{name:row(3).displayName});
+ expect(f.requests.at(-1)).toEqual({url:listUrl,body:{offset:0,order:'callable'}});
  expect(screen.getAllByRole('heading',{level:3}).map(h=>h.textContent)).toEqual([3,4,2,1,5].map(index=>row(index).displayName));
+ expect(screen.getByText(/^5 callable companies on this page, best first across all pages and one per website host\./u)).toBeTruthy();
  expect(screen.getAllByText(/No property-management wording found/u)).toHaveLength(3);expect(screen.getAllByText(/AppFolio or Buildium named in sources/u)).toHaveLength(1);
- expect(screen.getByText(/ordered by residential context, a named person, AppFolio or Buildium named, then property-management wording, then newest/iu)).toBeTruthy();f.client.dispose();
-});
-
-it('Callable today does not repeat a host across pages of one continuation and Previous reproduces the same result',async()=>{
- const f=await mounted();await screen.findByRole('heading',{name:row().displayName});
- const shared=(index:number)=>({...row(index,callable),website:'https://shared.example.test/',companyHost:'shared.example.test'});
- const first=[...Array.from({length:49},(_,index)=>row(index+1)),shared(50)],other={...row(52,callable),website:'https://other.example.test/',companyHost:'other.example.test'};
- f.rows(first,true);fireEvent.click(screen.getByRole('button',{name:'Callable today'}));await screen.findByRole('heading',{name:shared(50).displayName});
- expect(screen.getByText(/^1 callable company \(one per website host, not repeating earlier pages\) among 50 newest records on this page\./u)).toBeTruthy();
- f.rows([shared(51),other]);fireEvent.click(screen.getByRole('button',{name:'Next companies'}));await screen.findByRole('heading',{name:other.displayName});
- expect(screen.queryByRole('heading',{name:shared(51).displayName})).toBeNull();
- expect(screen.getByText(/^1 callable company \(one per website host, not repeating earlier pages\) among 2 newest records on this page\./u)).toBeTruthy();
- f.rows(first,true);fireEvent.click(screen.getByRole('button',{name:'Previous companies'}));await screen.findByRole('heading',{name:shared(50).displayName});
- f.rows([shared(51),other]);fireEvent.click(screen.getByRole('button',{name:'Next companies'}));await screen.findByRole('heading',{name:other.displayName});
- expect(screen.queryByRole('heading',{name:shared(51).displayName})).toBeNull();
- expect(f.requests.slice(-3).map(r=>r.body)).toEqual([{offset:50,viewRevision:revision,order:'newest'},{offset:0,viewRevision:revision,order:'newest'},{offset:50,viewRevision:revision,order:'newest'}]);
- // A fresh read (toggle off and on) starts a new continuation: the shared host shows again on its first page.
- fireEvent.click(screen.getByRole('button',{name:'Callable today'}));await screen.findByRole('heading',{name:shared(51).displayName});
- fireEvent.click(screen.getByRole('button',{name:'Callable today'}));await screen.findByRole('heading',{name:shared(51).displayName});
- expect(screen.getByText(/^2 callable companies/u)).toBeTruthy();f.client.dispose();
+ expect(screen.getByText(/ordered by residential context, a named person, AppFolio or Buildium named, then property-management wording, then newest/iu)).toBeTruthy();
+ f.rows([at(7,bare)]);fireEvent.click(screen.getByRole('button',{name:'Next companies'}));await screen.findByRole('heading',{name:row(7).displayName});
+ expect(f.requests.at(-1)).toEqual({url:listUrl,body:{offset:50,viewRevision:revision,order:'callable'}});
+ // The normal view keeps every research row.
+ f.rows([row(1),row(2,callable)]);fireEvent.click(screen.getByRole('button',{name:'Callable today'}));await screen.findByRole('heading',{name:row(1).displayName});
+ expect(screen.getAllByRole('button',{name:/Open company brief for/iu})).toHaveLength(2);f.client.dispose();
 });

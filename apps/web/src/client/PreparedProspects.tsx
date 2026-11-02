@@ -1,19 +1,16 @@
 import {useCallback,useEffect,useRef,useState,type JSX,type RefObject} from 'react';
-import {manualProspectListInputSchema,preparedCallableRank,preparedProspectListResponseSchema,preparedProspectReadResponseSchema,type PreparedProspectBrief,type PreparedProspectCallable,type PreparedProspectSummary,type PreparedProspectTarget} from '@fss/contracts';
+import {manualProspectListInputSchema,preparedProspectListResponseSchema,preparedProspectReadResponseSchema,type PreparedProspectBrief,type PreparedProspectCallable,type PreparedProspectSummary,type PreparedProspectTarget} from '@fss/contracts';
 import type {z} from 'zod';
 import {BrowserBoundaryError,type BrowserClient} from './BrowserClient.ts';
 import {groupAdjacentPreparedRecords} from './preparedResearchGroups.ts';
 import type {WorkspaceScreenProps} from './workspaceNavigation.ts';
 import './preparedProspects.css';
 
-type Order='priority'|'newest';
-type Page=Extract<z.infer<typeof preparedProspectListResponseSchema>,{prospects:unknown}> & {offset:number;order:Order;shownBefore:ReadonlySet<string>};
-/** ADR0034: callable companies on this page, best first by preparedCallableRank (ties keep the newest order), one per website host,
- * skipping hosts already shown on earlier pages of this continuation. */
-const callableCompanies=(rows:readonly PreparedProspectSummary[],shownBefore:ReadonlySet<string>)=>{
- const ranked=rows.filter(row=>row.callable.state==='callable').sort((a,b)=>preparedCallableRank(b.callable)-preparedCallableRank(a.callable));
- return ranked.filter((row,index)=>row.companyHost===null||!shownBefore.has(row.companyHost)&&ranked.findIndex(other=>other.companyHost===row.companyHost)===index);
-};
+type Order='priority'|'callable';
+type Page=Extract<z.infer<typeof preparedProspectListResponseSchema>,{prospects:unknown}> & {offset:number;order:Order};
+/** ADR0034: the server orders the callable view across all pages (best rank first, one company per host) from an advisory rank;
+ * every row shown was re-projected for this read, so a row that is no longer callable is left out. */
+const callableCompanies=(rows:readonly PreparedProspectSummary[])=>rows.filter(row=>row.callable.state==='callable');
 type Operation={epoch:number;token:symbol};
 const current=(value:{validUntil:string|null})=>value.validUntil===null||Date.parse(value.validUntil)>Date.now();
 const targetMatches=(left:PreparedProspectTarget,right:PreparedProspectTarget)=>left.candidateId===right.candidateId&&left.candidateRevision===right.candidateRevision&&left.runId===right.runId;
@@ -77,8 +74,6 @@ function CompanyBrief({brief,heading,onOpenCalling}:{brief:PreparedProspectBrief
 /** One bounded candidate page and one exact retained read. No command custody or provider work. */
 export function PreparedProspects({client,onOpenCalling}:{client:BrowserClient;onOpenCalling?:WorkspaceScreenProps['onOpenCalling']}):JSX.Element {
  const mounted=useRef(false),operation=useRef<Operation|null>(null),listHeading=useRef<HTMLHeadingElement>(null),detailHeading=useRef<HTMLHeadingElement>(null),returnFocus=useRef(false);
- // Hosts first shown per offset within one newest continuation (same viewRevision); a fresh read starts over.
- const hostLedger=useRef<{viewRevision:string;byOffset:Map<number,string[]>}|null>(null);
  const [page,setPage]=useState<Page|null>(null),[brief,setBrief]=useState<PreparedProspectBrief|null>(null),[busy,setBusy]=useState<'list'|'detail'|null>(null),[notice,setNotice]=useState(''),[order,setOrder]=useState<Order>('priority');
  const renderEpoch=client.epoch;
  const permitted=()=>client.current?.status==='signed_in'&&client.current.role==='admin';
@@ -88,17 +83,11 @@ export function PreparedProspects({client,onOpenCalling}:{client:BrowserClient;o
   if(!mounted.current||client.current?.status!=='signed_in'||client.current.role!=='admin'||!client.isCurrent(client.epoch)||operation.current)return;
   const held={epoch:client.epoch,token:Symbol('prepared-list')};operation.current=held;setBusy('list');setNotice('');setPage(null);setBrief(null);
   try{
-   const answer=await client.request('/sourcing/prepared-prospects/list',preparedProspectListResponseSchema,{offset,...(viewRevision?{viewRevision}:{}),...(view==='newest'?{order:view}:{})},()=>{if(!active(held))throw new BrowserBoundaryError('refused');});
+   const answer=await client.request('/sourcing/prepared-prospects/list',preparedProspectListResponseSchema,{offset,...(viewRevision?{viewRevision}:{}),...(view==='callable'?{order:view}:{})},()=>{if(!active(held))throw new BrowserBoundaryError('refused');});
    if(!active(held))return;
    if('error' in answer){setNotice(refusalMessage(answer.error));return;}
    if(answer.prospects.some(row=>!current(row))){setNotice(refusalMessage('source_expired'));return;}
-   let shownBefore:ReadonlySet<string>=new Set();
-   if(view==='newest'){
-    const ledger=viewRevision&&hostLedger.current?.viewRevision===answer.viewRevision?hostLedger.current:{viewRevision:answer.viewRevision,byOffset:new Map<number,string[]>()};
-    shownBefore=new Set([...ledger.byOffset].flatMap(([at,hosts])=>at<offset?hosts:[]));
-    ledger.byOffset.set(offset,callableCompanies(answer.prospects,shownBefore).flatMap(row=>row.companyHost?[row.companyHost]:[]));hostLedger.current=ledger;
-   }
-   setPage({...answer,offset,order:view,shownBefore});
+   setPage({...answer,offset,order:view});
   }catch{if(active(held))setNotice('Company research could not be read. Refresh companies to try a current read.');}
   finally{if(operation.current===held){operation.current=null;if(mounted.current)setBusy(null);}}
  },[active,client]);
@@ -143,25 +132,25 @@ export function PreparedProspects({client,onOpenCalling}:{client:BrowserClient;o
  const showingDetail=brief!==null||busy==='detail';
  const prepared=page?.prospects.filter(row=>row.state==='prepared').length??0,needsResearch=(page?.prospects.length??0)-prepared;
  // Research rows stay intact in the normal view; the callable view counts companies, not records.
- const callableToday=page?.order==='newest',rows=page?(callableToday?callableCompanies(page.prospects,page.shownBefore):page.prospects):[];
+ const callableToday=page?.order==='callable',rows=page?(callableToday?callableCompanies(page.prospects):page.prospects):[];
  const chooseOrder=(next:Order)=>{if(busy!==null)return;setOrder(next);void readPage(0,undefined,next);};
  return <section className="prepared-companies" aria-label="Prepared company research" aria-busy={busy!==null}>
   {showingDetail?<div className="prepared-company-detail"><button type="button" onClick={()=>{operation.current=null;returnFocus.current=true;setBrief(null);setBusy(null);setNotice('');}}>Back to companies</button>
    {brief?<CompanyBrief brief={brief} heading={detailHeading} onOpenCalling={openCalling}/>:<p role="status">Opening company brief…</p>}
   </div>:<div className="prepared-companies-surface">
    <div className="prepared-companies-toolbar"><div><h2 ref={listHeading} tabIndex={-1}>Prepared companies</h2><p>Retained business evidence, useful context and what to research next.</p></div>
-    <div className="prepared-companies-actions"><button type="button" aria-pressed={order==='newest'} disabled={busy!==null} onClick={()=>chooseOrder(order==='newest'?'priority':'newest')}>Callable today</button>
+    <div className="prepared-companies-actions"><button type="button" aria-pressed={order==='callable'} disabled={busy!==null} onClick={()=>chooseOrder(order==='callable'?'priority':'callable')}>Callable today</button>
      <button type="button" disabled={busy!==null} onClick={()=>{void readPage(0,undefined,order);}}>Refresh companies</button></div></div>
    {busy==='list'?<div className="prepared-companies-loading" role="status">Reading current companies…</div>:null}
-   {page?<>{callableToday?<p className="prepared-company-note">{rows.length} callable {rows.length===1?'company':'companies'} (one per website host, not repeating earlier pages) among {page.prospects.length} newest records on this page. Ordered by residential context, a named person, AppFolio or Buildium named, then property-management wording, then newest. Callable means a company's own retained pages publish a US phone with no conflicting context; it is research readiness, not permission to call.</p>
+   {page?<>{callableToday?<p className="prepared-company-note">{rows.length} callable {rows.length===1?'company':'companies'} on this page, best first across all pages and one per website host. Ordered by residential context, a named person, AppFolio or Buildium named, then property-management wording, then newest; ranks refresh in the background. Callable means a company's own retained pages publish a US phone with no conflicting context; it is research readiness, not permission to call.</p>
      :<p className="prepared-company-note">{prepared} prepared · {needsResearch} need research on this page. This is research supply, not a contact-ready count.</p>}
     {rows.length?<ul className="prepared-companies-list">{groupAdjacentPreparedRecords(rows).map(records=>records.length===1?<li key={records[0]!.target.candidateId}><ResearchRecord row={records[0]!} busy={busy!==null} onOpen={open}/></li>:<li key={records[0]!.target.candidateId} className="prepared-company-group"><div role="group" aria-label="Records with the same website">
      <p className="prepared-company-note"><strong>Records with the same website</strong> · {records.length} records</p><p className="prepared-company-note">These records have the same exact website and location hints. Original labels remain separate; identities are not merged or confirmed.</p>
      <ul className="prepared-matching-records">{records.map(row=><li key={row.target.candidateId}><ResearchRecord row={row} busy={busy!==null} onOpen={open}/></li>)}</ul>
     </div></li>)}</ul>
-     :<p>{callableToday?'No callable companies on this page. Later pages may include more.':'No permitted company research was returned. Retained review and source inventory remain available for further research.'}</p>}
+     :<p>{callableToday?'No ranked callable companies. Ranks refresh in the background, so try again shortly.':'No permitted company research was returned. Retained review and source inventory remain available for further research.'}</p>}
     <nav className="prepared-companies-pagination" aria-label="Company list pages"><button type="button" disabled={busy!==null||page.offset===0} onClick={()=>{void readPage(Math.max(0,page.offset-50),page.viewRevision,page.order);}}>Previous companies</button>
-     <span>Page {Math.floor(page.offset/50)+1} · Up to 50 {callableToday?'newest records':'companies'}</span><button type="button" disabled={busy!==null||!page.hasMore||page.offset>=1_000_000} onClick={()=>{void readPage(page.offset+50,page.viewRevision,page.order);}}>Next companies</button></nav>
+     <span>Page {Math.floor(page.offset/50)+1} · Up to 50 {callableToday?'ranked companies':'companies'}</span><button type="button" disabled={busy!==null||!page.hasMore||page.offset>=1_000_000} onClick={()=>{void readPage(page.offset+50,page.viewRevision,page.order);}}>Next companies</button></nav>
    </>:null}
    <p className="prepared-company-note">Unknown email, phone, buyer or buying intent can remain unknown. Opening a brief does not create a Firm or authorize outreach.</p>
   </div>}

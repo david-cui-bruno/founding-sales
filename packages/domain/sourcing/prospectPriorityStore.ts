@@ -38,23 +38,32 @@ export async function priorityOrder(ctx:RepositoryContext,state:string,offset:nu
  FROM (SELECT * FROM ordered ORDER BY slot,id LIMIT 51 OFFSET $3) page),'[]'::jsonb) AS rows FROM context`,[ctx.scope.workspaceId,state,offset])).rows[0]!;
  return {rows:answer.rows,viewRevision:answer.view_revision};
 }
+/** The retained research a prepared brief can be read from: the latest run is for the candidate's current revision, was not a
+ * source refusal and holds a first-party page. Shared by the preparation lane and the callable-rank refresh. `r` is that run. */
+export const contextRunSql=(revision:string)=>`r.candidate_revision=${revision} AND COALESCE(r.reason,'') NOT IN ('source_unavailable','source_not_permitted','no_readable_text')
+ AND EXISTS(SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(r.observations)='array' THEN r.observations ELSE '[]'::jsonb END) page WHERE page->'firstParty'='true'::jsonb)`;
 /** Preparation selects only metadata here. Existing priority slots are preserved
  * inside each context lane; retained first-party page presence, including partial
  * pages, is ordering metadata, never source rights or a prepared-state decision.
  * Only admission_checked_at is excluded from the full current run fingerprint.
- * `newest` pages the same permitted pool by discovery record creation; the order
- * is bound into the view revision so a continuation never crosses orders. */
-export async function preparedPriorityOrder(ctx:RepositoryContext,offset:number,order:'priority'|'newest'='priority'):Promise<{rows:PriorityOrderRow[];viewRevision:string}>{
- const sort=order==='newest'?'created_at DESC,id DESC':'context_lane,slot,id';
+ * `callable` pages the companies whose current advisory rank row (ADR0034, sourcing_callable_ranks) says callable, best rank
+ * first, newest then ID, one per company host across the whole list; the rank only orders, every page shown is re-projected.
+ * The order and the rank rows are bound into the view revision so a continuation never crosses orders or a rank refresh. */
+export async function preparedPriorityOrder(ctx:RepositoryContext,offset:number,order:'priority'|'callable'='priority'):Promise<{rows:PriorityOrderRow[];viewRevision:string}>{
+ const sort=order==='callable'?'callable_rank DESC,created_at DESC,id':'context_lane,slot,id';
+ const source=order==='callable'?'picked':'preparation';
  const answer=(await ctx.db.query<{rows:PriorityOrderRow[];view_revision:string}>(`${pool}, preparation AS (
- SELECT ordered.*,r.id AS latest_run_id,r.preparation_key,
- CASE WHEN r.candidate_revision=ordered.revision AND COALESCE(r.reason,'') NOT IN ('source_unavailable','source_not_permitted','no_readable_text')
- AND EXISTS(SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(r.observations)='array' THEN r.observations ELSE '[]'::jsonb END) page WHERE page->'firstParty'='true'::jsonb) THEN 0 ELSE 1 END AS context_lane
+ SELECT ordered.*,r.id AS latest_run_id,r.preparation_key,h.rank AS callable_rank,h.company_host,
+ CASE WHEN ${contextRunSql('ordered.revision')} THEN 0 ELSE 1 END AS context_lane
  FROM ordered LEFT JOIN LATERAL(SELECT id,candidate_revision,reason,observations,encode(sha256(convert_to((to_jsonb(r)-'admission_checked_at')::text,'UTF8')),'hex') AS preparation_key FROM sourcing_qualification_runs r WHERE r.workspace_id=$1 AND r.candidate_id=ordered.id ORDER BY requested_at DESC,id DESC LIMIT 1) r ON true
+ LEFT JOIN sourcing_callable_ranks h ON h.workspace_id=$1 AND h.candidate_id=ordered.id AND h.candidate_revision=ordered.revision AND h.run_id=r.id AND h.expires_at>clock_timestamp()
+ ), picked AS (
+ SELECT preparation.* FROM (SELECT preparation.*,row_number() OVER(PARTITION BY COALESCE(company_host,id::text) ORDER BY callable_rank DESC,created_at DESC,id) AS host_n
+  FROM preparation WHERE callable_rank IS NOT NULL) preparation WHERE host_n=1
  ), preparation_context AS (
- SELECT encode(sha256(convert_to($4::text||context.view_revision||COALESCE((SELECT string_agg(jsonb_build_array(id,latest_run_id,preparation_key,context_lane)::text,'' ORDER BY id) FROM preparation),''),'UTF8')),'hex') AS view_revision FROM context
+ SELECT encode(sha256(convert_to($4::text||context.view_revision||COALESCE((SELECT string_agg(jsonb_build_array(id,latest_run_id,preparation_key,context_lane,CASE WHEN $4='callable' THEN callable_rank END,CASE WHEN $4='callable' THEN company_host END)::text,'' ORDER BY id) FROM preparation),''),'UTF8')),'hex') AS view_revision FROM context
  ) SELECT preparation_context.view_revision,COALESCE((SELECT jsonb_agg(jsonb_build_object('id',id,'revision',revision,'assessment_revision',assessment_revision,'fit',fit,'value',value,'timing',timing,'source_url',source_url,'roles',COALESCE(roles,'[]'),'decided_at',decided_at,'expires_at',expires_at,'last_considered_at',last_considered_at,'considered_count',considered_count) ORDER BY ${sort})
- FROM(SELECT * FROM preparation ORDER BY ${sort} LIMIT 51 OFFSET $3) page),'[]'::jsonb) AS rows FROM preparation_context`,[ctx.scope.workspaceId,'all',offset,order])).rows[0]!;
+ FROM(SELECT * FROM ${source} ORDER BY ${sort} LIMIT 51 OFFSET $3) page),'[]'::jsonb) AS rows FROM preparation_context`,[ctx.scope.workspaceId,'all',offset,order])).rows[0]!;
  return {rows:answer.rows,viewRevision:answer.view_revision};
 }
 export async function priorityAssessment(ctx:RepositoryContext,candidateId:string):Promise<PriorityRow|null>{
