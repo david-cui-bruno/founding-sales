@@ -4,17 +4,23 @@ import type {JobSpecification} from '@fss/domain/jobs/jobStore.ts';
 import {jobIdempotencyKey} from '@fss/domain/jobs/jobKinds.ts';
 import {runPeopleEnrichment} from '@fss/domain/outreach/peopleEnrichment.ts';
 import type {PeopleProvider} from '@fss/domain/outreach/peopleProvider.ts';
+import {runAddressGuessing,type AddressVerifier} from '@fss/domain/outreach/addressGuess.ts';
+import type {EmailVerifier} from '@fss/domain/outreach/emailVerification.ts';
 import type {DueWorkSource} from '../scheduler/schedulerPass.ts';
 import type {Logger} from '../bootstrap/log.ts';
 
-/** ADR0036/0037. The domain owns every reservation, call, cap and commit. An `outbound_fence` handler runs outside any transaction, so each
- * reservation commits before a paid call and each settlement on its own: a crash never lets a company be paid for twice. */
-export function personEnrichHandler(deps:{provider:PeopleProvider;log?:Logger}):JobHandler {
+/** ADR0036/0037/0038. The domain owns every reservation, call, cap and commit. An `outbound_fence` handler runs outside any transaction, so each
+ * reservation commits before a paid call and each settlement on its own: a crash never lets a company be paid for twice. The free own-site read runs first; then, only where
+ * the worker holds a verifier key (`guess`), the one guessed `first@host` of each named person who has no published address is checked (paid, under the daily cap). */
+export function personEnrichHandler(deps:{provider:PeopleProvider;guess?:{verifier:AddressVerifier;mailDomain:EmailVerifier};log?:Logger}):JobHandler {
  return {kind:'outreach.person_enrich',protection:'outbound_fence',maxAttempts:1,leaseSeconds:120,
   handle:async input=>{
-   const pass=await runPeopleEnrichment(repositoryContext(input.scope,input.session),{provider:deps.provider});
+   const context=repositoryContext(input.scope,input.session),pass=await runPeopleEnrichment(context,{provider:deps.provider});
    // Counts and a provider failure code only: no company, person, address or provider text.
    if(deps.log&&(pass.looked||pass.halted))try{deps.log.log(pass.halted?'warn':'info','people_enrichment',{looked:pass.looked,found:pass.found,none:pass.none,credits:pass.credits,halted:pass.halted,stopped:pass.stopped});}catch{ /* A log sink cannot change enrichment custody. */ }
+   if(!deps.guess)return;
+   const guessed=await runAddressGuessing(context,deps.guess);
+   if(deps.log&&(guessed.looked||guessed.refused||guessed.halted))try{deps.log.log(guessed.halted?'warn':'info','address_guessing',{looked:guessed.looked,verified:guessed.verified,refused:guessed.refused,credits:guessed.credits,halted:guessed.halted,stopped:guessed.stopped});}catch{ /* A log sink cannot change guess custody. */ }
   }};
 }
 

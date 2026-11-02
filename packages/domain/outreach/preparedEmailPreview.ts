@@ -19,7 +19,7 @@ export async function previewPreparedEmailAdmission(ctx:RepositoryContext,input:
   if(!payload)continue;
   const recorded=await latestEmailVerification(ctx,person.email);
   candidates.push({candidateId:read.candidateId,host:read.host,companyName:read.businessName,website:payload.website,locality:read.locality,region:read.region as EmailCampaignPreparedPreview['candidates'][number]['region'],
-   person:{firstName:person.firstName,lastName:person.lastName,title:person.title,email:person.email,emailStatus:person.emailStatus==='published'?'published':'verified',matchConfidence:person.matchConfidence,provider:person.provider,observedAt:person.observedAt.toISOString(),creditsSpent:person.credits,source:person.source},
+   person:{firstName:person.firstName,lastName:person.lastName,title:person.title,email:person.email,emailStatus:person.emailStatus==='published'||person.emailStatus==='verified_guess'?person.emailStatus:'verified',matchConfidence:person.matchConfidence,provider:person.provider,observedAt:person.observedAt.toISOString(),creditsSpent:person.credits,source:person.source},
    verification:recorded&&{result:recorded.result,outcome:recorded.outcome,checkedAt:recorded.checkedAt.toISOString()}});
  }
  return {candidates,awaitingEnrichment:await countAwaitingEnrichment(ctx,input.regions),namedWithoutEmail:await countNamedWithoutEmail(ctx)};

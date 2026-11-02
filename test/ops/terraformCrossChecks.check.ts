@@ -153,12 +153,33 @@ describe('g81: every task gets the secrets its process reads', () => {
   it('hands the classifier key over under the name the classifier reads, and only in production', () => {
     const reads = CLASSIFIER_SECRET_ENVIRONMENT_VARIABLES.llm_classifier_api_key;
     expect(reads).toBe('FSS_LLM_CLASSIFIER_API_KEY');
-    expect(CLUSTER).toContain(`    "llm-classifier-api-key" = "${reads}"\n`);
+    expect(CLUSTER).toContain(`    "llm-classifier-api-key"  = "${reads}"\n`);
     expect(WORKER_VARIABLES.classifierApiKey).toBe(reads);
     // Held back from the worker unless the root says it reads it, and the stack says
     // so for production alone.
-    expect(CLUSTER).toContain('if !contains(["llm-classifier-api-key", "sourcing-search"], name) || var.worker_reads_classifier_key');
+    expect(CLUSTER).toContain('if(name != "millionverifier-api-key" || var.worker_reads_millionverifier_api_key)');
+    expect(CLUSTER).toContain('(!contains(["llm-classifier-api-key", "sourcing-search"], name) || var.worker_reads_classifier_key)');
     expect(STACK).toContain('  worker_reads_classifier_key = local.is_production\n');
+  });
+
+  // ADR0038, two stages. ECS refuses a task whose secret has no value, so the empty `millionverifier-api-key` container is always created but the worker is handed it
+  // only when the committed production literal is true, a separate change made after Root has installed the value.
+  it('creates the millionverifier key container always and injects it into the worker only behind the committed second-stage flag', () => {
+    expect(readRepositoryFile('infra/modules/cluster/variables.tf')).toMatch(/variable "worker_reads_millionverifier_api_key" \{[\s\S]*?default\s+= false/u);
+    expect(readRepositoryFile('infra/modules/stack/variables.tf')).toMatch(/variable "worker_reads_millionverifier_api_key" \{[\s\S]*?default\s+= false/u);
+    expect(STACK).toContain('worker_reads_millionverifier_api_key = var.worker_reads_millionverifier_api_key');
+    const production = readRepositoryFile('infra/roots/production/main.tf');
+    expect(production).toMatch(/^ {2}worker_reads_millionverifier_api_key = (?:false|true)$/mu);
+    expect(production).toContain('worker_reads_millionverifier_api_key = local.worker_reads_millionverifier_api_key');
+    expect(DEFAULT_SECRET_NAMES).toContain('millionverifier-api-key');
+  });
+
+  it('keeps the MillionVerifier key on the worker alone, under the name the verifier reads', () => {
+    expect(WORKER).toContain('millionverifier-api-key');
+    expect(API).not.toContain('millionverifier-api-key');
+    expect(OPERATIONS).not.toContain('millionverifier-api-key');
+    expect(CLUSTER).toContain('    "millionverifier-api-key" = "FSS_MILLIONVERIFIER_API_KEY"\n');
+    expect(readRepositoryFile('apps/worker/src/providers/millionVerifier.ts')).toContain("'FSS_MILLIONVERIFIER_API_KEY'");
   });
 
   it('names only secrets the secrets module creates, and leaves none unassigned', () => {

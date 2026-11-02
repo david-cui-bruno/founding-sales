@@ -312,6 +312,9 @@ module "cluster" {
   # rehearsal worker holding it would call the provider with a key that cannot work.
   worker_reads_classifier_key = local.is_production
 
+  # ADR0038, stage two: the MillionVerifier key reaches the worker only once it holds a value.
+  worker_reads_millionverifier_api_key = var.worker_reads_millionverifier_api_key
+
   # Slice BR1: production sends the Claude calls of the models Bedrock serves for this
   # account (Haiku 4.5) through Amazon Bedrock, paid from credits; any other model keeps
   # the direct API. A rehearsal keeps the old default: its worker holds no classifier

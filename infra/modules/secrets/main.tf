@@ -34,6 +34,10 @@ locals {
     # worker alone reads it (`apps/worker/src/transcription/deepgramClient.ts`); the API
     # learns from the worker's heartbeat whether it is in place. `{}` until a key exists.
     "transcription",
+    # Guessed-address verification (ADR0038): the MillionVerifier API key as a bare string, not JSON. The
+    # worker alone reads it (`apps/worker/src/providers/millionVerifier.ts`); the container is created
+    # empty and the key is entered once by hand, so the worker verifies nothing until it is.
+    "millionverifier-api-key",
     # The two database identities (G12h, David's condition of 21 September).
     # Separate entries because the point is that the identity which may read one
     # may not read the other: `infra/modules/cluster` gives the first to the

@@ -284,6 +284,54 @@ run "the_worker_reads_the_classifier_key_under_the_name_the_classifier_reads" {
   }
 }
 
+# ADR0038, two stages: the millionverifier-api-key entry exists in both, and the worker is handed it as FSS_MILLIONVERIFIER_API_KEY only when
+# worker_reads_millionverifier_api_key is true (after the value is installed), whatever the classifier flag says. The API never gets it.
+run "the_worker_is_not_handed_the_millionverifier_key_in_stage_one" {
+  command = plan
+
+  variables {
+    worker_reads_classifier_key = true
+    secret_arns = {
+      "millionverifier-api-key"   = "arn:aws:secretsmanager:us-east-1:123456789012:secret:fss-test/millionverifier-api-key-hhhhhh"
+      "google-gmail-oauth-client" = "arn:aws:secretsmanager:us-east-1:123456789012:secret:fss-test/google-gmail-oauth-client-eeeeee"
+      "session-signing-key"       = "arn:aws:secretsmanager:us-east-1:123456789012:secret:fss-test/session-signing-key-aaaaaa"
+    }
+  }
+
+  assert {
+    condition     = output.task_secret_names.worker == tolist(["DATABASE_SECRET_ARN", "google-gmail-oauth-client"])
+    error_message = "Stage one: the worker task names no millionverifier-api-key reference, so ECS can start it while the entry is empty."
+  }
+}
+
+run "the_worker_reads_the_millionverifier_key_in_stage_two_and_the_api_never_does" {
+  command = plan
+
+  variables {
+    worker_reads_millionverifier_api_key = true
+    secret_arns = {
+      "millionverifier-api-key"   = "arn:aws:secretsmanager:us-east-1:123456789012:secret:fss-test/millionverifier-api-key-hhhhhh"
+      "google-gmail-oauth-client" = "arn:aws:secretsmanager:us-east-1:123456789012:secret:fss-test/google-gmail-oauth-client-eeeeee"
+      "session-signing-key"       = "arn:aws:secretsmanager:us-east-1:123456789012:secret:fss-test/session-signing-key-aaaaaa"
+    }
+  }
+
+  assert {
+    condition     = output.task_secret_names.worker == tolist(["DATABASE_SECRET_ARN", "FSS_MILLIONVERIFIER_API_KEY", "google-gmail-oauth-client"])
+    error_message = "Stage two: the worker is handed the millionverifier-api-key entry as FSS_MILLIONVERIFIER_API_KEY, independent of the classifier flag."
+  }
+
+  assert {
+    condition = alltrue(flatten([
+      for definition in [aws_ecs_task_definition.api, aws_ecs_task_definition.operations] : [
+        for reference in jsondecode(definition.container_definitions)[0].secrets :
+        reference.name != "FSS_MILLIONVERIFIER_API_KEY"
+      ]
+    ]))
+    error_message = "Only the worker enriches people, so only the worker holds the MillionVerifier key."
+  }
+}
+
 run "a_secret_no_process_reads_is_refused" {
   command = plan
 

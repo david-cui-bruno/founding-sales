@@ -59,7 +59,8 @@ export const emailCampaignPreparedPreviewSchema = z.strictObject({
     locality: z.string().max(120), region: usBusinessRegionSchema,
     person: z.strictObject({
       firstName: z.string().max(100), lastName: z.string().max(100), title: z.string().max(200), email: z.string().max(320),
-      emailStatus: z.enum(['verified', 'published']), matchConfidence: z.enum(['high', 'medium']), provider: z.string().max(32), observedAt: instant, creditsSpent: z.number().int().min(0).max(9),
+      /** `verified_guess` (ADR0038): not a published address: the company's host with the person's first name, kept only because a paid single-address check answered ok. */
+      emailStatus: z.enum(['verified', 'published', 'verified_guess']), matchConfidence: z.enum(['high', 'medium']), provider: z.string().max(32), observedAt: instant, creditsSpent: z.number().int().min(0).max(9),
       /** An own-site person's citation (ADR0037): the company page and the words the name, title and address were read from. Null for a provider's person. */
       source: z.strictObject({ url: z.string().max(2048), blockId: z.string().max(64), quote: z.string().max(600) }).nullable(),
     }),

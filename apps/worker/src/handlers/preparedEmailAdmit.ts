@@ -3,16 +3,17 @@ import type {JobHandler} from '@fss/domain/jobs/handlerRegistry.ts';
 import type {JobSpecification} from '@fss/domain/jobs/jobStore.ts';
 import {jobIdempotencyKey} from '@fss/domain/jobs/jobKinds.ts';
 import type {EmailVerifier} from '@fss/domain/outreach/emailVerification.ts';
+import type {AddressVerifier} from '@fss/domain/outreach/addressGuess.ts';
 import {runPreparedEmailAdmission} from '@fss/domain/outreach/preparedEmailAdmission.ts';
 import type {DueWorkSource} from '../scheduler/schedulerPass.ts';
 import type {Logger} from '../bootstrap/log.ts';
 
-/** ADR0035. The domain owns every check, lock and commit. An `outbound_fence` handler runs outside any transaction, so the DNS check
- * and its record commit on their own before any admission lock, and each admission opens its own transaction on this session. */
-export function preparedEmailAdmitHandler(deps:{verifier:EmailVerifier;log?:Logger}):JobHandler {
+/** ADR0035/0038. The domain owns every check, lock and commit. An `outbound_fence` handler runs outside any transaction, so the DNS check
+ * and its record commit on their own before any admission lock, and each admission opens its own transaction on this session. `paid` is the optional paid single-address check of a published address. */
+export function preparedEmailAdmitHandler(deps:{verifier:EmailVerifier;paid?:AddressVerifier;log?:Logger}):JobHandler {
  return {kind:'outreach.email_admit',protection:'outbound_fence',maxAttempts:1,leaseSeconds:120,
   handle:async input=>{
-   const pass=await runPreparedEmailAdmission(repositoryContext(input.scope,input.session),{verifier:deps.verifier});
+   const pass=await runPreparedEmailAdmission(repositoryContext(input.scope,input.session),{verifier:deps.verifier,...deps.paid?{paid:deps.paid}:{}});
    // Counts only: no address, company or provider text.
    if(deps.log&&(pass.admitted||pass.checked||pass.failed))try{deps.log.log(pass.failed?'warn':'info','prepared_email_admission',{admitted:pass.admitted,checked:pass.checked,failed:pass.failed});}catch{ /* A log sink cannot change admission custody. */ }
   }};

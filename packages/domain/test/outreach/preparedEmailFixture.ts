@@ -15,6 +15,7 @@ import {createSequence,createDraftVersion,publishVersion} from '../../sequences/
 import {dnsEmailVerifier,type EmailVerifier} from '../../outreach/emailVerification.ts';
 import {runPreparedEmailAdmission} from '../../outreach/preparedEmailAdmission.ts';
 import {runPeopleEnrichment} from '../../outreach/peopleEnrichment.ts';
+import {runAddressGuessing,type AddressCheck,type AddressVerifier} from '../../outreach/addressGuess.ts';
 import {ownSitePeople} from '../../outreach/ownSitePeople.ts';
 import type {PeopleLookup,PeopleProvider,ProviderPerson} from '../../outreach/peopleProvider.ts';
 import {updateSetting} from '../../settings/store.ts';
@@ -23,6 +24,8 @@ import {researchPageFetch,type RawResponse} from '../../../../apps/worker/src/re
 
 /** A verified decision-maker answer for `host`; `patch` changes any person field. Never a real provider. */
 export const ownerAt=(host:string,patch:Partial<ProviderPerson>={},creditsUsed=1):PeopleLookup=>({ok:true,creditsUsed,person:{providerPersonId:`p-${host}`,firstName:'Jordan',lastName:'Blake',title:'Owner',email:`jordan.blake@${host}`,emailStatus:'verified',matchConfidence:'high',...patch}});
+/** A fake paid address verifier (ADR0038): answers `answer(address)` (default `ok`) and records every address it was asked about. Never a real provider. */
+export function fakeAddressVerifier(answer:(address:string)=>AddressCheck|Promise<AddressCheck>=()=>({ok:true,verdict:'ok'})){const calls:string[]=[];const verifier:AddressVerifier={check:async address=>{calls.push(address);return answer(address);}};return {verifier,calls};}
 /** A fake people provider that records every host it was asked about and answers `answer(host)` (default: the verified owner above). */
 export function fakePeople(answer:(host:string)=>PeopleLookup=ownerAt){const calls:string[]=[];const provider:PeopleProvider={providerKey:'fake_people',maxCreditsPerLookup:1,findDecisionMaker:async({domain})=>{calls.push(domain);return answer(domain);}};return {provider,calls};}
 /** ADR0035/0036 fixture: a real approved email campaign (mailbox, booking link, postal address, five approved touches) and real own-site
@@ -56,7 +59,9 @@ export async function preparedEmailWorld(options:{opening?:boolean;regions?:stri
   return {candidateId:saved.value.id,runId:target.runId,domain};
  }
  const admissions=async()=>(await runtime.query<{address:string;source_kind:string;region:string}>("SELECT r.address,a.source_kind,c.payload->>'region' AS region FROM outreach_email_campaign_admissions a JOIN email_addresses r ON r.workspace_id=a.workspace_id AND r.id=a.route_id JOIN sourcing_candidates c ON c.workspace_id=a.workspace_id AND c.id=a.candidate_id WHERE a.workspace_id=$1 ORDER BY r.address",[ws])).rows;
- const pass=(v:EmailVerifier=verifier)=>runPreparedEmailAdmission(ctx(true),{verifier:v});
+ const pass=(v:EmailVerifier=verifier,paid?:AddressVerifier)=>runPreparedEmailAdmission(ctx(true),{verifier:v,...paid?{paid}:{}});
+ /** The guess-and-verify step (ADR0038) with a fake paid verifier and the fixture's good-MX resolver unless `mailDomain` says otherwise. */
+ const guess=(paid:AddressVerifier,mailDomain:EmailVerifier=verifier)=>runAddressGuessing(ctx(true),{verifier:paid,mailDomain});
  const setPeople=(value:{enabled:boolean;dailyCredits:number})=>tx(()=>updateSetting(ctx(),{settingKey:'people_enrichment',value}));
  const enrich=(people:{provider:PeopleProvider}=fakePeople())=>runPeopleEnrichment(ctx(true),people);
  /** The real own-site source (ADR0037) over the retained captures: free, no provider fake. */
@@ -82,5 +87,5 @@ export async function preparedEmailWorld(options:{opening?:boolean;regions?:stri
  const openingInput=async()=>{const baseline=(await readCampaignOpeningControl(ctx(),{campaignId},allow))!.baseline!;return {campaignId,expectedCampaignRevision:1,templateVersionId:baseline.templateVersionId,templateContentHash:baseline.templateContentHash,variants:[{id:'local',text:'I noticed {{firm_name}} serves {{firm_locality}}, {{firm_region}}.'}],expiresAt:policy.expiresAt};};
  const approveOpening=async()=>tx(async()=>approveCampaignOpening(ctx(),await openingInput(),allow));
  if(options.opening){const opened=await approveOpening();if(!opened.ok)throw Error(opened.reason);}
- return {db,seed,runtime,ws,ctx,tx,prepared,admissions,pass,enrich,enrichOwnSite,setPeople,campaignId,approveOpening,stop:()=>db.drop()};
+ return {db,seed,runtime,ws,ctx,tx,prepared,admissions,pass,guess,enrich,enrichOwnSite,setPeople,campaignId,approveOpening,stop:()=>db.drop()};
 }

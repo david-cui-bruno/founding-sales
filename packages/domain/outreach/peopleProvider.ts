@@ -10,6 +10,10 @@ import {CONSUMER_EMAIL_DOMAINS} from './consumerEmailDomains.ts';
  * and what it may spend. */
 /** The source that reads a company's own retained pages (ADR0037): free, and read again when its person expires or the candidate changes. */
 export const OWN_SITE_PROVIDER='own_site';
+/** ADR0038. The custody provider key of the paid single-address check (MillionVerifier): one row per candidate, for the ONE guessed `first@host` of a named person who has no published address, or for the one check of a published address. */
+export const MILLIONVERIFIER_PROVIDER='millionverifier';
+/** Why a guess or a check of one address is not an address: the verifier's answer (`verdict_*`, an `ok` of a published address is recorded too), or the company's host has no mail domain (a free DNS refusal, nothing spent). */
+export type AddressRefusal='verdict_ok'|'verdict_catch_all'|'verdict_unknown'|'verdict_invalid'|'verdict_disposable'|'no_mail_domain';
 export type PeopleEmailStatus='verified'|'published'|'unverified'|'unavailable';
 export type PeopleMatchConfidence='high'|'medium'|'low'|'none';
 /** Where the company's own page published the person: the page, the block and the words (a citation, never a model's paraphrase). */
@@ -58,9 +62,9 @@ export function personalAddressAtHost(address:string,companyHost:string):{ok:tru
  if(parsed.domain!==hostOf(companyHost))return {ok:false,reason:'domain_mismatch'};
  return {ok:true,email:`${parsed.localPart}@${parsed.domain}`};
 }
-/** `verified`: a provider verified the address; `published`: the company's own page published it next to the person's name (ADR0037); `unavailable`: a named decision-maker, cited from the company's own page, with no usable address (kept for Calling, never emailed). */
-export type AcceptedEmailStatus='verified'|'published'|'unavailable';
-export interface AcceptedPerson {providerPersonId:string;firstName:string;lastName:string;title:string;email:string|null;emailStatus:AcceptedEmailStatus;confidence:Exclude<PeopleMatchConfidence,'low'|'none'>;source?:PersonSource}
+/** `verified`: a provider verified the address; `published`: the company's own page published it next to the person's name (ADR0037); `verified_guess`: the address is NOT published by the company: it is `first@host`, guessed by this system and kept only because a paid single-address check answered `ok` (ADR0038); `unavailable`: a named decision-maker, cited from the company's own page, with no usable address (kept for Calling, never emailed). */
+export type AcceptedEmailStatus='verified'|'published'|'verified_guess'|'unavailable';
+export interface AcceptedPerson {providerPersonId:string;firstName:string;lastName:string;title:string;email:string|null;emailStatus:AcceptedEmailStatus;confidence:Exclude<PeopleMatchConfidence,'low'|'none'>;source?:Omit<PersonSource,'observationId'>}
 export type PersonRefusal='no_person'|'unverified'|'low_confidence'|'no_name'|'title'|'invalid_email'|'role_address'|'consumer_domain'|'domain_mismatch';
 /** The one acceptance rule: a medium or high match, a real first and last name (never an initial), a decision-maker title and, when there is
  * an address, a verified or own-page-published personal-name mailbox at the company's own host (never a role, consumer or other-domain

@@ -3,7 +3,7 @@ import type {RepositoryContext} from '../db/workspaceScope.ts';
 /** ADR0036/0037. A found person is current for thirty days. */
 export const PEOPLE_CONTACT_VALID_DAYS=30;
 /** A named decision-maker found for this exact candidate revision (a people-data provider's, or the company's own pages: `own_site`). `email` is a verified or own-page-published personal address at the company's own host, or null for a person who is named but has no address (shown to Calling, never admitted). `source` is the page citation of an own-site person. */
-export interface PeopleContact {id:string;candidateId:string;candidateRevision:number;host:string;provider:string;providerPersonId:string;firstName:string;lastName:string;title:string;email:string|null;emailStatus:'verified'|'published'|'unavailable';source:{url:string;blockId:string;quote:string}|null;matchConfidence:'high'|'medium';credits:number;observedAt:Date;expiresAt:Date}
+export interface PeopleContact {id:string;candidateId:string;candidateRevision:number;host:string;provider:string;providerPersonId:string;firstName:string;lastName:string;title:string;email:string|null;emailStatus:'verified'|'published'|'verified_guess'|'unavailable';source:{url:string;blockId:string;quote:string}|null;matchConfidence:'high'|'medium';credits:number;observedAt:Date;expiresAt:Date}
 interface ContactRow extends Record<string,unknown>{id:string;candidate_id:string;candidate_revision:number;host:string;provider:string;provider_person_id:string;first_name:string;last_name:string;title:string;email:string|null;email_status:PeopleContact['emailStatus'];source_url:string|null;source_block_id:string|null;source_quote:string|null;match_confidence:'high'|'medium';credits:number;observed_at:Date;expires_at:Date}
 const view=(row:ContactRow):PeopleContact=>({id:row.id,candidateId:row.candidate_id,candidateRevision:row.candidate_revision,host:row.host,provider:row.provider,providerPersonId:row.provider_person_id,firstName:row.first_name,lastName:row.last_name,title:row.title,email:row.email,emailStatus:row.email_status,source:row.source_url===null?null:{url:row.source_url,blockId:row.source_block_id!,quote:row.source_quote!},matchConfidence:row.match_confidence,credits:row.credits,observedAt:row.observed_at,expiresAt:row.expires_at});
 /** The found lookup (spend custody) joined to the provider person's copy; an erased person leaves the lookup `found` but joins to nothing. */
@@ -21,7 +21,8 @@ export async function currentPeopleContact(ctx:RepositoryContext,candidateId:str
  return row?view(row):null;
 }
 
-/** Companies whose current named person has no published address (ADR0037): named for Calling, not emailable. Workspace-wide and advisory. */
+/** Companies whose current named person has no address (ADR0037): named for Calling, not emailable. A company that also holds a current guessed, verified address (ADR0038) is emailable and not counted. Workspace-wide and advisory. */
 export async function countNamedWithoutEmail(ctx:RepositoryContext):Promise<number>{
- return Number((await ctx.db.query<{n:string}>(`SELECT count(DISTINCT p.candidate_id)::text AS n FROM ${FROM} WHERE p.workspace_id=$1 AND q.email IS NULL AND ${CURRENT}`,[ctx.scope.workspaceId])).rows[0]!.n);
+ return Number((await ctx.db.query<{n:string}>(`SELECT count(DISTINCT p.candidate_id)::text AS n FROM ${FROM} WHERE p.workspace_id=$1 AND q.email IS NULL AND ${CURRENT}
+  AND NOT EXISTS(SELECT 1 FROM outreach_people_lookups g JOIN outreach_people_contacts h ON h.workspace_id=g.workspace_id AND h.lookup_id=g.id WHERE g.workspace_id=p.workspace_id AND g.candidate_id=p.candidate_id AND h.email IS NOT NULL AND g.state='found' AND g.expires_at>clock_timestamp())`,[ctx.scope.workspaceId])).rows[0]!.n);
 }
