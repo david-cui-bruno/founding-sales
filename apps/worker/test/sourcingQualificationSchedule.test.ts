@@ -18,7 +18,7 @@ import {HandlerRegistry} from '@fss/domain/jobs/handlerRegistry.ts';
 import {runOnce} from '../src/runner/jobRunner.ts';
 import {sourcingMonitorSource} from '../src/handlers/sourcingMonitor.ts';
 let db:TestDatabase;let workspaceId:string;
-it('never schedules tagged raw discovery even if historical state says kept or ready',async()=>{
+it('never schedules a tagged raw payload that is not a researchable Overture row, even if historical state says kept or ready',async()=>{
  const f=await versionFixture();try{
   const candidate=await f.candidate('discovery-fence',{prompt:'qualification-context-v6'});
   await f.session.query(`UPDATE sourcing_candidates SET payload='{"kind":"discovery-v1"}'::jsonb,next_source_check_at=now()-interval '1 day' WHERE id=$1`,[candidate.id]);

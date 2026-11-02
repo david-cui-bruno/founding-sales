@@ -17,7 +17,7 @@ import type {PageFetchProvider,FetchedPage} from '../research/providers.ts';
 import {finishQualification,QUALIFICATION_PROMPT_VERSION,QUALIFICATION_POLICY_VERSION,type QualificationRunRow} from './qualificationStore.ts';
 import {QUALIFICATION_OUTPUT_TOKENS,type QualificationExtractionProvider,type QualificationExtractionOutcome,type QualificationExtractionRequest} from './qualificationPrompt.ts';
 import {normalizeQualificationDiagnostic,type QualificationDiagnostic,type QualificationDiagnosticPhase} from './qualificationDiagnostics.ts';
-import {isCurrentPreparedCandidatePayload} from './discoveryIntake.ts';
+import {preparedCandidatePayload} from './discoveryIntake.ts';
 import {retainedCandidateOnly} from './retainedAcquisition.ts';
 import {LEGACY_QUALIFICATION_PRODUCER,PREPARED_IDENTITY_PRODUCER,type PreparedIdentityProof} from './preparedIdentity.ts';
 import {preparedIdentityProducerAuthority} from './preparedIdentityAuthority.ts';
@@ -31,7 +31,7 @@ const readSql=`SELECT r.*,c.payload,c.revision AS current_revision,c.status AS c
 async function allowed(ctx:RepositoryContext,runId:string):Promise<Run|null>{
  const row=(await ctx.db.query<Run>(readSql,[ctx.scope.workspaceId,runId])).rows[0];
  if(row&&(row['retained_identity_decision_id']||await retainedCandidateOnly(ctx,row.candidate_id)))return null;
- if(row&&!isCurrentPreparedCandidatePayload(row.payload))return null;
+ if(row){const prepared=preparedCandidatePayload(row.payload);if(!prepared)return null;row.payload=prepared;}
  if(!row||!['pending','running'].includes(row.state)||row.candidate_status==='dismissed'||row.current_revision!==row.candidate_revision||row.deadline_at.getTime()<=Date.parse(await databaseNow(ctx)))return null;
  if(!(await readResearchSettings(ctx)).enabled||(await listApplicableHolds(ctx,{actionKind:'research',channel:'research'})).length)return null;
  const producer=row['producer_version']===undefined?LEGACY_QUALIFICATION_PRODUCER:row['producer_version'];
@@ -113,7 +113,7 @@ export async function runQualification(ctx:RepositoryContext,input:{runId:string
     retrievedAt:page.retrievedAt,publishedAt:date?.value??null,publishedAtBlockId:date?.blockId??null,firstParty:page.firstParty,blocks,truncated:parsed.truncated||blocks.length<parsed.blocks.length};
    captured.push({source:observation,trace:page.redirectTrace,linkedFrom:page.linkedFrom});return [observation];
   });
-  // Pages arrive landing first, then contact, about and team. Over the input bound, the
+  // Pages arrive landing first, then homepage (deep landing only), contact, about and team. Over the input bound, the
   // lowest-priority extra pages are left out rather than losing the whole capture.
   while(observations.length>1&&Buffer.byteLength(JSON.stringify(observations))>100000){const dropped=observations.pop()!;captured.splice(captured.findIndex(c=>c.source.id===dropped.id),1);}
   if(captureEnabled)preparedCapture=buildPreparedCapture({candidateId:run.candidate_id,candidateRevision:run.candidate_revision,sourceUrl:run.payload.sourceUrl},captured,isPreparedCapturePolicy(run['capture_policy_version'])?run['capture_policy_version']:undefined,fetched.value.pages.map(page=>({url:page.url,trace:page.redirectTrace,linkedFrom:page.linkedFrom,firstParty:page.firstParty})));

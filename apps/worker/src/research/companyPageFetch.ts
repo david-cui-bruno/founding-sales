@@ -8,6 +8,7 @@ import {
   isPublicResearchAddress,
   isPublicResearchUrl,
   isSameResearchSite,
+  isSiteRootUrl,
   MAX_PAGES_CEILING,
   permittedRedirectTarget,
   permittedResearchUrl,
@@ -650,7 +651,7 @@ export function researchPageFetch(deps: PageFetchDeps = {}): PageFetchProvider {
           let response: RawResponse;
           try {
             // Record only a page request that passed URL, DNS, robots and current authority.
-            if(input.recordRedirectTrace===true)redirectUrls.push(url);
+            redirectUrls.push(url);
             response = await request({
               url,
               address,
@@ -710,7 +711,7 @@ export function researchPageFetch(deps: PageFetchDeps = {}): PageFetchProvider {
           const contentType = headerOf(response, 'content-type');
           pages.push({
             url,
-            ...(input.recordRedirectTrace===true?{redirectTrace:{version:'page-redirect-trace-v1' as const,urls:redirectUrls},...(linkedFrom.has(initial)?{linkedFrom:linkedFrom.get(initial)!}:{})}:{}),
+            ...(input.recordRedirectTrace===true?{redirectTrace:{version:'page-redirect-trace-v1' as const,urls:[...redirectUrls]},...(linkedFrom.has(initial)?{linkedFrom:linkedFrom.get(initial)!}:{})}:{}),
             // The exact bytes read, and nothing else: the hash and the blocks
             // `parsePageText` produces describe the same thing.
             contentHash: createHash('sha256').update(response.body).digest('hex'),
@@ -731,8 +732,10 @@ export function researchPageFetch(deps: PageFetchDeps = {}): PageFetchProvider {
             // an added first-party search result also qualifies; third-party links never do.
             discoveryDone = true;
             const navigation: string[] = [];
-            const published = [...discoverSameSiteUrls({ ...input, firmWebsite: site }, {from: url, hrefs: anchorHrefs(response.body, contentType)})];
-            for (const candidate of published) {
+            const published = [...discoverSameSiteUrls({ ...input, firmWebsite: site }, {from: url, hrefs: anchorHrefs(response.body, contentType), requested: redirectUrls})];
+            for (const found of published) {
+              // A site root is one page whether queued as www or apex: use the queued spelling.
+              const candidate = isSiteRootUrl(found) ? queue.find(queued => isSiteRootUrl(queued) && isSameResearchSite(queued, found)) ?? found : found;
               if (queue.slice(0,index+1).includes(candidate)) continue;
               discovered.push(candidate);
               navigation.push(candidate);
