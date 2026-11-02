@@ -39,6 +39,16 @@ it('registered capture probe is once-only, body-free, independently authorized w
  }finally{await f.stop();}
 });
 
+it('a token_refresh incident older than the current grant is superseded: access refreshes the token and its hold is released',async()=>{
+ const f=await captureRecoveryFixture();try{
+  const hold=await openHold(f.context,{scopeKind:'mailbox',scopeKey:f.m.id,reasonCode:'provider_refusal',blockedActionKinds:['email_send'],sourceEventKind:'provider_incident',sourceEventId:f.incident,recoveryAction:'resume_after_review'});
+  await f.db.query("UPDATE mailbox_provider_incidents SET hold_id=$2,observed_at=clock_timestamp()-interval '1 day' WHERE id=$1",[f.incident,hold]);
+  expect(await accessForMailbox(f.system,{gmail:f.fake,oauth:f.oauth,cipher:f.cipher},f.m.id)).toMatchObject({ok:true});
+  expect(f.fake.calls.map(c=>c.method)).toEqual(['refreshAccessToken']);
+  expect((await f.db.query('SELECT i.resolution,h.released_at IS NOT NULL AS released FROM mailbox_provider_incidents i JOIN active_holds h ON h.id=i.hold_id WHERE i.id=$1',[f.incident])).rows).toEqual([{resolution:'human_revalidated',released:true}]);
+ }finally{await f.stop();}
+});
+
 for(const mutation of ['generation','account','owner','rotation','consent','policy','new-incident','changed-incident','requester-departed'] as const)it(`probe completion fences ${mutation} without publishing clearance`,async()=>{
  const f=await captureRecoveryFixture();try{
   await f.request();

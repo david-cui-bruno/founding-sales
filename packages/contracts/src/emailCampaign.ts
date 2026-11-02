@@ -47,3 +47,16 @@ export const emailCampaignCommandResultSchema = z.strictObject({
   campaignId: uuid, revision: z.number().int().positive(),
 });
 export type EmailCampaignCommandResult = z.infer<typeof emailCampaignCommandResultSchema>;
+/** Admin-only read of who the next prepared admission pass would take (ADR0035); never verifies, records or admits. */
+export const emailCampaignPreparedPreviewRequestSchema = z.strictObject({
+  limit: z.number().int().min(1).max(50).default(25),
+  regions: z.array(usBusinessRegionSchema).min(1).max(US_BUSINESS_REGIONS.length).refine(values => new Set(values).size === values.length).default([...US_BUSINESS_REGIONS]),
+});
+export const emailCampaignPreparedPreviewSchema = z.strictObject({
+  candidates: z.array(z.strictObject({
+    candidateId: uuid, host: z.string().max(253), companyName: z.string().max(400), website: z.string().max(2000),
+    locality: z.string().max(120), region: usBusinessRegionSchema, address: z.string().max(320),
+    verification: z.strictObject({ result: z.enum(['valid', 'invalid']), outcome: z.enum(['ok', 'drop']), checkedAt: instant }).nullable(),
+  })).max(50),
+});
+export type EmailCampaignPreparedPreview = z.infer<typeof emailCampaignPreparedPreviewSchema>;

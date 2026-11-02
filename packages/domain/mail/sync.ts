@@ -1,7 +1,7 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import type { EnvelopeCipher } from './envelope.ts';
 import type { GmailAccessGrant, GmailAccessOutcome, GmailClient, GmailHistoryOutcome, GmailHistoryRecord, GmailOAuthConfig } from './gmailClient.ts';
-import {readProviderBinding,readProviderIncidents,recordProviderIncident,resolveProviderIncidentsAfterRead} from '../outbound/providerIncidents.ts';
+import {readProviderBinding,readProviderIncidents,recordProviderIncident,resolveProviderIncidentsAfterRead,supersedeStaleTokenRefreshIncidents} from '../outbound/providerIncidents.ts';
 import { compareHistoryIds, laterHistoryId } from './historyIds.ts';
 import {
   advanceCursor,
@@ -205,6 +205,7 @@ export async function accessForMailbox(
   { readonly ok: true; readonly access: GmailAccessGrant } | { readonly ok: false; readonly reason: 'grant_revoked'|'provider_incident' }
 > {
   const now=deps.now?.()??new Date();
+  await supersedeStaleTokenRefreshIncidents(context,mailboxId,now);
   const incidents=(await readProviderIncidents(context,mailboxId,now)).filter(i=>!(i.sourceKind==='provider_send'&&i.reason==='unresolved_submission'));
   if(incidents.some(i=>i.state!=='revalidation_due'))return {ok:false,reason:'provider_incident'};
   const binding=await readProviderBinding(context,mailboxId);

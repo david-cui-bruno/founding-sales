@@ -2,10 +2,11 @@ import {beforeEach,expect,it,vi} from 'vitest';
 import {routeEmailCampaigns} from '../src/routes/emailCampaigns.ts';
 import type {ApiRequest,RoutingOptions} from '../src/routes/types.ts';
 import type * as RouteSupport from '../src/routes/routeSupport.ts';
-const mocks=vi.hoisted(()=>({command:vi.fn(),control:vi.fn(),approve:vi.fn(),revoke:vi.fn(),authority:vi.fn(),context:vi.fn()}));
+const mocks=vi.hoisted(()=>({preview:vi.fn(),command:vi.fn(),control:vi.fn(),approve:vi.fn(),revoke:vi.fn(),authority:vi.fn(),context:vi.fn()}));
 vi.mock('../src/auth/commands.ts',()=>({runCommand:mocks.command}));
 vi.mock('@fss/domain/outreach/emailCampaign.ts',()=>({approveEmailCampaign:mocks.approve,revokeEmailCampaign:mocks.revoke,readEmailCampaignControl:mocks.control}));
-vi.mock('@fss/domain/db/queryable.ts',()=>({withTransaction:async(_db:unknown,work:()=>Promise<unknown>)=>work()}));
+vi.mock('@fss/domain/outreach/preparedEmailPreview.ts',()=>({previewPreparedEmailAdmission:mocks.preview}));
+vi.mock('@fss/domain/db/queryable.ts',()=>({withTransaction:async(_db:unknown,work:()=>Promise<unknown>)=>work(),withReadOnlyTransaction:async(_db:unknown,work:()=>Promise<unknown>)=>work()}));
 vi.mock('../src/routes/routeSupport.ts',async importOriginal=>({...await importOriginal<typeof RouteSupport>(),contextForPrincipal:mocks.context,requirePrincipal:mocks.authority}));
 const id='00000000-0000-4000-8000-000000000001';
 const principal={workspaceId:id,userId:id,role:'admin',membershipStatus:'active',deviceId:id,deviceStatus:'active',sessionId:id};
@@ -17,7 +18,7 @@ beforeEach(()=>{
  vi.clearAllMocks();mocks.authority.mockResolvedValue({ok:true,principal});mocks.context.mockReturnValue({ok:true,context:{db:{},scope:{}}});mocks.control.mockResolvedValue(null);
  mocks.command.mockResolvedValue({status:'accepted',result:{campaignId:id,revision:1},replayed:false});
 });
-it('claims only the three exact POST routes',async()=>{
+it('claims only the four exact POST routes',async()=>{
  expect(await routeEmailCampaigns(request('/outreach/email-campaigns/other'),options)).toBeNull();
  expect(await routeEmailCampaigns({...request('/outreach/email-campaigns/control'),method:'GET'},options)).toEqual({status:405,body:{error:'method_not_allowed'}});
  expect(mocks.authority).not.toHaveBeenCalled();
@@ -59,4 +60,19 @@ it('accepts a nationwide region set and refuses codes outside the states and DC'
  mocks.command.mockClear();
  expect(await routeEmailCampaigns(request('/outreach/email-campaigns/approve',{...command,regions:['PR']}),options)).toMatchObject({status:400});
  expect(mocks.command).not.toHaveBeenCalled();
+});
+const PREVIEW='/outreach/email-campaigns/prepared-preview',candidate={candidateId:id,host:'peak.org',companyName:'Peak PM',website:'https://peak.org/',locality:'Columbus',region:'OH',address:'info@peak.org',verification:null};
+it('prepared preview is admin-only, read-only and strict, and defaults its limit and regions',async()=>{
+ mocks.preview.mockResolvedValue({candidates:[candidate]});
+ expect(await routeEmailCampaigns({...request(PREVIEW),method:'GET'},options)).toEqual({status:405,body:{error:'method_not_allowed'}});
+ expect(await routeEmailCampaigns(request(PREVIEW),options)).toEqual({status:200,body:{candidates:[candidate]}});
+ expect(mocks.preview).toHaveBeenCalledWith(expect.anything(),{limit:25,regions:expect.arrayContaining(['OH','WY','DC'])});
+ expect(mocks.preview.mock.calls[0]![1].regions).toHaveLength(51);
+ await routeEmailCampaigns(request(PREVIEW,{limit:50,regions:['TX']}),options);
+ expect(mocks.preview).toHaveBeenLastCalledWith(expect.anything(),{limit:50,regions:['TX']});
+ for(const body of [{limit:0},{limit:51},{limit:1.5},{regions:[]},{regions:['TX','TX']},{regions:['PR']},{extra:1},{commandId:id}])expect(await routeEmailCampaigns(request(PREVIEW,body),options)).toEqual({status:400,body:{error:'malformed_body'}});
+ expect(mocks.preview).toHaveBeenCalledTimes(2);
+ mocks.authority.mockResolvedValue({ok:true,principal:{...principal,role:'salesperson'}});
+ expect(await routeEmailCampaigns(request(PREVIEW),options)).toEqual({status:403,body:{error:'admin_required'}});
+ expect(mocks.preview).toHaveBeenCalledTimes(2);expect(mocks.command).not.toHaveBeenCalled();
 });

@@ -47,3 +47,16 @@ export async function withTransaction<T>(session: SessionQueryable, work: () => 
     throw error;
   }
 }
+
+/** Run `work` in one `READ ONLY` transaction: the database itself refuses any write, and the snapshot is one read. */
+export async function withReadOnlyTransaction<T>(session: SessionQueryable, work: () => Promise<T>): Promise<T> {
+  await session.query('BEGIN READ ONLY');
+  try {
+    const result = await work();
+    await session.query('COMMIT');
+    return result;
+  } catch (error) {
+    await session.query('ROLLBACK');
+    throw error;
+  }
+}

@@ -100,6 +100,31 @@ export async function resolveProviderIncidentsAfterRead(ctx:RepositoryContext,ma
  });
 }
 
+/** A `token_refresh` incident observed before the mailbox's current grant (`mailboxes.connected_at`, rewritten
+ * only by a reconnect, never by a token refresh) described a credential that no longer exists: resolved and its
+ * `provider_refusal` hold released. Later incidents and other sources are untouched. Caller holds the gate and mailbox fence. */
+export async function resolveSupersededTokenRefreshIncidents(ctx:RepositoryContext,mailboxId:string,now:Date):Promise<void>{
+ const rows=(await ctx.db.query<{id:string}>(`UPDATE mailbox_provider_incidents i SET resolved_at=greatest($3::timestamptz,m.connected_at),resolution='human_revalidated'
+  FROM mailboxes m WHERE i.workspace_id=$1 AND i.mailbox_id=$2 AND m.workspace_id=i.workspace_id AND m.id=i.mailbox_id
+  AND i.source_kind='token_refresh' AND i.resolved_at IS NULL AND i.observed_at<m.connected_at AND m.status='connected'
+  AND EXISTS(SELECT 1 FROM mailbox_tokens t WHERE t.workspace_id=m.workspace_id AND t.mailbox_id=m.id)
+  AND EXISTS(SELECT 1 FROM workspace_memberships wm WHERE wm.workspace_id=m.workspace_id AND wm.user_id=m.owner_user_id AND wm.status='active')
+  RETURNING i.id`,[ctx.scope.workspaceId,mailboxId,now])).rows;
+ for(const row of rows)await releaseHoldsOfEvent(ctx,{sourceEventId:row.id,reasonCode:'provider_refusal'});
+}
+
+/** Lazy form for a mailbox reconnected before this rule existed: takes the gate and fence itself. */
+export async function supersedeStaleTokenRefreshIncidents(ctx:RepositoryContext,mailboxId:string,now:Date):Promise<void>{
+ if((await ctx.db.query(`SELECT 1 FROM mailbox_provider_incidents i JOIN mailboxes m ON m.workspace_id=i.workspace_id AND m.id=i.mailbox_id
+  WHERE i.workspace_id=$1 AND i.mailbox_id=$2 AND i.source_kind='token_refresh' AND i.resolved_at IS NULL AND i.observed_at<m.connected_at LIMIT 1`,[ctx.scope.workspaceId,mailboxId])).rows.length===0)return;
+ const mailbox=await readMailbox(ctx,mailboxId);if(!mailbox)return;
+ await incidentTransaction(ctx,async()=>{
+  await lockSendGateForStopFact(ctx);
+  await lockMailboxAtFence(ctx,{mailboxId,fence:fenceOf(mailbox),write:'provider incident supersede'});
+  await resolveSupersededTokenRefreshIncidents(ctx,mailboxId,now);
+ });
+}
+
 /** Only established explicit grant/permission/auth commands call this. They may
  * refresh a transient binding, but never erase its provider deadline. Revoked
  * grants require the successful OAuth reconnect; reputation/unknown stay held. */
@@ -116,4 +141,5 @@ export async function revalidateProviderIncidentConfiguration(ctx:RepositoryCont
   AND EXISTS(SELECT 1 FROM workspace_memberships wm WHERE wm.workspace_id=m.workspace_id AND wm.user_id=m.owner_user_id AND wm.status='active')
   RETURNING i.id`,[ctx.scope.workspaceId,mailboxId,now])).rows;
  for(const row of rows)await releaseHoldsOfEvent(ctx,{sourceEventId:row.id,reasonCode:'provider_refusal'});
+ await resolveSupersededTokenRefreshIncidents(ctx,mailboxId,now);
 }

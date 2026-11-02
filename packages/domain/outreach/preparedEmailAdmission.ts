@@ -8,11 +8,11 @@ import {enrollContact} from '../sequences/enrollments.ts';
 import {admitEmailCandidate} from './emailAdmission.ts';
 import {createOutreachPlan} from './plans.ts';
 import {assessEmailCandidate} from './selection.ts';
-import {preparedAdmissionRefusedInAdvance} from './preparedEmailAssessment.ts';
+import {admittedCandidateIds,preparedEmailAccept} from './preparedEmailSelection.ts';
 import type {PreparedEmailTarget} from './emailCampaignSource.ts';
 import {admissionStop,campaignAdmissionCounts,campaignCapacityAvailable,lockEmailCampaignAdmissionGates} from './emailCampaignAdmission.ts';
 import {campaignAuthorityCurrent,campaignCandidateProvenance,campaignDatabaseNow,type EmailCampaignRow} from './emailCampaignAuthority.ts';
-import {droppedEmailAddressKeys,emailVerificationDecides,emailVerificationKey,emailVerificationOutcome,latestEmailVerification,recordEmailVerification,type EmailVerifier} from './emailVerification.ts';
+import {emailVerificationDecides,emailVerificationOutcome,latestEmailVerification,recordEmailVerification,type EmailVerifier} from './emailVerification.ts';
 type Result={ok:true;value:EmailCampaignAdmission}|{ok:false;reason:string};
 
 /** ADR0035. One own-site prepared company into one approved campaign, composed from the same owners as a research Firm: campaign,
@@ -74,17 +74,10 @@ export async function runPreparedEmailAdmission(ctx:RepositoryContext,deps:{veri
  for(const campaign of campaigns){
   const counts=await campaignAdmissionCounts(ctx,campaign),room=Math.min(campaign.max_enrollments-counts.total,campaign.daily_admission_limit-counts.daily);
   if(room<=0)continue;
-  const tried=new Set((await ctx.db.query<{candidate_id:string}>('SELECT candidate_id FROM outreach_email_campaign_admissions WHERE workspace_id=$1',[w])).rows.map(row=>row.candidate_id));
-  const dropped=await droppedEmailAddressKeys(ctx);
-  const refusedInAdvance=new Map<string,boolean>();
+  const tried=await admittedCandidateIds(ctx),accept=await preparedEmailAccept(ctx,campaign.id);
   let admitted=0;
   for(let round=0;round<ROUNDS&&admitted<room;round++){
-   const batch=await listPreparedEmailCandidates(ctx,{limit:room+10,regions:campaign.regions,skip:tried,accept:async read=>{
-    if(dropped.has(emailVerificationKey(read.route.address)))return false;
-    let refused=refusedInAdvance.get(read.candidateId);
-    if(refused===undefined){refused=await preparedAdmissionRefusedInAdvance(ctx,campaign.id,read);refusedInAdvance.set(read.candidateId,refused);}
-    return !refused;
-   }});
+   const batch=await listPreparedEmailCandidates(ctx,{limit:room+10,regions:campaign.regions,skip:tried,accept});
    if(!batch.length)break;
    for(const company of batch){
     if(admitted>=room)break;

@@ -19,12 +19,12 @@ const admittedFirm=async(ctx:RepositoryContext,candidateId:string,runId:string,c
 /** Selection-time form of the deterministic refusals `assessPreparedEmail` and the Firm admission would make (an existing Firm, an
  * unresolvable time zone, an effective email stop): a company refused this way is left out before the work limit, within the bounded
  * scan of the prepared order (the first 400 records), so it cannot starve later companies inside that window. Advisory and unlocked; admission still decides. */
-export async function preparedAdmissionRefusedInAdvance(ctx:RepositoryContext,campaignId:string,read:{candidateId:string;runId:string;region:string;locality:string;route:{address:string}}):Promise<boolean>{
+export async function preparedAdmissionRefusedInAdvance(ctx:RepositoryContext,campaignId:string|null,read:{candidateId:string;runId:string;region:string;locality:string;route:{address:string}}):Promise<boolean>{
  if(preparedEmailTimeZone(read.region,read.locality)===null)return true;
  const w=ctx.scope.workspaceId;
  const candidate=(await ctx.db.query<{payload:unknown}>('SELECT payload FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2',[w,read.candidateId])).rows[0];
  const payload=candidate&&preparedCandidatePayload(candidate.payload);if(!payload)return false;
- const admittedFirmId=await admittedFirm(ctx,read.candidateId,read.runId,campaignId);
+ const admittedFirmId=campaignId?await admittedFirm(ctx,read.candidateId,read.runId,campaignId):null;
  if((await conflictingFirmIds(ctx,payload,admittedFirmId)).length>0)return true;
  // The same effective email-handle stop admission checks under its locks, so a stopped address cannot fill the scan either.
  return Boolean(await firstSuppressed(ctx,[{scope:'handle',canonicalKey:read.route.address},...(admittedFirmId?[{scope:'firm' as const,canonicalKey:admittedFirmId}]:[])],'email'));
