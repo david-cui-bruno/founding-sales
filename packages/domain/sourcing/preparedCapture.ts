@@ -1,10 +1,11 @@
 import {createHash} from 'node:crypto';
 import {z} from 'zod';
-import {candidateInputSchema,sourceObservationSchema,sourcingUrlSchema,instant,uuid,type SourceObservation} from '@fss/contracts';
+import {sourceObservationSchema,sourcingUrlSchema,instant,uuid,type SourceObservation} from '@fss/contracts';
 import type {FetchedPage} from '../research/providers.ts';
 import {isPublicResearchUrl,isSameResearchSite,isSiteRootUrl,ownSitePageKind} from '../research/sourcePolicy.ts';
 import {classifyDiscoveryPage} from './discoveryIdentity.ts';
 import type {ManualPhoneSnapshot} from './manualProspectPhone.ts';
+import {preparedCandidatePayload} from './discoveryIntake.ts';
 
 export const PREPARED_CAPTURE_V1='prepared-source-association-v1';
 export const PREPARED_CAPTURE_POLICY='prepared-source-association-v2';
@@ -88,12 +89,12 @@ export function buildPreparedCapture(binding:Omit<PreparedCaptureBinding,'observ
  * email authority resolver remains exact and does not inspect this manifest. */
 export function preparedCaptureManifest(snapshot:ManualPhoneSnapshot):PreparedCapture|null {
  if(!isPreparedCapturePolicy(snapshot['capture_policy_version'])||!['review','unavailable','eligible','admitted'].includes(String(snapshot['capture_state']))||snapshot.retained_identity_decision_id)return null;
- const candidate=candidateInputSchema.safeParse(snapshot.payload);
- if(!candidate.success||!Array.isArray(snapshot.observations))return null;
+ const candidate=preparedCandidatePayload(snapshot.payload);
+ if(!candidate||!Array.isArray(snapshot.observations))return null;
  const parsed=snapshot.observations.map(value=>sourceObservationSchema.safeParse(value));
  if(parsed.some(value=>!value.success))return null;
  const observations=parsed.flatMap(value=>value.success?[value.data]:[]);
- const manifest=validatePreparedCapture(snapshot['prepared_capture'],{candidateId:snapshot.candidate_id,candidateRevision:snapshot.candidate_revision,sourceUrl:candidate.data.sourceUrl,observations});
+ const manifest=validatePreparedCapture(snapshot['prepared_capture'],{candidateId:snapshot.candidate_id,candidateRevision:snapshot.candidate_revision,sourceUrl:candidate.sourceUrl,observations});
  return manifest?.version===snapshot['capture_policy_version']?manifest:null;
 }
 export interface PreparedCaptureAuthority {observationIds:ReadonlySet<string>;dependencyUrls:readonly string[];validUntil:string|null}

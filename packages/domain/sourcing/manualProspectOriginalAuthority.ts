@@ -2,6 +2,7 @@ import {isDeepStrictEqual} from 'node:util';
 import {candidateInputSchema,discoveryCandidatePayloadSchema,discoveryOriginSchema,sourceObservationSchema} from '@fss/contracts';
 import type {LiteralAuthority,LiteralLineage} from './manualProspectLiteralPhone.ts';
 import type {ManualPhoneSnapshot} from './manualProspectPhone.ts';
+import {discoveryResearchSeed} from './discoveryIntake.ts';
 
 export interface ManualOriginalSnapshot {
  payload?:unknown;origins?:unknown;retained_identity_decision_id?:string|null;
@@ -28,10 +29,12 @@ export function originalAuthorities(snapshot:ManualPhoneSnapshot):{website:strin
  const ordinary=candidateInputSchema.safeParse(snapshot.payload),discovery=discoveryCandidatePayloadSchema.safeParse(snapshot.payload);
  const authorities:Record<string,LiteralAuthority>={};
  const website=ordinary.success?ordinary.data.website:discovery.success?discovery.data.row.website:null;
+ // ADR0034: a raw Overture place's own website is the one page it names as its source for own-site research.
+ const candidateSource=ordinary.success?ordinary.data.sourceUrl:discovery.success?discoveryResearchSeed(snapshot.payload)?.sourceUrl:undefined;
  for(const raw of Array.isArray(snapshot.observations)?snapshot.observations:[]){
   const parsed=sourceObservationSchema.safeParse(raw);if(!parsed.success)continue;const source=parsed.data;
   if(!snapshot.permitted_urls.includes(source.url))continue;
-  if(ordinary.success&&ordinary.data.sourceUrl===source.url){authorities[source.id]={kind:'candidate_source',sourceUrl:source.url};continue;}
+  if(candidateSource===source.url){authorities[source.id]={kind:'candidate_source',sourceUrl:source.url};continue;}
   if(discovery.success&&Array.isArray(snapshot.origins)){
    const origins=snapshot.origins.map(value=>discoveryOriginSchema.safeParse(value));
    const match=origins.flatMap(value=>value.success?[value.data.source]:[]).find(origin=>origin.sourceUrl===source.url&&

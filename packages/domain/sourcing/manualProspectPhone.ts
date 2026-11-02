@@ -70,7 +70,8 @@ async function readPhoneSnapshots(ctx:RepositoryContext,rows:readonly ManualPros
    AND to_char(e.retrieved_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')=page->>'retrievedAt')),'[]') AS evidence_authorities,
  ARRAY(SELECT DISTINCT page->>'url' FROM jsonb_array_elements(CASE WHEN jsonb_typeof(r.observations)='array' THEN r.observations ELSE '[]'::jsonb END) page WHERE
   (EXISTS(SELECT 1 FROM sourcing_candidates retained WHERE retained.workspace_id=r.workspace_id AND retained.id=r.candidate_id
-    AND rtrim(retained.payload->>'sourceUrl','/')=rtrim(page->>'url','/'))
+    AND (rtrim(retained.payload->>'sourceUrl','/')=rtrim(page->>'url','/')
+     OR retained.payload->>'kind'='discovery-v1' AND lower(rtrim(regexp_replace(btrim(retained.payload->'row'->>'website'),'^http:','https:','i'),'/'))=lower(rtrim(page->>'url','/'))))
    OR EXISTS(SELECT 1 FROM sourcing_candidate_discovery_origins o WHERE o.workspace_id=r.workspace_id AND o.candidate_id=r.candidate_id
     AND rtrim(o.source->>'sourceUrl','/')=rtrim(page->>'url','/'))
    OR EXISTS(SELECT 1 FROM page_evidence e WHERE ($3::uuid[] IS NULL OR e.id=ANY($3::uuid[])) AND e.source_reference=page->>'url'
