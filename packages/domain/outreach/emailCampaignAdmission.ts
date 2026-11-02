@@ -16,9 +16,13 @@ import {campaignDatabaseNow,campaignAuthorityCurrent,campaignCandidateProvenance
 import {researchActor} from '../sourcing/qualifiedResearchProof.ts';
 type Result={ok:true;value:EmailCampaignAdmission}|{ok:false;reason:string};
 export function campaignCapacityAvailable(policy:{max_enrollments:number;daily_admission_limit:number},total:number,daily:number):boolean{return total<policy.max_enrollments&&daily<policy.daily_admission_limit;}
-export async function lockEmailCampaignAdmission(ctx:RepositoryContext):Promise<EmailCampaignRow|null>{
+/** Send gate, Today, then sourcing identity: the order every admission path takes before the campaign row. */
+export async function lockEmailCampaignAdmissionGates(ctx:RepositoryContext):Promise<void>{
  await lockSendGateForStopFact(ctx);await lockTodayForFirmChange(ctx);
  await ctx.db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`sourcing-identity:${ctx.scope.workspaceId}`]);
+}
+export async function lockEmailCampaignAdmission(ctx:RepositoryContext):Promise<EmailCampaignRow|null>{
+ await lockEmailCampaignAdmissionGates(ctx);
  return lockCurrentEmailCampaign(ctx);
 }
 /** Committed-evidence completion/recovery only. The real system scope is retained. */
@@ -33,7 +37,7 @@ export async function campaignAdmissionCounts(ctx:RepositoryContext,campaign:Ema
  const row=(await ctx.db.query<{total:string;daily:string}>(`SELECT count(*) FILTER(WHERE a.campaign_id=$2)::text AS total,count(*) FILTER(WHERE (a.admitted_at AT TIME ZONE 'UTC')::date=($4::timestamptz AT TIME ZONE 'UTC')::date)::text AS daily FROM outreach_email_campaign_admissions a JOIN outreach_email_campaigns c ON c.workspace_id=a.workspace_id AND c.id=a.campaign_id WHERE a.workspace_id=$1 AND c.owner_user_id=$3`,[ctx.scope.workspaceId,campaign.id,campaign.owner_user_id,await campaignDatabaseNow(ctx)])).rows[0];
  return {total:Number(row?.total??0),daily:Number(row?.daily??0)};
 }
-async function admissionStop(ctx:RepositoryContext,firmId:string,campaign:EmailCampaignRow,afterEnrollmentId?:string):Promise<string|null>{
+export async function admissionStop(ctx:RepositoryContext,firmId:string,campaign:EmailCampaignRow,afterEnrollmentId?:string):Promise<string|null>{
  const w=ctx.scope.workspaceId;
  if((await ctx.db.query(`SELECT 1 FROM sequence_enrollments WHERE workspace_id=$1 AND firm_id=$2 AND ($3::uuid IS NULL OR id<>$3) LIMIT 1`,[w,firmId,afterEnrollmentId??null])).rows.length)return 'firm_enrollment_history';
  if((await ctx.db.query(`SELECT 1 FROM opportunities WHERE workspace_id=$1 AND firm_id=$2 AND (control_mode='manual' OR status<>'open') UNION ALL SELECT 1 FROM crm_domain_events WHERE workspace_id=$1 AND firm_id=$2 AND event_kind IN ('opportunity.terminal_stop','opportunity.manual_mode') UNION ALL SELECT 1 FROM mail_reply_confirmations WHERE workspace_id=$1 AND firm_id=$2 UNION ALL SELECT 1 FROM outbound_messages WHERE workspace_id=$1 AND firm_id=$2 AND state IN ('dispatching','reconciling','unknown_terminal') LIMIT 1`,[w,firmId])).rows.length)return 'firm_stopped_or_uncertain';

@@ -28,6 +28,8 @@ import {socialAssetsHandler,socialAssetsSource,socialDeletionPort,type SocialDel
 import {outreachReplySource} from '../handlers/outreach.ts';
 import {sourcingQualificationHandler,sourcingQualificationSource} from '../handlers/sourcingQualification.ts';
 import {prospectPhoneDiscoveryHandler,prospectPhoneDiscoverySource} from '../handlers/prospectPhoneDiscovery.ts';
+import {preparedEmailAdmitHandler,preparedEmailAdmitSource} from '../handlers/preparedEmailAdmit.ts';
+import {dnsEmailVerifier} from '@fss/domain/outreach/emailVerification.ts';
 import {qualificationExtraction} from '../sourcing/qualificationExtraction.ts';
 import {sourcingDiscoveryHandler,sourcingDiscoverySource,apolloDiscoverySource} from '../handlers/sourcingDiscovery.ts';
 import {apolloFromEnvironment} from '../sourcing/apolloSearch.ts';
@@ -291,6 +293,7 @@ export function registerHandlers(
   // Tavily discovery reads list pages through the same research fetcher as qualification.
   const search=composition.discovery&&composition.research?{provider:composition.discovery,pageFetch:composition.research.pageFetch}:undefined;
   if(search||composition.apolloDiscovery)registry.register(sourcingDiscoveryHandler(search,composition.apolloDiscovery));
+  registry.register(preparedEmailAdmitHandler({verifier:dnsEmailVerifier(systemMailDomainResolver()),...log?{log}:{}}));
   if(composition.research){
     registry.register(sourcingQualificationHandler({pageFetch:composition.research.pageFetch,extraction:composition.classifier?.processEnabled?qualificationExtraction(composition.classifier.transport):null}));
     registry.register(prospectPhoneDiscoveryHandler({pageFetch:composition.research.pageFetch,...log?{log}:{}}));
@@ -569,6 +572,7 @@ export function workerDueWorkSources(
     prospectPhoneDiscoverySource(),
     sourcingDiscoverySource(options.discovery === true),
     apolloDiscoverySource(options.apolloDiscovery),
+    preparedEmailAdmitSource(),
     telephonySweepSource(),
     // Slice M1. Registered always, so the list is the documented one; it materializes a
     // job only in a worker that has a Cal.com API key to run it with — a job no handler

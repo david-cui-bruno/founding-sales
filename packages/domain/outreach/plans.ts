@@ -1,4 +1,5 @@
-import {createOutreachPlanSchema,type AutomaticResearchTarget,type CreateOutreachPlan,type OutreachPlan} from '@fss/contracts';
+import {createOutreachPlanSchema,type CreateOutreachPlan,type OutreachPlan} from '@fss/contracts';
+import type {InternalCampaignTarget} from './emailCampaignSource.ts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {lockSendGateForStopFact} from '../policy/sendGate.ts';
 import {loadFirmForUpdate} from '../crm/firms.ts';
@@ -13,10 +14,10 @@ export async function readOutreachPlan(ctx:RepositoryContext,id:string):Promise<
  return (await ctx.db.query<OutreachPlan & Record<string,unknown>>(`SELECT id,firm_id AS "firmId",contact_id AS "contactId",owner_user_id AS "ownerUserId",mailbox_id AS "mailboxId",lane,revision,state FROM outreach_plans WHERE workspace_id=$1 AND id=$2`,[ctx.scope.workspaceId,id])).rows[0]??null;
 }
 /** Explicit selected-cohort setup. It does not create a deal or activate sending. */
-export async function createOutreachPlan(ctx:RepositoryContext,input:CreateOutreachPlan,campaignId?:string,automaticSource?:AutomaticResearchTarget):Promise<Result<OutreachPlan>>{
+export async function createOutreachPlan(ctx:RepositoryContext,input:CreateOutreachPlan,campaignId?:string,automaticSource?:InternalCampaignTarget):Promise<Result<OutreachPlan>>{
  const actor=ctx.scope.actor;
  if(automaticSource){
-  if(!campaignId||input.firmId!==automaticSource.firmId)return {ok:false,reason:'campaign_authority_unavailable'};
+  if(!campaignId||automaticSource.kind==='automatic_research'&&input.firmId!==automaticSource.firmId)return {ok:false,reason:'campaign_authority_unavailable'};
   const proof=await campaignCandidateProvenance(ctx,{campaignId,candidateId:automaticSource.candidateId,qualificationRunId:input.qualificationRunId},automaticSource);
   if(!proof||proof.campaign.owner_user_id!==input.expectedOwnerUserId)return {ok:false,reason:'campaign_authority_unavailable'};
  }else if(actor.kind!=='user'||actor.role!=='admin')return {ok:false,reason:'admin_required'};

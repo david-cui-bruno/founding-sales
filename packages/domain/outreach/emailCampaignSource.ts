@@ -6,3 +6,9 @@ import type {AutomaticResearchTarget} from '@fss/contracts';
 export type EmailCampaignSourceSelection =
   | {readonly kind:'discovery_research';readonly firmId:string}
   | Readonly<AutomaticResearchTarget>;
+
+/** ADR0035: an own-site prepared company with one published address, selected for admission. Like the selection above it is
+ * never authority: every use reloads the exact current run, route, verification, owner and campaign. */
+export interface PreparedEmailTarget {readonly kind:'prepared_capture';readonly candidateId:string;readonly candidateRevision:number;readonly runId:string;readonly address:string}
+/** The internal, non-human sources that admit through the shared campaign owners. */
+export type InternalCampaignTarget=Readonly<AutomaticResearchTarget>|PreparedEmailTarget;

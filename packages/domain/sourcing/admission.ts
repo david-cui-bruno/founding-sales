@@ -23,6 +23,7 @@ import {qualifyCandidate,supportedBusinessPhone} from './qualificationPolicy.ts'
 import {candidateIdentity} from './qualificationDecision.ts';
 import {verifiedFirmOwner,verifiedFirmEvidence,verifiedWebsiteKey,VERIFIED_FIRM_POLICY_VERSION} from './verifiedFirmPolicy.ts';
 import {isLegacyCandidatePayload} from './candidatePayload.ts';
+import {stateDefaultZone} from '../src/rules/statePosture.ts';
 import {retainedCandidateOnly,retainedWallNow,lockRetainedAdmin,fenceRetainedFirm} from './retainedAcquisition.ts';
 import type {RetainedAuthority} from './retainedRecoveryEvidence.ts';
 interface AdmissionInput {candidateId:string;expectedRevision:number;qualificationRunId:string;mode:'automatic'|'reviewed'}
@@ -42,6 +43,11 @@ export function sourcingTimeZone(region:string,locality:string):string|null {
  if(centralTexas.has(key))return 'America/Chicago';
  if(key==='el paso')return 'America/Denver';
  return null;
+}
+/** ADR0035: where an own-site prepared company anywhere in the US may be mailed in its local morning. The rule above, else the state's one
+ * zone; a state that spans zones (and a Texas city not listed) stays unresolved and is refused. Calling keeps `sourcingTimeZone`. */
+export function preparedEmailTimeZone(region:string,locality:string):string|null {
+ return sourcingTimeZone(region,locality)??stateDefaultZone(region);
 }
 /** A transaction/savepoint makes every refused admission leave the CRM unchanged. */
 export async function admitCandidate(ctx:RepositoryContext,input:AdmissionInput,authority?:RetainedAuthority):Promise<SourcingResult<AdmissionResult>> {

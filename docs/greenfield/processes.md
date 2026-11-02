@@ -55,6 +55,7 @@ The default `workerDueWorkSources()` registry contains exactly the following nam
 | `mail-recovery`, `mail-sync-reconcile`, `mail-watch-renewal`, `outbound-reconcile` | Current-generation recovery, coalesced mailbox sync, watch renewal and observation of uncertain outbound fences. |
 | `classify-reply` | Due reply classification. |
 | `route-validation` | Due route validation. |
+| `prepared-email-admission` | Every ten minutes per workspace with an unrevoked, unexpired campaign that has room (ADR0035): checks the published own-domain address of prepared companies (DNS MX, no SMTP) and admits valid ones through the campaign owners within its caps. Sends nothing. |
 
 Supplying the explicit CRM mail-processing port additionally registers `crm-mail-intents`; it derives authorized CRM mail-processing intents and is not part of the default registry above. Neither registration nor scheduler execution grants capture, backfill, processing, sending or other provider consent.
 
