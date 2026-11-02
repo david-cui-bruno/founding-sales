@@ -93,6 +93,19 @@ function commaClauses(text:string,side:'head'|'tail'):string{
  }
  return phrase;
 }
+/** Every separator a name and a title are joined by (comma, dashes, bar, slash, colon, `&`, `and`) followed by a clause. */
+const FOLLOWING_CLAUSE=new RegExp(`^\\s*(?:,|[–—|/:&-]|\\band\\b)\\s*(${CLAUSE})(?=[\\s,;:)|•·-]|$)`,'u');
+/** After a title-first person's name (`Owner: Jane Doe`), a following clause that is an EXCLUDED title (`— Leasing Agent`, `| Leasing Agent`, `/ Leasing Agent`, `: Leasing Agent`) is the person's own title: the first title is not theirs. A following eligible title is compatible and does not veto; a clause that is no title ends the scan. */
+function followedByExcludedTitle(rest:string):boolean{
+ for(let count=0,left=rest;count<3;count++){
+  const clause=FOLLOWING_CLAUSE.exec(left);
+  if(!clause)return false;
+  if(isExcludedTitle(clause[1]!))return true;
+  if(!TITLE_ONLY.test(clause[1]!))return false;
+  left=left.slice(clause[0].length);
+ }
+ return false;
+}
 const HEAD_WORDS=/(?<![\p{L}\p{N}'’®@.])(?:[\p{L}'’®]+[\s/&+–—-]+){1,3}$/u,TAIL_WORDS=/^(?:[\s/&+–—-]+[\p{L}'’®]+(?=[\s/&+–—,;:)|•·-]|$)){1,3}/u;
 /** The statement around a match: its text between the nearest `|`, bullet or copyright marks, so a footer's citation is the line that names the person, not the whole footer. */
 const statement=(text:string,start:number,end:number):string=>{
@@ -102,18 +115,18 @@ const statement=(text:string,start:number,end:number):string=>{
 /** The named people of a text (two or more name words), by position: every person the block names, whatever their title, so an excluded "Jane Doe, Office Administrator" counts as another person. */
 const namesIn=(text:string):{start:number;end:number;key:string}[]=>[...text.matchAll(NAME_MENTION)].flatMap(match=>{const person=splitName(match[1]!);return person?[{start:match.index,end:match.index+match[0].length,key:person.key}]:[];});
 function hitsIn(block:string):Hit[]{
- const text=titleCase(block),hits:Hit[]=[],names=namesIn(text),owned:{start:number;end:number}[]=[],named=new Set<number>();
- // Name-first readings are resolved before title-first ones (a title is one person's): `NAME_TITLE` and `NAME_IS_TITLE` own their title span and name start.
+ const text=titleCase(block),hits:Hit[]=[],names=namesIn(text),owned:{start:number;end:number}[]=[];
+ // Name-first readings are resolved before title-first ones (a title is one person's): `NAME_TITLE` and `NAME_IS_TITLE` own their title span.
  for(const pattern of [NAME_TITLE,NAME_IS_TITLE,TITLE_NAME]){
   pattern.lastIndex=0;
   for(const match of text.matchAll(pattern)){
    const [name,title]=pattern===TITLE_NAME?[match[2]!,match[1]!]:[match[1]!,match[2]!];
    const start=match.index,end=start+match[0].length;
    if(pattern===TITLE_NAME){
-    // A title-first reading ("Owner, Ann Roe") is refused when its title is already a name-first person's ("Jane Doe, Owner, Ann Roe"), or when the name carries its OWN title clause ("Ann Roe, Leasing Agent"): that title wins and is judged on its own.
-    const titleEnd=start+title.length,own=TAIL_CLAUSE.exec(text.slice(end));
-    if(owned.some(span=>start<span.end&&span.start<titleEnd)||named.has(end-name.length)||own&&(isExcludedTitle(own[1]!)||TITLE_ONLY.test(own[1]!)))continue;
-   }else{owned.push({start:end-title.length,end});named.add(start);}
+    // A title-first reading ("Owner, Ann Roe") is refused when its title is already a name-first person's ("Jane Doe, Owner, Ann Roe"), or when any separator after the name is followed by an EXCLUDED title (`Owner: Jane Doe — Leasing Agent`, `| Leasing Agent`, `/`, `:`, `,`): that title is the person's own and refuses them. An eligible following title does not veto.
+    const titleEnd=start+title.length;
+    if(owned.some(span=>start<span.end&&span.start<titleEnd)||followedByExcludedTitle(text.slice(end)))continue;
+   }else owned.push({start:end-title.length,end});
    const words=pattern===TITLE_NAME?`${HEAD_WORDS.exec(text.slice(0,start))?.[0]??''}${title}`:`${title} ${TAIL_WORDS.exec(text.slice(end))?.[0]??''}`,phrase=pattern===TITLE_NAME?`${commaClauses(text.slice(0,start-(HEAD_WORDS.exec(text.slice(0,start))?.[0].length??0)),'head')} ${words}`:`${words}${commaClauses(text.slice(end+(TAIL_WORDS.exec(text.slice(end))?.[0].length??0)),'tail')}`;
    const own=splitName(name)?.key,others=names.filter(other=>other.key!==own&&(other.end<=start||other.start>=end)),after=[...others.filter(other=>other.start>=end).map(other=>other.start),...[...text.matchAll(SEPARATOR)].map(mark=>mark.index).filter(index=>index>=end)];
    hits.push({name:tidy(name),title:tidy(title),phrase:tidy(phrase),signature:pattern===NAME_TITLE&&SIGNATURE_LEAD.test(text.slice(0,start)),quote:statement(text,start,end),clause:text.slice(start,after.length?Math.min(...after):text.length),alone:others.length===0});

@@ -223,6 +223,14 @@ describe('a title is one person\'s: overlapping name-first and title-first readi
  it('gives each person their OWN title and their own-statement address when both are eligible, and never makes the second an owner',()=>{
   expect(found('Jane Doe, Owner, Ann Roe, Broker ann@peak.org')).toEqual([{name:'Ann Roe',title:'Broker',email:'ann@peak.org'},{name:'Jane Doe',title:'Owner',email:null}]);
  });
+ it.each([['a dash','—'],['a hyphen','-'],['an en dash','–'],['a pipe','|'],['a slash','/'],['a colon',':'],['a comma',','],['an ampersand','&'],['"and"','and']])('a title-first reading is vetoed by an excluded title after %s that follows the name',(_name,separator)=>{
+  expect(found(`Owner: Jane Doe ${separator} Leasing Agent jane@peak.org`)).toEqual([]);
+ });
+ it('keeps a title-first person whose following title is eligible, with the higher-ranked title, and the address of the same card',()=>{
+  expect(found('Owner: Jane Doe — Broker')).toEqual([{name:'Jane Doe',title:'Owner',email:null}]);
+  expect(found('Owner: Jane Doe | Broker jane@peak.org')).toEqual([{name:'Jane Doe',title:'Owner',email:'jane@peak.org'}]);
+  expect(found('Owner: Jane Doe, Call us jane@peak.org')).toEqual([{name:'Jane Doe',title:'Owner',email:'jane@peak.org'}]);
+ });
  it('keeps the title-first cards: "Owner: Jane Doe", "Owner, Jane Doe", "President — Tyler Smith" and "Title: Name" followed by something that is no title',()=>{
   expect(found('Owner: Jane Doe')).toEqual([{name:'Jane Doe',title:'Owner',email:null}]);
   expect(found('Owner, Jane Doe')).toEqual([{name:'Jane Doe',title:'Owner',email:null}]);
