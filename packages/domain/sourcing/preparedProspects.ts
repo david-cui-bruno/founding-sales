@@ -12,6 +12,7 @@ import {projectPreparedProspect,type PreparedRunIdentity} from './preparedProspe
 import {withPreparedCaptureSnapshots} from './preparedCaptureStore.ts';
 import type {PreparedCaptureCustody} from './preparedCaptureBatch.ts';
 import {lockPreparedCaptureDependencies} from './preparedCaptureDependencies.ts';
+import {currentPeopleContacts,type PeopleContact} from '../outreach/peopleContacts.ts';
 import {preparedSourceExpirations,permittedPageDeadlines} from './preparedSourceDeadlines.ts';
 
 type Result<T>={ok:true;value:T}|{ok:false;reason:string};
@@ -90,6 +91,8 @@ async function withCallableFallback(ctx:RepositoryContext,briefs:PreparedProspec
  return {ok:true,value:briefs.map(b=>b.callable.state==='callable'||b.companyHost===null?b:stood.get(b.companyHost)??b)};
 }
 
+/** The stored named decision-maker of this exact candidate revision and company host, for Calling's "Ask for <first name>" (ADR0037). */
+const namedPerson=(person:PeopleContact|undefined,brief:PreparedProspectCurrentBrief)=>person&&person.candidateRevision===brief.target.candidateRevision&&person.host===brief.companyHost?{namedPerson:{name:`${person.firstName} ${person.lastName}`,title:person.title}}:{};
 export async function listPreparedProspects(ctx:RepositoryContext,input:z.input<typeof preparedProspectListInputSchema>,authority:()=>Promise<boolean>=async()=>true):Promise<Result<z.infer<typeof preparedProspectListSchema>>>{
  const parsed=preparedProspectListInputSchema.safeParse(input);if(!parsed.success)return refuse('candidate_unavailable');
  if(!await admin(ctx))return refuse('authority_changed');
@@ -104,11 +107,13 @@ export async function listPreparedProspects(ctx:RepositoryContext,input:z.input<
  };
  const result=await currentBriefs(ctx,readRows,authority);if(!result.ok)return result;
  const briefs=parsed.data.order==='callable'?await withCallableFallback(ctx,result.value.briefs,authority):{ok:true as const,value:result.value.briefs};if(!briefs.ok)return briefs;
+ // The named people are read BEFORE the final view, authority and expiry checks, so a person is never returned for a candidate those checks refuse or that changed after the read.
+ const people=await currentPeopleContacts(ctx,briefs.value.map(brief=>brief.target.candidateId));
  const finalOrder=await preparedPriorityOrder(ctx,parsed.data.offset,parsed.data.order);if(finalOrder.viewRevision!==order.viewRevision)return refuse('view_changed');
  if(!await authority()||!await admin(ctx))return refuse('authority_changed');
  const wall=(await ctx.db.query<{at:Date}>('SELECT clock_timestamp() AS at')).rows[0]!.at.getTime();
  if(briefs.value.some(b=>b.validUntil!==null&&Date.parse(b.validUntil)<=wall))return refuse('source_expired');
- return {ok:true,value:preparedProspectListSchema.parse({prospects:briefs.value.map(brief=>preparedProspectSummarySchema.parse({target:brief.target,displayName:brief.displayName,discoveryLabel:brief.discoveryLabel,website:brief.website,targetingLocality:brief.targetingLocality,targetingRegion:brief.targetingRegion,sourceNotices:brief.sourceNotices,state:brief.state,summary:brief.summary,unknowns:brief.unknowns,validUntil:brief.validUntil,callable:brief.callable,companyHost:brief.companyHost})),hasMore:order.rows.length>50,viewRevision:order.viewRevision,checkedAt:new Date(wall).toISOString()})};
+ return {ok:true,value:preparedProspectListSchema.parse({prospects:briefs.value.map(brief=>preparedProspectSummarySchema.parse({target:brief.target,displayName:brief.displayName,discoveryLabel:brief.discoveryLabel,website:brief.website,targetingLocality:brief.targetingLocality,targetingRegion:brief.targetingRegion,sourceNotices:brief.sourceNotices,state:brief.state,summary:brief.summary,unknowns:brief.unknowns,validUntil:brief.validUntil,callable:brief.callable,companyHost:brief.companyHost,...namedPerson(people.get(brief.target.candidateId),brief)})),hasMore:order.rows.length>50,viewRevision:order.viewRevision,checkedAt:new Date(wall).toISOString()})};
 }
 
 export async function readPreparedProspect(ctx:RepositoryContext,target:PreparedProspectTarget,authority:()=>Promise<boolean>=async()=>true):Promise<Result<PreparedProspectCurrentBrief>>{

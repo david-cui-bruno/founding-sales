@@ -14,9 +14,10 @@ const {preparedEmailProof}=await import('../../outreach/preparedEmailProof.ts');
 const DAY=86_400_000,base=Date.parse('2026-11-02T12:00:00.000Z');
 const target:PreparedEmailTarget={candidateId:'c',candidateRevision:1,runId:'r',address:'jordan@acme.example'} as PreparedEmailTarget;
 const campaign=(days:number)=>({owner_user_id:'u',regions:['OH'],expires_at:new Date(base+days*DAY)}) as unknown as EmailCampaignRow;
-const proof=(input:{evidence:number;person:number;campaign:number})=>{
- mocks.read.mockResolvedValue({candidateId:'c',candidateRevision:1,runId:'r',host:'acme.example',region:'OH',locality:'Columbus',businessName:'Acme',evidenceDeadline:base+input.evidence*DAY});
- mocks.person.mockResolvedValue({id:'p',provider:'apollo',email:'jordan@acme.example',host:'acme.example',firstName:'Jordan',lastName:'Blake',title:'Owner',matchConfidence:'high',expiresAt:new Date(base+input.person*DAY)});
+const page=(url:string,deadline:number,...blocks:string[])=>({observationId:`o-${url}`,url,blocks:blocks.map(id=>({id,text:'x'})),deadline:base+deadline*DAY});
+const proof=(input:{evidence:number;person:number;campaign:number;pages?:ReturnType<typeof page>[];source?:{url:string;blockId:string;quote:string}})=>{
+ mocks.read.mockResolvedValue({candidateId:'c',candidateRevision:1,runId:'r',host:'acme.example',region:'OH',locality:'Columbus',businessName:'Acme',pages:input.pages??[],evidenceDeadline:base+input.evidence*DAY});
+ mocks.person.mockResolvedValue({id:'p',provider:input.source?'own_site':'apollo',source:input.source??null,email:'jordan@acme.example',host:'acme.example',firstName:'Jordan',lastName:'Blake',title:'Owner',matchConfidence:'high',expiresAt:new Date(base+input.person*DAY)});
  return preparedEmailProof({db:{query:vi.fn()}} as unknown as RepositoryContext,campaign(input.campaign),target);
 };
 beforeEach(()=>{mocks.verified.mockResolvedValue(true);});
@@ -31,4 +32,21 @@ it('carries an already-passed evidence deadline, which the campaign authority th
  const expired=await proof({evidence:-1,person:30,campaign:20});
  expect(expired?.validUntil).toBe(base-DAY);
  expect(base>=expired!.validUntil).toBe(true);
+});
+
+// ADR0037: an own-site person is read from one cited page and block. That page must still be among the admitted pages, and its own deadline bounds the proof.
+const cite={url:'https://acme.example/team',blockId:'b2',quote:'Jordan Blake, Owner'};
+it('is valid only until the cited page\'s own deadline when that page expires before the company\'s other evidence',async()=>{
+ expect((await proof({evidence:6,person:30,campaign:20,source:cite,pages:[page('https://acme.example/',6,'b1'),page(cite.url,2,'b1','b2')]}))?.validUntil).toBe(base+2*DAY);
+ expect((await proof({evidence:6,person:30,campaign:20,source:cite,pages:[page(cite.url,6,'b2')]}))?.validUntil).toBe(base+6*DAY);
+});
+it.each([
+ ['no longer admitted (expired or removed)',[page('https://acme.example/',6,'b1','b2')]],
+ ['admitted but without the cited block',[page(cite.url,6,'b1','b3')]],
+ ['admitted under no page at all',[]],
+])('refuses an own-site person whose cited page is %s',async(_name,pages)=>{
+ expect(await proof({evidence:6,person:30,campaign:20,source:cite,pages})).toBeNull();
+});
+it('does not require a cited page of a provider person, which cites none',async()=>{
+ expect((await proof({evidence:6,person:30,campaign:20,pages:[]}))?.validUntil).toBe(base+6*DAY);
 });

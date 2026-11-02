@@ -217,6 +217,13 @@ it('does not group records without a website or across distinct directory paths,
 
 const callable:PreparedProspectCallable={state:'callable',missing:[],phone:'(804) 555-0142',person:'Jordan Reyes, Owner',residential:true,businessContext:true,software:false};
 const listUrl='/browser/api/sourcing/prepared-prospects/list';
+it('shows the stored named decision-maker on the card as "Ask for <first name> — <title>" and nothing when none is stored (ADR0037)',async()=>{
+ const f=await mounted();await screen.findByRole('heading',{name:row().displayName});
+ f.rows([{...row(2,callable),namedPerson:{name:'Tyler Bradford',title:'President, CPM'}},row(3,callable)],true);
+ fireEvent.click(screen.getByRole('button',{name:'Callable today'}));await screen.findByRole('heading',{name:row(2).displayName});
+ expect(screen.getAllByText(/^Ask for /u).map(node=>node.textContent)).toEqual(['Ask for Tyler — President, CPM']);
+ f.client.dispose();
+});
 it('badges callable rows and Callable today reads the callable order, showing only callable rows of this page honestly',async()=>{
  const f=await mounted();await screen.findByRole('heading',{name:row().displayName});
  expect(screen.queryByText('Callable',{exact:true})).toBeNull();

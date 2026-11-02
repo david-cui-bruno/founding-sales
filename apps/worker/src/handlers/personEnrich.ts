@@ -7,8 +7,8 @@ import type {PeopleProvider} from '@fss/domain/outreach/peopleProvider.ts';
 import type {DueWorkSource} from '../scheduler/schedulerPass.ts';
 import type {Logger} from '../bootstrap/log.ts';
 
-/** ADR0036. The domain owns every reservation, call, cap and commit. An `outbound_fence` handler runs outside any transaction, so each
- * reservation commits before its paid call and each settlement on its own: a crash never lets a company be paid for twice. */
+/** ADR0036/0037. The domain owns every reservation, call, cap and commit. An `outbound_fence` handler runs outside any transaction, so each
+ * reservation commits before a paid call and each settlement on its own: a crash never lets a company be paid for twice. */
 export function personEnrichHandler(deps:{provider:PeopleProvider;log?:Logger}):JobHandler {
  return {kind:'outreach.person_enrich',protection:'outbound_fence',maxAttempts:1,leaseSeconds:120,
   handle:async input=>{
@@ -18,13 +18,14 @@ export function personEnrichHandler(deps:{provider:PeopleProvider;log?:Logger}):
   }};
 }
 
-/** One pass per workspace every ten minutes while an admin has switched people enrichment on with a nonzero daily credit cap. Listed
- * always and materializing only where the worker composed a provider (the Apollo key is installed), so no key means no job. */
+/** One pass per workspace every ten minutes while an admin has switched people enrichment on. The daily credit cap is not a condition: the
+ * own-site source (ADR0037) costs nothing, and a source that costs credits stops itself at the cap (`stopped: 'disabled'` at zero). Listed
+ * always and materializing only where the worker composed a source. */
 export function personEnrichSource(enabled:boolean):DueWorkSource {
  return {name:'people-enrichment',find:async(session,now)=>{
   if(!enabled)return [];
   const rows=(await session.query<{workspace_id:string}>(`SELECT workspace_id FROM workspace_settings WHERE setting_key='people_enrichment' AND superseded_at IS NULL
-   AND value->>'enabled'='true' AND (value->>'dailyCredits')::int>0 ORDER BY 1 LIMIT 25`)).rows;
+   AND value->>'enabled'='true' ORDER BY 1 LIMIT 25`)).rows;
   return rows.map((row):JobSpecification=>({workspaceId:row.workspace_id,kind:'outreach.person_enrich',idempotencyKey:jobIdempotencyKey.outreachPersonEnrich(row.workspace_id,now),payload:{},maxAttempts:1}));
  }};
 }

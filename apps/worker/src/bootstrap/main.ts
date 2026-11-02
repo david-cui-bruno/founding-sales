@@ -30,7 +30,7 @@ import {sourcingQualificationHandler,sourcingQualificationSource} from '../handl
 import {prospectPhoneDiscoveryHandler,prospectPhoneDiscoverySource} from '../handlers/prospectPhoneDiscovery.ts';
 import {preparedEmailAdmitHandler,preparedEmailAdmitSource} from '../handlers/preparedEmailAdmit.ts';
 import {personEnrichHandler,personEnrichSource} from '../handlers/personEnrich.ts';
-import {apolloPeopleFromEnvironment} from '../providers/apolloPeople.ts';
+import {ownSitePeople} from '@fss/domain/outreach/ownSitePeople.ts';
 import type {PeopleProvider} from '@fss/domain/outreach/peopleProvider.ts';
 import {dnsEmailVerifier} from '@fss/domain/outreach/emailVerification.ts';
 import {qualificationExtraction} from '../sourcing/qualificationExtraction.ts';
@@ -147,7 +147,7 @@ export interface HandlerComposition extends CaptureReadComposition {
   readonly crmMailCapture?: Parameters<typeof businessMailCaptureHandler>[0] | undefined;
   readonly socialAssets?:SocialDeletionPort|null;
   readonly apolloDiscovery?: ApolloDiscoveryDependencies;
-  /** The people-data provider (ADR0036), composed only where its key is installed. */
+  /** The people source (ADR0036/0037): `own_site`, which reads the retained captures and needs no key. */
   readonly peopleProvider?: PeopleProvider;
   readonly discovery?: DiscoverySearchProvider;
   readonly meetingAutoRecording?: Parameters<typeof meetingAutoRecordingJobHandler>[0] | undefined;
@@ -693,14 +693,14 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
   if(diagnosticRuntime&&!diagnostic)throw new Error('diagnostic_gmail_unavailable');
   const crmRuntime=createCrmCapabilityRuntime(crmConfiguration,{implementationCommit:buildCommit(environment),imageDigest:identity.digest,side:'worker',schemaVersion:REQUIRED_SCHEMA,gmailAvailable:deployment.gmail!==undefined});
   const crm=await composeCrmCapabilities({configuration:crmConfiguration,runtime:crmRuntime,openSession:async()=>{const client=new pg.Client({connectionString:config.database.connectionString,application_name:'fss-crm-authority'});await client.connect();return {session:asSession(client),close:()=>client.end()};},...deployment.gmail?{gmail:{...deployment.gmail,openSession:async()=>{const client=new pg.Client({connectionString:config.database.connectionString,application_name:'fss-crm-oauth'});await client.connect();return {session:asSession(client),close:()=>client.end()};}}}:{}});
-  const apolloDiscovery=apolloFromEnvironment(environment),peopleProvider=apolloPeopleFromEnvironment(environment);
+  const apolloDiscovery=apolloFromEnvironment(environment);
   const composition: HandlerComposition = {
     ...composed,
     ...crm.handlers,
     ...composed.mail&&crmConfiguration.capture?{mail:{...composed.mail,businessMailObserver:crm.observer}}:{},
     socialAssets:await socialDeletionPort(environment),
     ...apolloDiscovery?{apolloDiscovery}:{},
-    ...peopleProvider?{peopleProvider}:{},
+    peopleProvider:ownSitePeople(),
     ...(environment['FSS_TAVILY_API_KEY']?{discovery:tavilySearch(environment['FSS_TAVILY_API_KEY'])}:{}),
     ...(zoomRecording.client!==null&&calRecording.ok&&calRecording.apiKey!==null?{meetingAutoRecording:{zoom:zoomRecording.client,calcom:calcomDemoClient({apiKey:calRecording.apiKey})}}:{}),
     ...(meetingAnalysis.options === null ? {} : { meetingAnalysis: meetingAnalysis.options }),

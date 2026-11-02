@@ -1,5 +1,6 @@
 import {afterAll,beforeAll,expect,it} from 'vitest';
 import {fakePeople,preparedEmailWorld} from './preparedEmailFixture.ts';
+import {countAwaitingEnrichment} from '../../outreach/peopleEnrichment.ts';
 import {previewPreparedEmailAdmission} from '../../outreach/preparedEmailPreview.ts';
 import {admittedCandidateIds,listPreparedEmailChoices} from '../../outreach/preparedEmailSelection.ts';
 import {recordEmailVerification} from '../../outreach/emailVerification.ts';
@@ -19,17 +20,18 @@ it('lists the next pass in admission order with company, place, the provider per
  await world.prepared('OH',()=>'Call our office.','Columbus');await world.prepared('WA',()=>'Call our office.','Seattle');await world.prepared('OH',()=>'x');
  const people=fakePeople();
  await world.setPeople({enabled:true,dailyCredits:2});
- // Two lookups fit the cap: the third company still awaits enrichment.
+ // Two lookups fit the cap: the third company still awaits the paid provider; the preview counts for the active free own_site source, which has read none of the three (ADR0037).
  expect(await world.enrich(people)).toMatchObject({looked:2,found:2,stopped:'cap'});
  const before=await counts(),shown=(await preview())!;
  expect(await counts()).toEqual(before);
  expect(people.calls).toHaveLength(2);
- expect(shown.awaitingEnrichment).toBe(1);
+ expect(shown.awaitingEnrichment).toBe(3);
+ expect(await withReadOnlyTransaction(world.runtime,()=>countAwaitingEnrichment(world.ctx(),['OH','WA'],'fake_people'))).toBe(1);
  const admissionOrder=await withReadOnlyTransaction(world.runtime,async()=>(await listPreparedEmailChoices(world.ctx(),{limit:25,regions:['OH','WA'],skip:await admittedCandidateIds(world.ctx()),campaignId:null})).map(choice=>choice.read.candidateId));
  expect(shown.candidates).toHaveLength(2);
  expect(shown.candidates.map(row=>row.candidateId)).toEqual(admissionOrder);
  for(const row of shown.candidates)expect(row).toEqual({candidateId:row.candidateId,host:expect.any(String),companyName:expect.stringMatching(/ Property Management$/u),website:`https://${row.host}/`,locality:expect.any(String),region:expect.stringMatching(/^(OH|WA)$/u),
-  person:{firstName:'Jordan',lastName:'Blake',title:'Owner',email:`jordan.blake@${row.host}`,emailStatus:'verified',matchConfidence:'high',provider:'fake_people',observedAt:expect.any(String),creditsSpent:1},verification:null});
+  person:{firstName:'Jordan',lastName:'Blake',title:'Owner',email:`jordan.blake@${row.host}`,emailStatus:'verified',matchConfidence:'high',provider:'fake_people',observedAt:expect.any(String),creditsSpent:1,source:null},verification:null});
  expect((await preview(1))!.candidates).toHaveLength(1);
  const target=shown.candidates[0]!;
  expect((await preview(25,[target.region==='OH'?'WA':'OH']))!.candidates.some(row=>row.candidateId===target.candidateId)).toBe(false);

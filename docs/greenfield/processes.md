@@ -57,7 +57,7 @@ The default `workerDueWorkSources()` registry contains exactly the following nam
 | `classify-reply` | Due reply classification. |
 | `route-validation` | Due route validation. |
 | `prepared-email-admission` | Every ten minutes per workspace with an unrevoked, unexpired campaign that has room (ADR0035/0036): checks the provider-found decision-maker's own-domain address of prepared companies (DNS MX, no SMTP) and admits valid ones through the campaign owners within its caps. Sends nothing. |
-| `people-enrichment` | Every ten minutes per workspace whose admin set `people_enrichment` on, only in a worker with the Apollo key (ADR0036): looks up at most ten prepared companies' named decision-maker (search free, enrichment at most one credit, reserved and committed before the call, never twice per company), stopping at the daily credit cap and on any provider failure. Sends and contacts nothing. |
+| `people-enrichment` | Every ten minutes per workspace whose admin set `people_enrichment` on (ADR0036/0037): reads up to fifty prepared companies' own retained pages (provider `own_site`, no key, no request, zero credits) for a named decision-maker and the personal address the page published for them, recorded once per company and read again after thirty days or a candidate revision change; the daily credit cap applies only to a source that costs credits (none now). Sends and contacts nothing. |
 
 Supplying the explicit CRM mail-processing port additionally registers `crm-mail-intents`; it derives authorized CRM mail-processing intents and is not part of the default registry above. Neither registration nor scheduler execution grants capture, backfill, processing, sending or other provider consent.
 

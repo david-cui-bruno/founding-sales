@@ -2,7 +2,7 @@
 
 ## Status and scope
 
-Proposed November 2 2026 for David's approval; amends [ADR0035](0035-prepared-company-email-admission.md). David's direction: role addresses (`info@`, `office@`) are not acceptable for the campaign; each email goes to a named owner, president, principal, managing or designated broker or property manager, at a verified personal address from a people-data provider. The `info@` campaign is not going live. It grants no sending, Gmail capture, LinkedIn action or contact; owner sending stays OFF; the campaign's approval, caps (25 lifetime, 5 a day), holds, expiry and the shared send gate are unchanged. Nothing here calls a provider until Root installs the key and an admin turns the setting on.
+Proposed November 2 2026 for David's approval; **amended by [ADR0037](0037-own-site-people-extraction.md): the Apollo adapter, its `apollo-api-key` secret and two-stage injection are retired (Apollo is not affordable); the provider interface, acceptance rule, custody and credit cap stay for a future paid source.** Amends [ADR0035](0035-prepared-company-email-admission.md). David's direction: role addresses (`info@`, `office@`) are not acceptable for the campaign; each email goes to a named owner, president, principal, managing or designated broker or property manager, at a verified personal address from a people-data provider. The `info@` campaign is not going live. It grants no sending, Gmail capture, LinkedIn action or contact; owner sending stays OFF; the campaign's approval, caps (25 lifetime, 5 a day), holds, expiry and the shared send gate are unchanged. Nothing here calls a provider until Root installs the key and an admin turns the setting on.
 
 ## Decision
 

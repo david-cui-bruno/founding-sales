@@ -15,6 +15,7 @@ import {createSequence,createDraftVersion,publishVersion} from '../../sequences/
 import {dnsEmailVerifier,type EmailVerifier} from '../../outreach/emailVerification.ts';
 import {runPreparedEmailAdmission} from '../../outreach/preparedEmailAdmission.ts';
 import {runPeopleEnrichment} from '../../outreach/peopleEnrichment.ts';
+import {ownSitePeople} from '../../outreach/ownSitePeople.ts';
 import type {PeopleLookup,PeopleProvider,ProviderPerson} from '../../outreach/peopleProvider.ts';
 import {updateSetting} from '../../settings/store.ts';
 import type {MailDomainResolver} from '../../crm/routeValidation.ts';
@@ -27,7 +28,7 @@ export function fakePeople(answer:(host:string)=>PeopleLookup=ownerAt){const cal
 /** ADR0035/0036 fixture: a real approved email campaign (mailbox, booking link, postal address, five approved touches) and real own-site
  * prepared captures. `prepared` runs the real fetch and qualification; `invalid` makes the extractor answer invalid_evidence, which is
  * what most real prepared candidates carry (run.reason NOT NULL). `opening` also approves a campaign opening policy. `enrich` runs the real
- * enrichment pass with a fake provider (people enrichment is switched on with `dailyCredits`, default 100); `pass` is the admission pass. */
+ * enrichment pass with a fake provider (people enrichment is switched on with `dailyCredits`, default 100) and `enrichOwnSite` with the real own-site source; `pass` is the admission pass. */
 const response=(body:string):RawResponse=>({statusCode:200,headers:{'content-type':'text/html'},body:new TextEncoder().encode(body),abortedOverCap:false});
 const business='<p>Our property management company manages residential homes for owners and coordinates tenant maintenance requests.</p>';
 const page=(website:string,contact:string)=>researchPageFetch({lookup:async()=>['93.184.216.34'],request:async input=>{
@@ -58,6 +59,8 @@ export async function preparedEmailWorld(options:{opening?:boolean;regions?:stri
  const pass=(v:EmailVerifier=verifier)=>runPreparedEmailAdmission(ctx(true),{verifier:v});
  const setPeople=(value:{enabled:boolean;dailyCredits:number})=>tx(()=>updateSetting(ctx(),{settingKey:'people_enrichment',value}));
  const enrich=(people:{provider:PeopleProvider}=fakePeople())=>runPeopleEnrichment(ctx(true),people);
+ /** The real own-site source (ADR0037) over the retained captures: free, no provider fake. */
+ const enrichOwnSite=()=>runPeopleEnrichment(ctx(true),{provider:ownSitePeople()});
  if(options.manyCaptures)await runtime.query('INSERT INTO research_settings(workspace_id,enabled,max_pages_per_firm,daily_firm_ceiling,daily_cost_ceiling_cents,monthly_cost_ceiling_cents) VALUES($1,true,1,10000,1000000,10000000)',[ws]);
  else await runtime.query('INSERT INTO research_settings(workspace_id,enabled,max_pages_per_firm) VALUES($1,true,1)',[ws]);
  const mailbox=(await runtime.query<{id:string}>("INSERT INTO mailboxes(workspace_id,owner_user_id,email_address,provider_account_id,status,sync_state,history_id,history_id_updated_at,baseline_from_at,baseline_completed_at,coverage_watermark_at) VALUES($1,$2,$3,$4,'connected','ready','1000',now(),now()-interval '30 days',now(),now()) RETURNING id",[ws,seed.alpha.admin.userId,`campaign-${randomUUID()}@example.test`,`local-${randomUUID()}`])).rows[0]!.id;
@@ -79,5 +82,5 @@ export async function preparedEmailWorld(options:{opening?:boolean;regions?:stri
  const openingInput=async()=>{const baseline=(await readCampaignOpeningControl(ctx(),{campaignId},allow))!.baseline!;return {campaignId,expectedCampaignRevision:1,templateVersionId:baseline.templateVersionId,templateContentHash:baseline.templateContentHash,variants:[{id:'local',text:'I noticed {{firm_name}} serves {{firm_locality}}, {{firm_region}}.'}],expiresAt:policy.expiresAt};};
  const approveOpening=async()=>tx(async()=>approveCampaignOpening(ctx(),await openingInput(),allow));
  if(options.opening){const opened=await approveOpening();if(!opened.ok)throw Error(opened.reason);}
- return {db,seed,runtime,ws,ctx,tx,prepared,admissions,pass,enrich,setPeople,campaignId,approveOpening,stop:()=>db.drop()};
+ return {db,seed,runtime,ws,ctx,tx,prepared,admissions,pass,enrich,enrichOwnSite,setPeople,campaignId,approveOpening,stop:()=>db.drop()};
 }

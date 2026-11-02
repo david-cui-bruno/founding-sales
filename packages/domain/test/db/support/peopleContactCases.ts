@@ -20,7 +20,7 @@ async function person(f:Fixture,patch:Row={}):Promise<Row>{
 }
 const badPerson=(constraint:string,patch:Row)=>({constraint:`outreach_people_contacts_${constraint}`,run:async(f:Fixture)=>insertInto(f,'outreach_people_contacts',await person(f,patch))});
 
-/** Current160 catalog only. Each case executes actual rejected DML against the named CHECK/FK/UNIQUE/primary key. */
+/** Current161 catalog only (0161 widens the 0160 person CHECK and adds the citation CHECK). Each case executes actual rejected DML against the named CHECK/FK/UNIQUE/primary key. */
 export const PEOPLE_CONTACT_CONSTRAINT_CASES=[
  badLookup('revision',{candidate_revision:0}),
  badLookup('host',{host:''}),badLookup('host',{host:'Mixed.Example.Test'}),
@@ -34,7 +34,8 @@ export const PEOPLE_CONTACT_CONSTRAINT_CASES=[
  {constraint:'outreach_people_lookups_pkey',run:async(f:Fixture)=>{const value=await lookup(f);await insertInto(f,'outreach_people_lookups',value);return insertInto(f,'outreach_people_lookups',{...await lookup(f),id:value['id']});}},
  {constraint:'outreach_people_lookups_candidate_provider_key',run:async(f:Fixture)=>{const value=await lookup(f);await insertInto(f,'outreach_people_lookups',value);return insertInto(f,'outreach_people_lookups',{...value,id:randomUUID(),host:`other-${value['host'] as string}`});}},
  {constraint:'outreach_people_lookups_host_provider_key',run:async(f:Fixture)=>{const value=await lookup(f),second=await lookup(f);await insertInto(f,'outreach_people_lookups',value);return insertInto(f,'outreach_people_lookups',{...second,host:value['host']});}},
- badPerson('found',{email_status:'unverified'}),badPerson('found',{match_confidence:'low'}),badPerson('found',{email:'jordan@other.example.test'}),badPerson('found',{email:'Jordan@HOST'}),badPerson('found',{first_name:''}),
+ badPerson('found',{email_status:'unverified'}),badPerson('found',{email_status:'published'}),badPerson('found',{email:null}),badPerson('found',{email:null,email_status:'published',source_url:'https://x.example/',source_block_id:'b1',source_quote:'q'}),badPerson('found',{email_status:'unavailable'}),
+ badPerson('source',{source_url:'https://x.example/'}),badPerson('source',{source_url:'https://x.example/',source_block_id:'b1',source_quote:''}),badPerson('source',{source_url:'https://x.example/',source_block_id:'b1',source_quote:'q'.repeat(601)}),badPerson('source',{source_url:'',source_block_id:'b1',source_quote:'q'}),badPerson('found',{match_confidence:'low'}),badPerson('found',{email:'jordan@other.example.test'}),badPerson('found',{email:'Jordan@HOST'}),badPerson('found',{first_name:''}),
  {constraint:'outreach_people_contacts_lookup_fkey',run:async(f:Fixture)=>insertInto(f,'outreach_people_contacts',{...await person(f),lookup_id:missing})},
  {constraint:'outreach_people_contacts_candidate_fkey',run:async(f:Fixture)=>insertInto(f,'outreach_people_contacts',{...await person(f),candidate_id:missing})},
  {constraint:'outreach_people_contacts_pkey',run:async(f:Fixture)=>{const value=await person(f);await insertInto(f,'outreach_people_contacts',value);return insertInto(f,'outreach_people_contacts',value);}},
