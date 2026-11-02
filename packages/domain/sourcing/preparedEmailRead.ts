@@ -6,26 +6,26 @@ import {manualPhoneSnapshots,manualPhoneSnapshotsUnlocked,recheckManualPhoneSnap
 import {withPreparedPhoneSnapshots} from './manualProspectPreparedPhone.ts';
 import {lockPreparedCaptureDependencies} from './preparedCaptureDependencies.ts';
 import {projectPreparedProspect} from './preparedProspectProjection.ts';
-import {preparedEmailRoute,preparedSnapshotDeadlines,type PreparedEmailRoute} from './preparedEmailRoute.ts';
+import {preparedSnapshotDeadlines} from './preparedSourceDeadlines.ts';
 import {admitPreparedPages} from './preparedPageAdmission.ts';
 import {DISCOVERY_RESEARCH_PREPARED_BY,preparedCandidatePayload} from './discoveryIntake.ts';
 import {resolveBusinessName} from './businessName.ts';
 import {preparedPriorityOrder} from './prospectPriorityStore.ts';
 
-/** A prepared own-site company with a published address (ADR0035): the company the prepared brief calls prepared (business context, no
- * contrary context, a company page), one exact address from its admitted pages and its business name (`resolveBusinessName`: the name
- * the first email greets and the Firm carries). A company with no confident business name is not read at all, so selection, preview and
- * admission refuse it by this one predicate. A read, never contact permission. */
-export interface PreparedEmailRead {candidateId:string;candidateRevision:number;runId:string;host:string;region:string;locality:string;businessName:string;route:PreparedEmailRoute}
+/** A prepared own-site company (ADR0035/0036): the company the prepared brief calls prepared (business context, no contrary context, a
+ * company page) and its business name (`resolveBusinessName`: the name the Firm carries). A company with no confident business name is
+ * not read at all, so selection, enrichment, preview and admission refuse it by this one predicate. It carries no address: the person to
+ * email comes from the provider (`outreach_people_contacts`). A read, never contact permission. */
+export interface PreparedEmailRead {candidateId:string;candidateRevision:number;runId:string;host:string;region:string;locality:string;businessName:string}
 const BLOCKERS=new Set(['needs_research','contrary_context','no_business_context','list_page','not_company_page']);
 function emailRead(row:ManualProspectRow,snapshot:ManualPhoneSnapshot|undefined,now:number):PreparedEmailRead|null{
  const deadlines=snapshot&&preparedSnapshotDeadlines(snapshot);
  if(!snapshot||snapshot.dependency_changed||!deadlines)return null;
  const brief=projectPreparedProspect(row,snapshot,{id:snapshot.id,candidate_revision:row.revision},now,deadlines);
  if(!brief||brief.state!=='prepared'||brief.companyHost===null||brief.callable.missing.some(reason=>BLOCKERS.has(reason)))return null;
- const route=preparedEmailRoute(snapshot,now),payload=preparedCandidatePayload(snapshot.payload);
+ const payload=preparedCandidatePayload(snapshot.payload);
  const businessName=payload&&resolveBusinessName({name:payload.firmName,source:payload.preparedBy===DISCOVERY_RESEARCH_PREPARED_BY?'place':'title',locality:brief.targetingLocality,query:payload.discoveryQuery,host:brief.companyHost,blocks:admitPreparedPages(snapshot,now,deadlines).pages.flatMap(page=>page.source.blocks.map(block=>block.text))});
- return route&&businessName?{candidateId:row.id,candidateRevision:row.revision,runId:snapshot.id,host:brief.companyHost,region:brief.targetingRegion,locality:brief.targetingLocality,businessName,route}:null;
+ return businessName?{candidateId:row.id,candidateRevision:row.revision,runId:snapshot.id,host:brief.companyHost,region:brief.targetingRegion,locality:brief.targetingLocality,businessName}:null;
 }
 const clock=async(ctx:RepositoryContext)=>(await ctx.db.query<{at:Date}>('SELECT clock_timestamp() AS at')).rows[0]!.at.getTime();
 /** Authoritative current read. Caller holds the source lifecycle, candidate and campaign locks and supplies the owner authority

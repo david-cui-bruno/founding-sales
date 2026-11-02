@@ -165,8 +165,12 @@ locals {
   #     in its detail), so the Deepgram key reaches the worker's process and no other.
   #     `transcription` must hold a value (`{}`) before the apply that adds it, as above;
   #     `twilio-voice` already does.
+  #   * named-person email enrichment (ADR0036): the worker reads `apollo-api-key` — the Apollo
+  #     key (`apps/worker/src/providers/apolloPeople.ts`) — as `FSS_APOLLO_API_KEY`, and the API
+  #     is NOT given it. Like the other entries it must hold the real key (a bare string) before
+  #     the apply that adds it here, or ECS refuses the worker task.
   api_secret_names        = ["calcom", "device-credential-pepper", "google-gmail-oauth-client", "google-oidc-client", "session-signing-key", "twilio-voice"]
-  worker_secret_names     = ["sourcing-search", "zoom-meetings", "calcom", "google-gmail-oauth-client", "llm-classifier-api-key", "transcription", "twilio-voice"]
+  worker_secret_names     = ["sourcing-search", "zoom-meetings", "apollo-api-key", "calcom", "google-gmail-oauth-client", "llm-classifier-api-key", "transcription", "twilio-voice"]
   operations_secret_names = ["google-gmail-oauth-client"]
 
   # The environment variable a process reads a secret under, where that is not the
@@ -176,6 +180,7 @@ locals {
   # `packages/domain/classification/anthropicClient.ts` reads
   # `FSS_LLM_CLASSIFIER_API_KEY`, so the deployed worker never had a classifier.
   secret_environment_names = {
+    "apollo-api-key"         = "FSS_APOLLO_API_KEY"
     "llm-classifier-api-key" = "FSS_LLM_CLASSIFIER_API_KEY"
     "sourcing-search"        = "FSS_TAVILY_API_KEY"
   }
@@ -186,7 +191,7 @@ locals {
   # stays unclaimed, which is what a worker with no key does by design.
   worker_injected_secret_names = [
     for name in local.worker_secret_names : name
-    if !contains(["llm-classifier-api-key", "sourcing-search"], name) || var.worker_reads_classifier_key
+    if !contains(["apollo-api-key", "llm-classifier-api-key", "sourcing-search"], name) || var.worker_reads_classifier_key
   ]
 
   runtime_database_secret = { DATABASE_SECRET_ARN = var.app_runtime_database_secret_arn }

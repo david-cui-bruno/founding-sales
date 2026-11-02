@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { SENDING_STOP_LINE, TEMPLATE_VARIABLE_NAMES, hasOptOutLink } from '@fss/contracts';
+import { firstNameOf, personFirstNameOf } from '../../sequences/variables.ts';
 import { renderTemplate, templateTextIssues, templateTextWarnings } from '../../src/rules/templates.ts';
 
 // `{booking_link}` is an ordinary single-brace snake_case template variable (migration 0157's setting fills it).
@@ -42,5 +43,22 @@ describe('the booking_link template variable', () => {
     expect(hasOptOutLink(sent)).toBe(false);
     // The rule is unchanged: the URL on the line beside opt-out wording is still refused.
     expect(hasOptOutLink(`Book at ${url}\nReply unsubscribe to stop.`)).toBe(true);
+  });
+});
+
+// `{first_name}` (ADR0036): the campaign's first email greets the named decision-maker, and never a role mailbox.
+describe('the first_name template variable', () => {
+  it('is a named variable beside contact_first_name', () => {
+    expect(TEMPLATE_VARIABLE_NAMES).toContain('first_name');
+    expect(TEMPLATE_VARIABLE_NAMES).toContain('contact_first_name');
+  });
+  it('is the first name of a person, and absent for a role mailbox, a placeholder or a single letter', () => {
+    expect(personFirstNameOf('Jordan Blake')).toBe('Jordan');
+    for (const role of ['Office', 'office', 'Team', 'N/A', '?', 'J']) expect(personFirstNameOf(role)).toBeNull();
+    // contact_first_name's own rule is unchanged: "Office" still renders there.
+    expect(firstNameOf('Office')).toBe('Office');
+  });
+  it('holds the step when absent', () => {
+    expect(renderTemplate({ subject: 'A question', body: 'Hi {first_name},\n\nSam' }, {})).toEqual({ rendered: false, reason: 'missing_variables', missing: ['first_name'] });
   });
 });

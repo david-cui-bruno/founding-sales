@@ -24,3 +24,9 @@ export async function withPreparedSourceDeadlines(ctx:RepositoryContext,rows:rea
  const byUrl=permittedPageDeadlines(await preparedSourceExpirations(ctx,rows,snapshots),snapshots);
  return snapshots.map(s=>({...s,prepared_source_deadlines:Object.fromEntries(s.permitted_urls.flatMap(url=>byUrl.has(url)?[[url,byUrl.get(url)!] as const]:[]))}));
 }
+/** Each admitted page's own source deadline, as the prepared collection attached it; null when this snapshot never carried them. */
+export function preparedSnapshotDeadlines(snapshot:ManualPhoneSnapshot):Map<string,number>|null{
+ const recorded=snapshot['prepared_source_deadlines'];
+ if(typeof recorded!=='object'||recorded===null||Array.isArray(recorded))return null;
+ return new Map(Object.entries(recorded).flatMap(([url,at])=>typeof at==='number'?[[url,at] as const]:[]));
+}

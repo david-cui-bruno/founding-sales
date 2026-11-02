@@ -15,6 +15,7 @@ const firmNames=async()=>(await world.runtime.query<{name:string;website:string}
 it('previews and admits the brand of a search title, and never admits a company whose only name is a location and service title',async()=>{
  const generic=await world.prepared('OH',domain=>`Email info@${domain}`,'Columbus',false,'Columbus, OH Property Management Company');
  const titled=await world.prepared('OH',domain=>`Email info@${domain}`,'Columbus',false,'Property Management Services in Columbus, OH | Acme Realty - Acme Realty');
+ await world.enrich();
  const shown=(await preview())!.candidates;
  expect(shown.map(row=>[row.candidateId,row.companyName])).toEqual([[titled.candidateId,'Acme Realty']]);
  expect(await world.pass()).toMatchObject({admitted:1,failed:0});
@@ -25,6 +26,7 @@ it('previews and admits the brand of a search title, and never admits a company 
 it('takes the Firm name from the company\'s own ©-line when the stored name names no business, and refuses a name another Firm already carries',async()=>{
  const footer=await world.prepared('OH',domain=>`Email info@${domain}</p><p>© 2024 Peak Realty. All rights reserved.`,'Columbus',false,'Dallas-Fort Worth Property Management');
  const taken=await world.prepared('OH',domain=>`Email info@${domain}`,'Columbus',false,'Property Management in Columbus, OH | Acme Realty');
+ await world.enrich();
  expect((await preview())!.candidates.map(row=>[row.candidateId,row.companyName])).toEqual([[footer.candidateId,'Peak Realty']]);
  expect(await world.pass()).toMatchObject({admitted:1,failed:0});
  expect((await firmNames()).map(firm=>firm.name)).toEqual(['Acme Realty','Peak Realty']);
@@ -38,6 +40,7 @@ it('refuses a company whose resolved name matches an existing Firm up to a legal
  const birch=await world.prepared('OH',domain=>`Email info@${domain}`,'Columbus',false,'Property Management in Columbus, OH | Birch Realty');
  const cedar=await world.prepared('OH',domain=>`Email info@${domain}`,'Columbus',false,'Cedar Homes, LLC | Property Management in Columbus, OH');
  const maple=await world.prepared('OH',domain=>`Email info@${domain}`,'Columbus',false,'Property Management in Columbus, OH | Maple Realty');
+ await world.enrich();
  expect(await refusedInAdvance(birch.candidateId)).toBe(true);
  expect(await refusedInAdvance(cedar.candidateId)).toBe(true);
  expect(await refusedInAdvance(maple.candidateId)).toBe(false);
@@ -51,6 +54,7 @@ it('treats a stored name that is the company\'s host, or a leading state and ser
  const state=await world.prepared('OH',domain=>`Email info@${domain}</p><p>© 2024 Peak Lofts. All rights reserved.`,'Columbus',false,'Rhode Island Property Management');
  const bare=await world.prepared('OH',domain=>`Email info@${domain}`,'Columbus',false,'peakpm.com');
  const stateOnly=await world.prepared('OH',domain=>`Email info@${domain}`,'Columbus',false,'New York Property Management Company');
+ await world.enrich();
  expect((await preview())!.candidates.map(row=>[row.candidateId,row.companyName]).sort((a,b)=>a[1]!<b[1]!?-1:1)).toEqual([[host.candidateId,'Peak Cottages'],[state.candidateId,'Peak Lofts']]);
  expect(await world.pass()).toMatchObject({admitted:2,failed:0});
  expect([await admitted(host.candidateId),await admitted(state.candidateId),await admitted(bare.candidateId),await admitted(stateOnly.candidateId)]).toEqual([true,true,false,false]);

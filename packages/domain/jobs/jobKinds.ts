@@ -55,6 +55,7 @@ export const JOB_KINDS = [
   'outreach.reply',
   'reply.human_send',
   'outreach.email_admit',
+  'outreach.person_enrich',
   'social.draft',
   'social.linkedin_recurring',
   'social.assets_cleanup',
@@ -159,6 +160,7 @@ export const JOB_KIND_PROTECTION: Readonly<Record<JobKind, IdempotencyProtection
   'outreach.reply': 'outbound_fence',
   'reply.human_send': 'outbound_fence',
   'outreach.email_admit': 'outbound_fence',
+  'outreach.person_enrich': 'outbound_fence',
   'social.draft': 'outbound_fence',
   'social.linkedin_recurring': 'outbound_fence',
   'social.assets_cleanup': 'business_uniqueness',
@@ -217,6 +219,8 @@ export const jobIdempotencyKey = Object.freeze({
   sourcingPhoneDiscover: (runId:string):string => `sourcing-phone-discover:${runId}`,
   /** One prepared-company admission pass per workspace per ten-minute bucket of the scheduler's clock (`now` is an ISO instant). */
   outreachEmailAdmit: (workspaceId:string,now:string):string => `outreach-email-admit:${workspaceId}:${now.slice(0,15)}`,
+  /** One people-enrichment pass per workspace per ten minutes. */
+  outreachPersonEnrich: (workspaceId:string,now:string):string => `outreach-person-enrich:${workspaceId}:${now.slice(0,15)}`,
   sourcingCheck: (id:string,checkId:string):string => `sourcing-check:${id}:${checkId}`,
   meetingAnalyze: (meetingId: string, notes: number, transcript: number): string => `meeting-analyze:${meetingId}:n${String(notes)}:t${String(transcript)}`,
   meetingAnalysisRequest: (requestId: string, revision: number): string => `meeting-analysis-request:${requestId}:r${String(revision)}`,
@@ -403,6 +407,7 @@ export const JOB_KIND_CLASS: Readonly<Record<JobKind, JobClass>> = Object.freeze
   'outreach.reply': 'urgent',
   'reply.human_send': 'urgent',
   'outreach.email_admit': 'bulk',
+  'outreach.person_enrich': 'bulk',
   'social.draft': 'bulk',
   'social.linkedin_recurring': 'bulk',
   'social.assets_cleanup': 'bulk',

@@ -26,3 +26,15 @@ describe('approved email campaign boundary', () => {
     expect(emailCampaignCommandResultSchema.safeParse({ campaignId: id, revision: 1, recipients: ['private@example.test'] }).success).toBe(false);
   });
 });
+
+describe('named-person enrichment contracts (ADR0036)', () => {
+  it('bounds the people_enrichment setting, off by default, and keeps it out of the settings page snapshot', async () => {
+    const {DEFAULT_PEOPLE_ENRICHMENT, PEOPLE_ENRICHMENT_DAILY_CREDITS_MAX, SETTING_KEYS, STORED_SETTING_VALUE_SCHEMAS} = await import('../src/settings.ts');
+    const schema = STORED_SETTING_VALUE_SCHEMAS.people_enrichment!;
+    expect(DEFAULT_PEOPLE_ENRICHMENT).toEqual({ enabled: false, dailyCredits: 30 });
+    expect(schema.safeParse(DEFAULT_PEOPLE_ENRICHMENT).success).toBe(true);
+    expect(schema.safeParse({ enabled: true, dailyCredits: PEOPLE_ENRICHMENT_DAILY_CREDITS_MAX }).success).toBe(true);
+    for (const bad of [{ enabled: true, dailyCredits: 201 }, { enabled: true, dailyCredits: 0.5 }, { enabled: true }, { dailyCredits: 5 }, { enabled: true, dailyCredits: 5, key: 'x' }]) expect(schema.safeParse(bad).success).toBe(false);
+    expect(SETTING_KEYS).not.toContain('people_enrichment');
+  });
+});

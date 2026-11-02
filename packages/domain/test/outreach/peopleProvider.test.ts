@@ -1,0 +1,31 @@
+import {expect,it} from 'vitest';
+import {acceptablePerson,rankDecisionMakerTitle,type ProviderPerson} from '../../outreach/peopleProvider.ts';
+
+const person=(patch:Partial<ProviderPerson>={}):ProviderPerson=>({providerPersonId:'p1',firstName:'Jordan',lastName:'Blake',title:'Owner',email:'jordan.blake@cobalt.example',emailStatus:'verified',matchConfidence:'high',...patch});
+it('ranks owners above brokers above property managers, and never a junior or support title',()=>{
+ const rank=(title:string)=>rankDecisionMakerTitle(title);
+ expect(['Founder & CEO','President','Principal','Owner'].map(rank)).toEqual([0,0,0,0]);
+ expect(['Managing Broker','Designated Broker','Broker of Record'].map(rank)).toEqual([1,1,1]);
+ expect(rank('Director of Property Management')).toBe(2);expect(rank('Property Manager')).toBe(3);expect(rank('Broker')).toBe(4);
+ for(const title of ['Assistant Property Manager','Leasing Agent','Maintenance Supervisor','Accountant','Marketing Manager','Real Estate Agent','Office Administrator','Owner Relations Coordinator',''])expect(rank(title),title).toBeNull();
+});
+it('accepts only a verified, medium or high, own-domain personal-name decision-maker and lower-cases the address',()=>{
+ expect(acceptablePerson(person({email:'Jordan.Blake@Cobalt.Example'}),'www.cobalt.example')).toEqual({ok:true,person:{providerPersonId:'p1',firstName:'Jordan',lastName:'Blake',title:'Owner',email:'jordan.blake@cobalt.example',confidence:'high'}});
+ expect(acceptablePerson(person({matchConfidence:'medium'}),'cobalt.example')).toMatchObject({ok:true,person:{confidence:'medium'}});
+ const refused=(patch:Partial<ProviderPerson>)=>{const result=acceptablePerson(person(patch),'cobalt.example');return result.ok?'accepted':result.reason;};
+ expect(acceptablePerson(null,'cobalt.example')).toEqual({ok:false,reason:'no_person'});
+ expect(refused({emailStatus:'unverified'})).toBe('unverified');expect(refused({email:null})).toBe('unverified');
+ expect(refused({matchConfidence:'low'})).toBe('low_confidence');expect(refused({matchConfidence:null})).toBe('low_confidence');
+ expect(refused({lastName:'Bl***e'})).toBe('no_name');expect(refused({firstName:'J'})).toBe('no_name');expect(refused({lastName:''})).toBe('no_name');
+ expect(refused({title:'Leasing Agent'})).toBe('title');
+ expect(refused({email:'not an email'})).toBe('invalid_email');
+ expect(refused({email:'jordan.blake@gmail.com'})).toBe('consumer_domain');
+ for(const local of ['info','office','contact','admin','sales','support','leasing','team','no-reply','noreply','hello','Info.'])expect(refused({email:`${local}@cobalt.example`}),local).toBe(local==='Info.'?'invalid_email':'role_address');
+ expect(refused({email:'jordan.blake@other.example'})).toBe('domain_mismatch');expect(refused({email:'jordan@mail.cobalt.example'})).toBe('domain_mismatch');
+});
+it('capitalizes a single-case provider name per word, keeps mixed case, and bounds name and title lengths',()=>{
+ expect(acceptablePerson(person({firstName:'JORDAN',lastName:'mc-dowell o\'brien'}),'cobalt.example')).toMatchObject({ok:true,person:{firstName:'Jordan',lastName:'Mc-Dowell O\'Brien'}});
+ expect(acceptablePerson(person({firstName:'McKenzie',lastName:'DeVries'}),'cobalt.example')).toMatchObject({ok:true,person:{firstName:'McKenzie',lastName:'DeVries'}});
+ expect(acceptablePerson(person({lastName:'B'.repeat(1)+'l'.repeat(100)}),'cobalt.example')).toEqual({ok:false,reason:'no_name'});
+ expect(acceptablePerson(person({title:`Owner ${'x'.repeat(200)}`}),'cobalt.example')).toEqual({ok:false,reason:'title'});
+});

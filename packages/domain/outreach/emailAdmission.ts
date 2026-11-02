@@ -61,8 +61,8 @@ async function admit(ctx:RepositoryContext,input:Input,automaticSource?:Internal
   if(!input.reviewed)return {ok:false,reason:'qualification_requires_review'};
   contactId=prior.value.contactId;routeId=prior.value.id;
  }else{
-  const contact=await createContact(ctx,{firmId:firm.id,fullName:route.displayName,title:route.identityKind==='role'?'Office mailbox':'Source-listed contact'});if(!contact.ok)return contact;
-  const email=await addEmailRoute(ctx,{firmId:firm.id,contactId:contact.value.id,address:route.address,source:'website',retrievedAt:new Date(),associationConfidence:1});if(!email.ok)return email;
+  const contact=await createContact(ctx,{firmId:firm.id,fullName:route.displayName,title:route.person?.title??(route.identityKind==='role'?'Office mailbox':'Source-listed contact')});if(!contact.ok)return contact;
+  const email=await addEmailRoute(ctx,{firmId:firm.id,contactId:contact.value.id,address:route.address,source:route.person?'research_provider':'website',retrievedAt:new Date(),associationConfidence:route.person?.associationConfidence??1});if(!email.ok)return email;
   contactId=contact.value.id;routeId=email.value.id;
  }
  // No invented technical validation: the existing email validation gate still applies.

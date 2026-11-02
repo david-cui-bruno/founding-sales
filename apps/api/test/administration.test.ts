@@ -234,6 +234,18 @@ describe('the administration surface', () => {
     expect(history.body['current']).toEqual({ value: { url: null }, version: 2 });
   });
 
+  it('lets an admin switch people enrichment on within a bounded daily credit cap, and refuses anything else', async () => {
+    const value = { enabled: true, dailyCredits: 30 };
+    const saved = await call('POST', '/settings/update', adminToken, command({ settingKey: 'people_enrichment', value, changeNote: 'first 25 preview' }));
+    expect(saved.status, JSON.stringify(saved.body)).toBe(200);
+    for (const bad of [{ enabled: true, dailyCredits: 201 }, { enabled: true, dailyCredits: -1 }, { enabled: 'yes', dailyCredits: 5 }, { enabled: true }, { enabled: true, dailyCredits: 5, extra: 1 }]) {
+      const refused = await call('POST', '/settings/update', adminToken, command({ settingKey: 'people_enrichment', value: bad }));
+      expect(refused.status).toBe(409);
+      expect(refused.body).toMatchObject({ status: 'refused', reason: 'invalid_value' });
+    }
+    expect((await fixture.db.query("SELECT value,version FROM workspace_settings WHERE setting_key='people_enrichment' AND superseded_at IS NULL")).rows).toEqual([{ value, version: 1 }]);
+  });
+
   it('shows both halves of the production sending switch', async () => {
     // 16.2 is two switches ANDed. With the deployment flag off, an admin enabling
     // sending changes the admin half and not the effective answer.

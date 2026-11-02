@@ -25,6 +25,8 @@ import { readWorkspaceBookingLink } from '../settings/bookingLink.ts';
 export { TEMPLATE_VARIABLE_NAMES, type TemplateVariableName };
 
 const PLACEHOLDER_NAMES = new Set(['n/a', 'na', 'unknown', 'none', 'tbd', 'null']);
+// What a role mailbox is recorded as (`Office`): not a person, so `{first_name}` does not greet it.
+const ROLE_NAMES = new Set(['office', 'team']);
 
 /** The first token of a full name, when it is plausibly a name. */
 export function firstNameOf(fullName: string): string | null {
@@ -33,6 +35,12 @@ export function firstNameOf(fullName: string): string | null {
   if (!/\p{L}/u.test(token)) return null;
   if (PLACEHOLDER_NAMES.has(token.toLowerCase())) return null;
   return token;
+}
+
+/** `{first_name}`: the first name of a recorded person, never of a role mailbox. */
+export function personFirstNameOf(fullName: string): string | null {
+  const name = firstNameOf(fullName);
+  return name === null || ROLE_NAMES.has(name.toLowerCase()) ? null : name;
 }
 
 const present = (value: string | null): string | undefined => {
@@ -80,6 +88,8 @@ export async function templateVariablesFor(
   set('contact_full_name', present(row.full_name));
   set('contact_title', present(row.title));
   set('contact_first_name', present(firstNameOf(row.full_name)));
+  // `{first_name}` is the same value under the short name the campaign copy greets with; absent for a role contact ("Office").
+  set('first_name', present(personFirstNameOf(row.full_name)));
   set('booking_link', present(await readWorkspaceBookingLink(context)));
   return values;
 }

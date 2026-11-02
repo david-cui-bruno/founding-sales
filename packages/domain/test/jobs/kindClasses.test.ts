@@ -77,6 +77,7 @@ describe('job kind classes', () => {
       'sourcing.qualify',
       'sourcing.phone_discover',
       'outreach.email_admit',
+      'outreach.person_enrich',
       // Social drafts and media cleanup run off the interactive call/reply lane.
       'social.draft',
       'social.linkedin_recurring',

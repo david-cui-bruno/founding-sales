@@ -7,13 +7,14 @@ import {runDueStepExecution} from '../../sequences/executions.ts';
 import {recordingSendHandoff} from '../../sequences/sendHandoff.ts';
 import {BOOKING_LINK,POSTAL_ADDRESS,goodMx,preparedEmailWorld,verifier} from './preparedEmailFixture.ts';
 
-// ADR0035: an admitted prepared company must actually reach email preparation, and the campaign opening policy must not hold it silently.
+// ADR0035/0036: an admitted prepared company must actually reach email preparation, greeting its named decision-maker, and the campaign opening policy must not hold it silently.
 let world:Awaited<ReturnType<typeof preparedEmailWorld>>,opened:Awaited<ReturnType<typeof preparedEmailWorld>>;
 beforeAll(async()=>{[world,opened]=[await preparedEmailWorld(),await preparedEmailWorld({opening:true})];},240_000);
 afterAll(async()=>{await world?.stop();await opened?.stop();});
 
-it('prepares the first email for an admitted company whose run is invalid_evidence, composed with the booking link, postal address and stop sentence',async()=>{
- const company=await world.prepared('OH',domain=>`Email info@${domain}`,'Columbus',true);
+it('prepares the first email for an admitted company whose run is invalid_evidence, greeting its named decision-maker and composed with the booking link, postal address and stop sentence',async()=>{
+ const company=await world.prepared('OH',()=>'Call our office.','Columbus',true);
+ await world.enrich();
  const run=(await world.runtime.query<{state:string;reason:string|null}>('SELECT state,reason FROM sourcing_qualification_runs WHERE workspace_id=$1 AND id=$2',[world.ws,company.runId])).rows[0]!;
  expect(run.reason).toBe('invalid_evidence');
  expect(await world.pass()).toEqual({admitted:1,checked:1,failed:0});
@@ -30,13 +31,14 @@ it('prepares the first email for an admitted company whose run is invalid_eviden
  let ran=await look(await dueAt());if(ran.kind==='scheduled')ran=await look(await dueAt());
  expect(ran).toMatchObject({kind:'handed_to_send'});
  const email=handoff.prepared[0]!;
- expect(email.toAddress).toBe(`info@${company.domain}`);
+ expect(email.toAddress).toBe(`jordan.blake@${company.domain}`);
+ expect(email.body.startsWith('Hi Jordan,\n')).toBe(true);
  for(const text of [BOOKING_LINK,POSTAL_ADDRESS,SENDING_STOP_LINE])expect(email.body).toContain(text);
  expect(handoff.dispatched).toEqual([]);
 });
 
 it('does not admit into a campaign with an opening policy, and opening approval refuses once a prepared company is admitted',async()=>{
- await opened.prepared('OH',domain=>`Email info@${domain}`);
+ await opened.prepared('OH',()=>'Call our office.');await opened.enrich();
  expect(await opened.pass(verifier)).toEqual({admitted:0,checked:0,failed:0});
  expect(await opened.admissions()).toEqual([]);
  expect(await world.approveOpening()).toEqual({ok:false,reason:'prepared_admissions_present'});
