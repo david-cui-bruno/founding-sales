@@ -113,6 +113,37 @@ describe('what is never a person or an address',()=>{
   expect(none('Greater Austin, Broker','Houston Texas, Broker','Matt Smith, President of the Board','Our property manager Sarah Lee handles all requests.','Jane Doe, Property Manager, reviewed the lease.','Peak Properties Inc., Owner')).toEqual([]);
  });
  it('reads an all-capitals licence line',()=>{expect(none('TX LICENSE #597044-B RYAN STETSON, BROKER')[0]).toMatchObject({firstName:'Ryan',lastName:'Stetson',title:'Broker'});});
+ it('reads COMPLETE mailbox literals between whitespace and wrapping punctuation: never a suffix of a token, never a token the parser refuses',()=>{
+  const email=(text:string)=>none(text)[0]?.email;
+  expect(email("Jordan O'Connor, Owner, jordan.o'connor@peak.org")).toBe("jordan.o'connor@peak.org");
+  expect(email("Connor Hale, Owner, jordan.o'connor@peak.org")).not.toBe('connor@peak.org');
+  expect(email('Bob Lee, Owner, a(bob@peak.org')).toBeNull();
+  expect(email('Bob Lee, Owner, bob@peak.org,amy@peak.org')).toBeNull();
+  expect(email('Jane Doe, Owner, !jane@peak.org')).toBe('!jane@peak.org');
+  expect(email('Jane Doe, Owner (jane@peak.org).')).toBe('jane@peak.org');
+  expect(email('Jane Doe, Owner, <jane@peak.org>')).toBe('jane@peak.org');
+  expect(email('Jane Doe, Owner, mailto:jane@peak.org;')).toBe('jane@peak.org');
+  expect(email('Jane Doe, Owner, "Jane@Peak.org".')).toBe('jane@peak.org');
+ });
+ it('refuses an eligible title joined to an excluded qualifier: the COMPLETE local title phrase is checked, before or after the eligible words',()=>{
+  expect(none('Assistant Property Manager: Jane Doe — jane@peak.org')).toEqual([]);
+  expect(none('Jane Doe, Property Manager / Leasing Agent')).toEqual([]);
+  expect(none('Jane Doe, Property Manager & Maintenance Coordinator')).toEqual([]);
+  expect(none('Leasing / Property Manager: Jane Doe')).toEqual([]);
+  expect(none('Associate Broker: Jane Doe')).toEqual([]);
+  expect(none('Jane Doe, Broker Associate')).toEqual([]);
+  expect(none('Jane Doe is the Property Manager and Leasing Agent')).toEqual([]);
+  expect(none('Assistant Property Manager: Jane Doe','Property Manager: Ann Roe').map(person=>person.firstName)).toEqual(['Ann']);
+  expect(none('Designated Broker: Jane Doe')[0]).toMatchObject({firstName:'Jane',title:'Designated Broker',rank:2});
+  expect(none('Property Manager: Jane Doe')[0]).toMatchObject({firstName:'Jane',rank:5});
+  expect(none('Jane Doe, Owner and Property Manager')[0]).toMatchObject({firstName:'Jane',title:'Owner and Property Manager',rank:0});
+ });
+ it('vetoes customer and testimonial words on the whole untrimmed block, not on the citation cell trimmed from it',()=>{
+  for(const lead of ['Customer Review','Testimonial','Review','Tenant','Resident','Tenant Testimonials'])expect(none(`${lead} | Jane Doe, Owner, jane@peak.org`),lead).toEqual([]);
+  expect(none('Jane Doe, Owner, jane@peak.org | Resident Portal')).toEqual([]);
+  expect(none('Jane Doe, Owner, jane@peak.org')[0]).toMatchObject({firstName:'Jane',email:'jane@peak.org'});
+  expect(none('Our Team | Jane Doe, Owner, jane@peak.org | Call us')[0]).toMatchObject({firstName:'Jane',email:'jane@peak.org',source:{quote:'Jane Doe, Owner, jane@peak.org'}});
+ });
 });
 
 describe('the own_site provider',()=>{

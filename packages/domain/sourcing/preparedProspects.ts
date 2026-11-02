@@ -107,11 +107,12 @@ export async function listPreparedProspects(ctx:RepositoryContext,input:z.input<
  };
  const result=await currentBriefs(ctx,readRows,authority);if(!result.ok)return result;
  const briefs=parsed.data.order==='callable'?await withCallableFallback(ctx,result.value.briefs,authority):{ok:true as const,value:result.value.briefs};if(!briefs.ok)return briefs;
+ // The named people are read BEFORE the final view, authority and expiry checks, so a person is never returned for a candidate those checks refuse or that changed after the read.
+ const people=await currentPeopleContacts(ctx,briefs.value.map(brief=>brief.target.candidateId));
  const finalOrder=await preparedPriorityOrder(ctx,parsed.data.offset,parsed.data.order);if(finalOrder.viewRevision!==order.viewRevision)return refuse('view_changed');
  if(!await authority()||!await admin(ctx))return refuse('authority_changed');
  const wall=(await ctx.db.query<{at:Date}>('SELECT clock_timestamp() AS at')).rows[0]!.at.getTime();
  if(briefs.value.some(b=>b.validUntil!==null&&Date.parse(b.validUntil)<=wall))return refuse('source_expired');
- const people=await currentPeopleContacts(ctx,briefs.value.map(brief=>brief.target.candidateId));
  return {ok:true,value:preparedProspectListSchema.parse({prospects:briefs.value.map(brief=>preparedProspectSummarySchema.parse({target:brief.target,displayName:brief.displayName,discoveryLabel:brief.discoveryLabel,website:brief.website,targetingLocality:brief.targetingLocality,targetingRegion:brief.targetingRegion,sourceNotices:brief.sourceNotices,state:brief.state,summary:brief.summary,unknowns:brief.unknowns,validUntil:brief.validUntil,callable:brief.callable,companyHost:brief.companyHost,...namedPerson(people.get(brief.target.candidateId),brief)})),hasMore:order.rows.length>50,viewRevision:order.viewRevision,checkedAt:new Date(wall).toISOString()})};
 }
 

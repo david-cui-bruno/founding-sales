@@ -58,6 +58,21 @@ it('keeps a named person with no published address for Calling, never admits or 
  if(listed.ok)expect(listed.value.prospects.find(row=>row.target.candidateId===company.candidateId)?.namedPerson).toEqual({name:'Ryan Stetson',title:'Broker'});
 });
 
+it('reads the named people BEFORE the final authority and expiry checks, so a refused final check returns no person',async()=>{
+ const company=await world.prepared('OH',()=>'TX License #597044-B Ryan Stetson, Broker','Columbus',true);
+ await world.enrichOwnSite();
+ const base=world.ctx(),events:string[]=[];
+ const ctx={...base,db:{query:((text:string,values?:readonly unknown[])=>{if(text.includes('FROM outreach_people_lookups p JOIN outreach_people_contacts'))events.push('people');if(text.startsWith('SELECT clock_timestamp() AS at'))events.push('wall');return base.db.query(text,values);}) as typeof base.db.query}};
+ const run=(authority:()=>Promise<boolean>)=>withTransaction(world.runtime,()=>listPreparedProspects(ctx,{order:'priority'},authority));
+ const answered=await run(async()=>{events.push('authority');return true;});
+ expect(answered.ok).toBe(true);
+ if(answered.ok)expect(answered.value.prospects.find(row=>row.target.candidateId===company.candidateId)?.namedPerson).toEqual({name:'Ryan Stetson',title:'Broker'});
+ expect(events.lastIndexOf('people')).toBeLessThan(events.lastIndexOf('authority'));expect(events.lastIndexOf('authority')).toBeLessThan(events.lastIndexOf('wall'));
+ const calls=events.filter(event=>event==='authority').length;let seen=0;
+ const refused=await run(async()=>++seen<calls);
+ expect(refused).toMatchObject({ok:false,reason:'authority_changed'});expect(JSON.stringify(refused)).not.toContain('Ryan');
+});
+
 it('records nobody for a page that names no decision-maker, a customer, a tenant, a leasing agent or only a role mailbox, and builds no address from a name',async()=>{
  const company=await world.prepared('OH',domain=>`Email info@${domain} or office@${domain}</p><p>"They fixed it fast." - Sarah Lee, Tenant</p><p>- Mike Ross, Owner</p><p>Tom Reed, Leasing Agent tom@${domain}</p><p>Pat Roe, Associate Broker`,'Columbus',true);
  expect(await world.enrichOwnSite()).toMatchObject({looked:1,found:0,none:1,credits:0});

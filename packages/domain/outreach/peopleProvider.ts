@@ -36,8 +36,10 @@ const TITLE_RANKS:readonly (readonly [RegExp,number])[]=[
 /** A vice president is not "president": every rank but the property-management one reads the title without its vice-president words, so "Vice
  * President of Finance" matches nothing, "Owner and Vice President" is an owner, and only a VP of property management is a decision-maker. */
 const VICE_PRESIDENT=/\b(?:vice[- ]?president|vp|svp|evp|avp)\b/giu,PROPERTY_MANAGEMENT_RANK=4;
+/** A title the shared exclusion list refuses (assistant, associate, leasing, agent, coordinator, ...): never a decision-maker, whatever eligible word it also holds. */
+export const isExcludedTitle=(title:string):boolean=>EXCLUDED_TITLE.test(title);
 export function rankDecisionMakerTitle(title:string):number|null{
- if(EXCLUDED_TITLE.test(title))return null;
+ if(isExcludedTitle(title))return null;
  const withoutVice=title.replace(VICE_PRESIDENT,' '),ranks=TITLE_RANKS.filter(([pattern,rank])=>pattern.test(rank===PROPERTY_MANAGEMENT_RANK?title:withoutVice)).map(([,rank])=>rank);
  return ranks.length?Math.min(...ranks):null;
 }

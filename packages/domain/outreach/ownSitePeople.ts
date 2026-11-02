@@ -1,6 +1,7 @@
 import {createHash} from 'node:crypto';
 import type {PreparedPageText} from '../sourcing/preparedEmailRead.ts';
-import {OWN_SITE_PROVIDER,personalAddressAtHost,rankDecisionMakerTitle,type PeopleProvider,type ProviderPerson} from './peopleProvider.ts';
+import {parseEmailAddress} from '../crm/routeValidation.ts';
+import {OWN_SITE_PROVIDER,isExcludedTitle,personalAddressAtHost,rankDecisionMakerTitle,type PeopleProvider,type ProviderPerson} from './peopleProvider.ts';
 
 /** ADR0037. Named decision-makers read from the company's OWN retained pages (the prepared capture's visible text blocks), deterministically: no
  * model, no network, no credit. A person is a NAME next to a decision-maker TITLE: "Name, Title" (team cards, bylines, the TX TREC and CA DRE licence footers
@@ -25,7 +26,8 @@ const NAME_TITLE=new RegExp(`(?<![\\p{L}\\p{N}])(${NAME})(?:\\s*,\\s*|\\s+[–�
 const TITLE_NAME=new RegExp(`(?<![\\p{L}\\p{N}])(${TITLE})\\s*(?:~|:|–|—|\\s-\\s|,)\\s*(${NAME})(?![\\p{L}\\p{N}])(?=$|\\s*[,.;:)|•·–—~(\\[#/]|\\s+-\\s|\\s+${LICENCE})`,'gu');
 const NAME_IS_TITLE=new RegExp(`(?<![\\p{L}\\p{N}])(${NAME})\\s+(?:is|serves as|has been|was)\\s+(?:the|our|a|an)\\s+(?:current\\s+)?(${TITLE})${AFTER}`,'gu');
 const NAME_ONLY=new RegExp(`^(${NAME})\\.?$`,'u'),TITLE_ONLY=new RegExp(`^(${TITLE})(?:\\s*,?\\s*(?:${LICENCE}.*)?)?$`,'u');
-const EMAIL=/[A-Za-z0-9][A-Za-z0-9._%+-]*@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/gu;
+/** Characters that wrap an address in running text and are never part of one a person publishes: brackets, quotes, sentence and list punctuation, table bars. */
+const WRAPPING=/^[<>()[\]"'“”‘’,.;:|•·]+|[<>()[\]"'“”‘’,.;:|•·]+$/gu;
 const COMPANY_SIDE=/\b(?:broker|ceo|chief executive|president|founder|principal|property manager)\b/iu;
 const CUSTOMER_WORDS=/\b(?:testimonials?|reviews?|reviewed|stars?|tenants?|residents?|renters?|clients?|customers?|homeowners?)\b/iu;
 const SIGNATURE_LEAD=/(?:^|\s)[–—~-]\s*$/u;
@@ -46,12 +48,19 @@ function belongsTo(local:string,person:{firstName:string;lastName:string;key:str
  const mailbox=letters(local),first=letters(person.key.split(' ')[0]!),nick=letters(person.firstName),last=letters(person.lastName.replace(/\b(?:Jr|Sr|II|III|IV)\.?$/u,''));
  return [first,nick].some(name=>name.length>=3&&(mailbox.includes(name)||name.startsWith(mailbox)&&mailbox.length>=3))||last.length>=3&&mailbox.includes(last);
 }
-const emailsIn=(text:string):string[]=>[...new Set((text.match(EMAIL)??[]).map(address=>address.replace(/\.+$/u,'').toLowerCase()))];
+/** The COMPLETE mailbox literals of a text: each whitespace-delimited token that carries an `@`, trimmed of wrapping characters only (and a `mailto:`), must parse whole as an address; a token that does not (`a(b@x.org`, `a@b.org,c@d.org`) is refused, and a suffix of a token is never rescanned (`jordan.o'connor@x.org` is never `connor@x.org`). */
+const emailsIn=(text:string):string[]=>[...new Set(text.split(/\s+/u).flatMap(token=>{
+ if(!token.includes('@'))return [];
+ const parsed=parseEmailAddress(token.replace(WRAPPING,'').replace(/^mailto:/iu,'').replace(WRAPPING,''));
+ return parsed?[`${parsed.localPart}@${parsed.domain}`.toLowerCase()]:[];
+}))];
 /** A person's page address: valid at the company host and not a role or consumer mailbox. */
 const personal=(addresses:readonly string[],host:string):string[]=>addresses.flatMap(address=>{const checked=personalAddressAtHost(address,host);return checked.ok?[checked.email]:[];});
 const localOf=(address:string)=>address.slice(0,address.indexOf('@'));
 
-interface Hit {name:string;title:string;signature:boolean;quote:string}
+/** `phrase` is the COMPLETE local title: the matched title plus the qualifier words joined to it ("Assistant" in "Assistant Property Manager: Jane", "Leasing Agent" in "Property Manager / Leasing Agent"). */
+interface Hit {name:string;title:string;phrase:string;signature:boolean;quote:string}
+const HEAD_WORDS=/(?<![\p{L}\p{N}'’®@.])(?:[\p{L}'’®]+[\s/&+–—-]+){1,3}$/u,TAIL_WORDS=/^(?:[\s/&+–—-]+[\p{L}'’®]+(?=[\s/&+–—,;:)|•·-]|$)){1,3}/u;
 /** The statement around a match: its text between the nearest `|`, bullet or copyright marks, so a footer's citation is the line that names the person, not the whole footer. */
 const statement=(text:string,start:number,end:number):string=>{
  const before=Math.max(text.lastIndexOf('|',start),text.lastIndexOf('•',start),text.lastIndexOf('·',start),text.lastIndexOf('©',start)),stops=[...'|•·©'].map(mark=>text.indexOf(mark,end)).filter(index=>index>=0);
@@ -63,7 +72,8 @@ function hitsIn(block:string):Hit[]{
   pattern.lastIndex=0;
   for(const match of text.matchAll(pattern)){
    const [name,title]=pattern===TITLE_NAME?[match[2]!,match[1]!]:[match[1]!,match[2]!];
-   hits.push({name:tidy(name),title:tidy(title),signature:pattern===NAME_TITLE&&SIGNATURE_LEAD.test(text.slice(0,match.index)),quote:statement(text,match.index,match.index+match[0].length)});
+   const start=match.index,end=start+match[0].length,phrase=pattern===TITLE_NAME?`${HEAD_WORDS.exec(text.slice(0,start))?.[0]??''}${title}`:`${title} ${TAIL_WORDS.exec(text.slice(end))?.[0]??''}`;
+   hits.push({name:tidy(name),title:tidy(title),phrase:tidy(phrase),signature:pattern===NAME_TITLE&&SIGNATURE_LEAD.test(text.slice(0,start)),quote:statement(text,start,end)});
   }
  }
  return hits;
@@ -74,23 +84,25 @@ function mentionsOf(pages:readonly PreparedPageText[],host:string):Mention[]{
  const found:Mention[]=[];let order=0;
  for(const page of pages){
   const blocks=page.blocks.map(block=>({id:block.id,text:tidy(block.text)}));
-  const push=(raw:{name:string;title:string;signature:boolean},block:string,quote:string,emails:string[],adjacent:boolean,soleHit:boolean)=>{
+  const push=(raw:{name:string;title:string;phrase?:string;signature:boolean},block:string,quote:string,context:string,emails:string[],adjacent:boolean,soleHit:boolean)=>{
    const person=splitName(raw.name),rank=rankDecisionMakerTitle(raw.title);
-   if(!person||rank===null||CUSTOMER_WORDS.test(quote)||raw.signature&&!COMPANY_SIDE.test(raw.title)||raw.name.length>60)return;
+   // The customer veto reads the whole untrimmed block (never the citation trimmed to one `|` cell), the title veto the complete local title phrase.
+   if(!person||rank===null||isExcludedTitle(raw.phrase??raw.title)||CUSTOMER_WORDS.test(context)||raw.signature&&!COMPANY_SIDE.test(raw.title)||raw.name.length>60)return;
    const mine=personal(emails,host),pool=adjacent||!soleHit?mine.filter(address=>belongsTo(localOf(address),person)):mine.length===1?mine:mine.filter(address=>belongsTo(localOf(address),person));
    found.push({...person,title:raw.title,rank,email:pool[0]??null,confidence:raw.signature?'medium':'high',order:order++,blockId:block,observationId:page.observationId,url:page.url,quote:tidy(quote).slice(0,500)});
   };
   for(let i=0;i<blocks.length;i++){
    const block=blocks[i]!;if(block.text.length<5)continue;
    const hits=block.text.length<=600?hitsIn(block.text):[];
-   if(hits.length){for(const hit of hits)push(hit,block.id,hit.quote,emailsIn(block.text),false,hits.length===1);continue;}
+   if(hits.length){for(const hit of hits)push(hit,block.id,hit.quote,block.text,emailsIn(block.text),false,hits.length===1);continue;}
    // A team card: a block that is only a name, directly followed by a block that is only a title; the card's following blocks may carry the address.
    const name=block.text.length<=60?NAME_ONLY.exec(titleCase(block.text.replace(/[:,]$/u,'')))?.[1]:undefined,next=blocks[i+1];
    const title=name&&next&&next.text.length<=90?TITLE_ONLY.exec(titleCase(next.text))?.[1]:undefined;
    if(!name||!next||!title)continue;
    const tail:string[]=[next.text];
    for(const later of blocks.slice(i+2,i+4)){if(NAME_ONLY.test(titleCase(later.text))||hitsIn(titleCase(later.text)).length)break;tail.push(later.text);}
-   push({name,title,signature:false},block.id,[block.text,...tail.filter(text=>text.length<=160)].join(' / '),tail.flatMap(emailsIn),true,true);
+   const card=[block.text,...tail.filter(text=>text.length<=160)].join(' / ');
+   push({name,title,signature:false},block.id,card,card,tail.flatMap(text=>emailsIn(text)),true,true);
   }
  }
  // A line that names the person and publishes their address (any page): "Email Bob at bob@example.com". Attached only to a person with no address yet.
@@ -99,7 +111,7 @@ function mentionsOf(pages:readonly PreparedPageText[],host:string):Mention[]{
   if(!addresses.length||text.length>300)continue;
   for(const mention of found){
    if(mention.email!==null)continue;
-   const address=addresses.find(candidate=>belongsTo(localOf(candidate),mention)),first=letters(mention.key.split(' ')[0]!),words=new Set(text.replace(EMAIL,' ').toLowerCase().split(/[^\p{L}]+/u));
+   const address=addresses.find(candidate=>belongsTo(localOf(candidate),mention)),first=letters(mention.key.split(' ')[0]!),words=new Set(text.replace(/\S*@\S*/gu,' ').toLowerCase().split(/[^\p{L}]+/u));
    if(address&&[first,letters(mention.firstName),letters(mention.lastName)].some(name=>name.length>=3&&words.has(name))){mention.email=address;mention.confidence='medium';mention.quote=tidy(`${mention.quote} … ${page.url===mention.url?'':`${page.url}: `}${text}`).slice(0,600);}
   }
  }
