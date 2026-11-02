@@ -42,7 +42,7 @@ async function paidCheck(ctx:RepositoryContext,verifier:AddressVerifier,kind:Pai
  return {kind:'checked',id:reservation.id,verdict:check.verdict,credits:verdictCredits(check.verdict)};
 }
 
-/** A PUBLISHED address's one paid check before admission (ADR0038): a custody row of its own (provider `millionverifier`, one per candidate REVISION, never renewed), counted against the daily cap like a guess, so the company is never paid for twice. The verdict is returned for the admission pass to decide on (`invalid` and `disposable` refuse; the rest admit). `held`: another attempt owns the check and it is unresolved (`reserved`, `unknown`) or negative: refuse now and retry when its fence ends, never fall back to the free check; the same rows refuse in selection and the admission proof (`addressRefusedByCheck`). Null: this call did not check (no verifier answer in THIS call because the switch or the cap is off, or the verifier failed; or an answer already settled) and the free DNS check decides alone. */
+/** A PUBLISHED address's one paid check before admission (ADR0038): its own paid-ledger row, one per candidate REVISION, counted against the same daily cap as guesses. The verdict is returned for admission to decide on (`invalid` and `disposable` refuse; the rest admit). `held`: another attempt is unresolved or negative, so never fall back to the free check; selection and the admission proof honour the same rows (`addressRefusedByCheck`). Null: this call has no verifier answer because the switch/cap is off, the verifier failed, or a non-negative answer already settled; the free DNS check decides alone. */
 export async function checkPublishedAddress(ctx:RepositoryContext,verifier:AddressVerifier,company:PeopleCompany,address:string,negative:(verdict:'invalid'|'disposable')=>Promise<void>):Promise<AddressVerdict|'held'|null>{
  const paid=await paidCheck(ctx,verifier,'published',company,address);
  if(paid.kind==='skipped'&&paid.why==='taken')return await addressRefusedByCheck(ctx,company.candidateId)?'held':null;// an unresolved or negative row holds the company; a settled ok/catch_all/unknown answer or a cooling-down refusal leaves the free check
@@ -88,7 +88,7 @@ export async function runAddressGuessing(ctx:RepositoryContext,deps:{verifier:Ad
  }
  return pass;
 }
-/** `ok`: the person is the own-site person (name, title, citation); the address is the guess, medium confidence (the company did not publish it for them). The paid row settles `verdict_ok` in the SAME transaction that stores the person copy under a free lookup row (provider `millionverifier`, 0 credits, read again in place), so a charged `ok` is never left without its person. False when no row could be reserved for the person (the switch went off, or another candidate on the host holds one): the answer is recorded, nothing is kept. */
+/** `ok`: copy the own-site person's name, title and citation with the guessed address at medium confidence. A successful write settles the paid row in the SAME transaction as the free person copy (provider `millionverifier`, 0 credits, renewed in place). False when no person row can be reserved (the switch went off or another candidate holds the host): the caller records the charge without keeping a person. */
 async function keepVerifiedGuess(ctx:RepositoryContext,company:PeopleCompany,paidId:string,credits:0|1,person:PeopleContact,address:string):Promise<boolean>{
  const free=await reservePeopleLookup(ctx,{provider:MILLIONVERIFIER_PROVIDER,company,credits:0});
  if(free.kind!=='reserved')return false;

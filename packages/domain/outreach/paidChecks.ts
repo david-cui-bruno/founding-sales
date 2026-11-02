@@ -7,7 +7,7 @@ import {businessDateNow,creditsOnDate,type PeopleCompany,type PeopleReservation}
 import type {AddressRefusal} from './peopleProvider.ts';
 
 /** ADR0038. The paid single-address check's own spend ledger (`outreach_people_paid_checks`, migration 0162): the ADR0036 reservation protocol (reserve BEFORE the paid call under the setting's lock and the workspace
- * advisory lock, re-reading the switch and the cap; settle after) over a table where a row is NEVER renewed. One row per candidate REVISION (the database's fence), so a changed revision adds a row and the earlier
+ * advisory lock, re-reading the switch and the cap; settle after) over a table where charged or possibly charged rows are NEVER renewed. One row per candidate REVISION (the database's fence), so a changed revision adds a row and the earlier
  * charge stays in the day's count; the company is fenced by candidate OR host while an attempt is unresolved (`reserved`, `unknown`) or its answer was negative (`verdict_invalid`, `verdict_disposable`) for the row's thirty days,
  * whatever the candidate revision, person expiry or replacement candidate on the same host. An uncharged refusal (`failed`) is tried again after an hour. */
 const FAILED_COOLDOWN_HOURS=1,STALE_RESERVATION_MINUTES=5;

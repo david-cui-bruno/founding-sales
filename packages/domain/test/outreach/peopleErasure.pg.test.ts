@@ -1,5 +1,5 @@
 import {afterAll,beforeAll,expect,it} from 'vitest';
-import {fakePeople,ownerAt,preparedEmailWorld} from './preparedEmailFixture.ts';
+import {fakeAddressVerifier,fakePeople,ownerAt,preparedEmailWorld} from './preparedEmailFixture.ts';
 import {withTransaction} from '../../db/queryable.ts';
 import {previewDeletion,commitDeletion} from '../../retention/deletion.ts';
 import {recordingSuppressionJournal} from '../../suppression/journal.ts';
@@ -33,4 +33,25 @@ it.each(['firm','contact'] as const)('erases the provider person copy on %s dele
  expect(kept).toMatchObject({state:'found',credits:1,host:company.domain,candidate_id:company.candidateId,email:null,first_name:null,last_name:null,title:null,provider_person_id:null});
  expect(await spentToday()).toBe(spent);
  const again=fakePeople();await world.enrich(again);expect(again.calls).not.toContain(company.domain);
+});
+
+it('lists and retains the paid ledger on contact erasure while removing both own-site and guessed personal copies',async()=>{
+ const company=await world.prepared('OH',()=>'TX License #597044-B Nora Stetson, Broker</p><p>Email info@stetson.example','Columbus',true);
+ await world.enrichOwnSite();
+ expect(await world.guess(fakeAddressVerifier().verifier)).toMatchObject({verified:1,credits:1});
+ expect((await world.pass()).admitted).toBe(1);
+ const admitted=(await world.runtime.query<{firm_id:string;contact_id:string}>('SELECT firm_id,contact_id FROM outreach_email_campaign_admissions WHERE workspace_id=$1 AND candidate_id=$2',[world.ws,company.candidateId])).rows[0]!;
+ const ledger=async()=>(await world.runtime.query('SELECT * FROM outreach_people_paid_checks WHERE workspace_id=$1 AND candidate_id=$2',[world.ws,company.candidateId])).rows;
+ const before=await ledger();
+ expect(before).toHaveLength(1);
+ const preview=await withTransaction(world.runtime,()=>previewDeletion(world.ctx(),{targetKind:'contact',firmId:admitted.firm_id,contactId:admitted.contact_id}));
+ if(!preview.ok)throw Error(preview.reason);
+ expect(preview.value.removes).toMatchObject({outreach_people_contacts:2});
+ expect(preview.value.retains).toMatchObject({outreach_people_lookups:2,outreach_people_paid_checks:1});
+ expect(await withTransaction(world.runtime,()=>commitDeletion(world.ctx(),{requestId:preview.value.requestId,previewHash:preview.value.previewHash,commandId:'erase-guessed-person',journal:recordingSuppressionJournal()}))).toMatchObject({ok:true});
+ expect(await personRows(company.candidateId)).toEqual([]);
+ expect(await ledger()).toEqual(before);
+ const again=fakeAddressVerifier();
+ await world.guess(again.verifier);
+ expect(again.calls).toEqual([]);
 });

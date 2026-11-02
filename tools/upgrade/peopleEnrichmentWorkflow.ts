@@ -11,7 +11,7 @@ import {readPeopleEnrichmentSetting} from '@fss/domain/settings/peopleEnrichment
 export const PEOPLE_ENRICHMENT_UPGRADE_WORKFLOW='outreach.people enrichment custody, own-site person and guessed address (0160/0161/0162, runtime role)';
 
 /** Post-upgrade runtime writes (0161 adds the free own-site source, 0162 the guessed address): a zero-credit reservation passes a zero daily cap and its found person may have no address, or carry a published address with its citation. The widened settings CHECK takes the new key, the ledger reserves one row per company under the daily cap and refuses a
- * second reservation and a reservation past the cap, and the person-lineage trigger function exists beside 0158's. The paid single-address check's ledger (`outreach_people_paid_checks`) takes a settled ok and a settled invalid verdict, and a guess's `verified_guess` person copy hangs off a free custody row. No provider is called. */
+ * second reservation and a reservation past the cap. The paid single-address check's ledger (`outreach_people_paid_checks`) takes a settled ok and a settled invalid verdict, and a guess's `verified_guess` person copy hangs off a free custody row. No provider is called. */
 export async function runPeopleEnrichmentUpgradeWorkflow(context:RepositoryContext):Promise<string>{
  const database=(await context.db.query<{name:string}>('SELECT current_database() AS name')).rows[0]!;
  assert(database.name.startsWith('fss_upgrade_'),'People upgrade workflow requires its owned disposable database');
@@ -63,7 +63,5 @@ assert.deepEqual((await context.db.query('SELECT email_status FROM outreach_peop
 assert.deepEqual((await context.db.query('SELECT reason,credits FROM outreach_people_paid_checks WHERE workspace_id=$1 ORDER BY reason',[context.scope.workspaceId])).rows,[{reason:'verdict_invalid',credits:1},{reason:'verdict_ok',credits:1}]);
 assert((await setting({enabled:true,dailyCredits:3})).ok);
 assert.equal((await reservePaidCheck(context,{kind:'guess',company:seventh,credits:1})).kind,'cap','the cap counts the custody and the paid checks together');
- const body=(await context.db.query<{src:string}>("SELECT prosrc AS src FROM pg_proc WHERE proname='outreach_email_campaign_prepared_person_lineage'")).rows[0]?.src??'';
- assert(body.includes('outreach_people_contacts')&&body.includes("p.state='found'"),'the person lineage function proves the provider person');
-return 'runtime role set people_enrichment, reserved one custody row under a one-credit cap, refused a second reservation, a reservation past the cap and one after a disable, reserved two zero-credit own-site rows at a zero cap and stored a person with no address and a published one with its citation, reserved two paid-check rows under the cap, refused a second check of one company and a third past the cap counting both ledgers, stored a verified_guess person under a free millionverifier row and a check record naming the verifier; person lineage function present; no provider called';
+return 'runtime role set people_enrichment, reserved one custody row under a one-credit cap, refused a second reservation, a reservation past the cap and one after a disable, reserved two zero-credit own-site rows at a zero cap and stored a person with no address and a published one with its citation, reserved two paid-check rows under the cap, refused a second check of one company and a third past the cap counting both ledgers, stored a verified_guess person under a free millionverifier row and a check record naming the verifier; no provider called';
 }

@@ -4,12 +4,13 @@ import {runEmailRouteValidation} from '../../crm/routeValidation.ts';
 import {composeEligibility} from '../../sequences/eligibility.ts';
 import {runDueStepExecution} from '../../sequences/executions.ts';
 import {recordingSendHandoff} from '../../sequences/sendHandoff.ts';
-import {withReadOnlyTransaction} from '../../db/queryable.ts';
+import {withReadOnlyTransaction,withTransaction} from '../../db/queryable.ts';
 import {previewPreparedEmailAdmission} from '../../outreach/preparedEmailPreview.ts';
 import {currentPeopleContacts} from '../../outreach/peopleContacts.ts';
 import type {EmailVerifier} from '../../outreach/emailVerification.ts';
 import type {AddressCheck,AddressVerdict} from '../../outreach/addressGuess.ts';
 import {reservePaidCheck,settlePaidCheck} from '../../outreach/paidChecks.ts';
+import {deleteCandidate} from '../../sourcing/candidates.ts';
 import {BOOKING_LINK,POSTAL_ADDRESS,fakeAddressVerifier,goodMx,preparedEmailWorld} from './preparedEmailFixture.ts';
 
 // ADR0038: the guess-and-verify step and the published-address check, through the real own-site read and the real admission pass, with a fake paid verifier (no network, no key).
@@ -35,12 +36,13 @@ it('keeps a verified guess as `verified_guess` for one credit, previews it as gu
  expect(await custody(company.candidateId)).toEqual({state:'none',credits:1,reason:'verdict_ok',email:`ryan@${company.domain}`,email_status:'verified_guess',match_confidence:'medium',source_url:`https://${company.domain}/`,first_name:'Ryan'});
  // The own-site row is untouched: the company still published no address for the person.
  expect(await custody(company.candidateId,'own_site')).toMatchObject({state:'found',credits:0,email:null,email_status:'unavailable'});
+ expect((await world.runtime.query('SELECT g.expires_at<=o.expires_at AS bounded FROM outreach_people_lookups g JOIN outreach_people_lookups o ON o.workspace_id=g.workspace_id AND o.candidate_id=g.candidate_id AND o.provider=$3 WHERE g.workspace_id=$1 AND g.candidate_id=$2 AND g.provider=$4',[world.ws,company.candidateId,'own_site','millionverifier'])).rows).toEqual([{bounded:true}]);
  expect(await spent()).toBe(1);
  // The same person at the same company is never guessed twice, in this pass or the next.
  expect(await world.guess(paid.verifier)).toMatchObject({looked:0,verified:0,credits:0});expect(paid.calls).toHaveLength(1);
  expect((await currentPeopleContacts(world.ctx(),[company.candidateId])).get(company.candidateId)).toMatchObject({firstName:'Ryan',email:`ryan@${company.domain}`,emailStatus:'verified_guess',provider:'millionverifier'});
  const shown=(await preview())!;
- expect(shown.candidates.filter(row=>row.candidateId===company.candidateId).map(row=>({status:row.person.emailStatus,provider:row.person.provider,credits:row.person.creditsSpent,email:row.person.email}))).toEqual([{status:'verified_guess',provider:'millionverifier',credits:0,email:`ryan@${company.domain}`}]);// the charge is the paid ledger's, not the person row's
+ expect(shown.candidates.filter(row=>row.candidateId===company.candidateId).map(row=>({status:row.person.emailStatus,provider:row.person.provider,credits:row.person.creditsSpent,email:row.person.email}))).toEqual([{status:'verified_guess',provider:'millionverifier',credits:1,email:`ryan@${company.domain}`}]);// the preview still reports the paid charge, read from the ledger rather than the free person row
  // Admission asks only the free DNS check about a guess: the paid check already answered ok.
  const asked=fakeAddressVerifier(()=>verdict('invalid'));
  expect(await world.pass(undefined,asked.verifier)).toEqual({admitted:1,checked:1,failed:0});
@@ -172,4 +174,20 @@ it('keeps an uncertain (possibly charged) paid attempt fenced across a candidate
  await world.guess(paid.verifier);
  expect(paid.calls.filter(address=>address.endsWith(`@${c.domain}`))).toEqual([]);
  expect((await world.runtime.query('SELECT state FROM outreach_people_paid_checks WHERE workspace_id=$1 AND candidate_id=$2',[world.ws,c.candidateId])).rows).toEqual([{state:'unknown'}]);
+});
+
+it('erases a guessed person with its candidate while retaining the body-free paid charge and refusing ledger deletion by the runtime role',async()=>{
+ const company=await world.prepared('OH',named('Nora'),'Columbus',true);
+ await world.enrichOwnSite();
+ const paid=fakeAddressVerifier();
+ expect(await world.guess(paid.verifier)).toMatchObject({verified:1,credits:1});
+ const ledger=async()=>(await world.runtime.query('SELECT * FROM outreach_people_paid_checks WHERE workspace_id=$1 AND candidate_id=$2',[world.ws,company.candidateId])).rows;
+ const before=await ledger(),spentBefore=await spent();
+ expect(before).toHaveLength(1);
+ const revision=(await world.runtime.query<{revision:number}>('SELECT revision FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2',[world.ws,company.candidateId])).rows[0]!.revision;
+ expect(await withTransaction(world.runtime,()=>deleteCandidate(world.ctx(),{id:company.candidateId,expectedRevision:revision}))).toMatchObject({ok:true});
+ expect((await world.runtime.query('SELECT 1 FROM outreach_people_contacts WHERE workspace_id=$1 AND candidate_id=$2',[world.ws,company.candidateId])).rows).toEqual([]);
+ expect(await ledger()).toEqual(before);
+ expect(await spent()).toBe(spentBefore);
+ await expect(world.runtime.query('DELETE FROM outreach_people_paid_checks WHERE workspace_id=$1 AND candidate_id=$2',[world.ws,company.candidateId])).rejects.toMatchObject({code:'42501'});
 });

@@ -2,9 +2,9 @@
 -- LOCAL schema 162 (ADR0038). A named person the company's own pages published WITHOUT an address may be given ONE guessed address, `first@host`, kept only when a
 -- paid single-address check (MillionVerifier) answers `ok`; a published address is checked once before admission. One new table and two widened CHECKs (each dropped and re-added under its
 -- own name); nothing is rewritten, no routine is replaced, no grant on an existing table changes, and the 0160 spend custody `outreach_people_lookups` and its two unique fences are untouched.
---  (a) `outreach_people_paid_checks` is the APPEND-ONLY ledger of paid address checks, one row per candidate REVISION (never renewed, so a changed revision adds a row and the earlier
---      charge stays in the day's count the daily cap sums) with the check's kind, state, the verifier's verdict or refusal as the reason, credits, business date and window. Like the
---      custody it holds no personal data (no address, no name) and has NO foreign key to the candidate: candidate, contact and Firm erasure never delete it, so neither the fence nor the
+--  (a) `outreach_people_paid_checks` is the APPEND-ONLY spend ledger of paid address checks, one row per candidate REVISION. Charged or possibly charged rows are never renewed:
+--      a changed revision adds a row, preserving every earlier charge in the daily cap sum. Only an explicitly uncharged refusal can reuse its row after its cooldown.
+--      Like legacy custody, it holds no personal data (no address, no name) and has NO foreign key to the candidate: candidate, contact and Firm erasure never delete it, so neither the fence nor the
 --      cap ledger can be erased into a second payment. The application may add, read and update it, never delete. The company fence (an unresolved or negative attempt holds the company by
 --      candidate OR host) is enforced by the reservation under the workspace advisory lock; the one-row-per-revision fence is the database's.
 CREATE TABLE outreach_people_paid_checks (
