@@ -1,4 +1,5 @@
 import {parseEmailAddress} from '../crm/routeValidation.ts';
+import {personFirstNameOf} from '../sequences/variables.ts';
 import {CONSUMER_EMAIL_DOMAINS} from './consumerEmailDomains.ts';
 
 /** ADR0036. The seam a people-data provider fills: given a company's website host, find ONE named decision-maker and the provider's
@@ -19,13 +20,17 @@ const EXCLUDED_TITLE=/\b(?:assistant|associate|leasing|maintenance|accounting|ac
 const TITLE_RANKS:readonly (readonly [RegExp,number])[]=[
  [/\b(?:owner|co-?owner|founder|co-?founder|proprietor|president|principal|ceo|chief executive)\b/iu,0],
  [/\b(?:managing broker|designated broker|broker of record|broker[- ]owner|principal broker|managing partner|managing director|managing member)\b/iu,1],
- [/\b(?:director of property management|head of property management|vp of property management|vice president of property management|property management director)\b/iu,2],
+ [/\b(?:(?:director|head|vp|vice[- ]?president)(?:,|\s+of|\s+for)?\s+property management|property management\s+(?:director|vp|vice[- ]?president))\b/iu,2],
  [/\bproperty manager\b/iu,3],
  [/\b(?:broker|partner)\b/iu,4],
 ];
+/** A vice president is not "president": every rank but the property-management one reads the title without its vice-president words, so "Vice
+ * President of Finance" matches nothing, "Owner and Vice President" is an owner, and only a VP of property management is a decision-maker. */
+const VICE_PRESIDENT=/\b(?:vice[- ]?president|vp|svp|evp|avp)\b/giu,PROPERTY_MANAGEMENT_RANK=2;
 export function rankDecisionMakerTitle(title:string):number|null{
  if(EXCLUDED_TITLE.test(title))return null;
- return TITLE_RANKS.find(([pattern])=>pattern.test(title))?.[1]??null;
+ const withoutVice=title.replace(VICE_PRESIDENT,' ');
+ return TITLE_RANKS.find(([pattern,rank])=>pattern.test(rank===PROPERTY_MANAGEMENT_RANK?title:withoutVice))?.[1]??null;
 }
 /** Title filter adapters send to a provider's search; the domain re-ranks the enriched title so a stale search title cannot admit an excluded one. */
 export const DECISION_MAKER_TITLES:readonly string[]=['owner','founder','president','principal','ceo','managing broker','designated broker','broker of record','property manager','director of property management'];
@@ -44,7 +49,7 @@ export function acceptablePerson(person:ProviderPerson|null,companyHost:string):
  if(person.emailStatus!=='verified'||!person.email)return {ok:false,reason:'unverified'};
  if(person.matchConfidence!=='high'&&person.matchConfidence!=='medium')return {ok:false,reason:'low_confidence'};
  const [first,last]=[tidyName(person.firstName),tidyName(person.lastName)];
- if(!/^\p{L}[\p{L}'’.-]*$/u.test(first)||first.length<2||first.length>100||!/^\p{L}[\p{L}'’ .-]*$/u.test(last)||last.length<2||last.length>100)return {ok:false,reason:'no_name'};
+ if(personFirstNameOf(first)===null||!/^\p{L}[\p{L}'’.-]*$/u.test(first)||first.length<2||first.length>100||!/^\p{L}[\p{L}'’ .-]*$/u.test(last)||last.length<2||last.length>100)return {ok:false,reason:'no_name'};
  if(person.title.trim().length>200||rankDecisionMakerTitle(person.title)===null)return {ok:false,reason:'title'};
  const parsed=parseEmailAddress(person.email.trim().toLowerCase());
  if(!parsed)return {ok:false,reason:'invalid_email'};

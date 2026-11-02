@@ -11,7 +11,7 @@ let world: Awaited<ReturnType<typeof preparedEmailWorld>>;
 beforeAll(async () => { world = await preparedEmailWorld(); }, 180_000);
 afterAll(async () => { await world?.stop(); });
 const schedule = (enabled = true) => runSchedulerPass(world.runtime, { sources: [personEnrichSource(enabled)], now: new Date().toISOString() });
-const settle = async () => (await world.runtime.query('SELECT state FROM outreach_people_contacts WHERE workspace_id=$1', [world.ws])).rows;
+const settle = async () => (await world.runtime.query('SELECT state FROM outreach_people_lookups WHERE workspace_id=$1', [world.ws])).rows;
 
 it('schedules nothing without a composed provider or while the setting is off, and one job per workspace when on', async () => {
   expect((await schedule(false)).inserted).toBe(0);

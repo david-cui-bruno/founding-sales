@@ -29,3 +29,15 @@ it('capitalizes a single-case provider name per word, keeps mixed case, and boun
  expect(acceptablePerson(person({lastName:'B'.repeat(1)+'l'.repeat(100)}),'cobalt.example')).toEqual({ok:false,reason:'no_name'});
  expect(acceptablePerson(person({title:`Owner ${'x'.repeat(200)}`}),'cobalt.example')).toEqual({ok:false,reason:'title'});
 });
+it('does not read "vice president" as "president": only a VP of property management is a decision-maker, an owner who is also a VP is still an owner',()=>{
+ const rank=(title:string)=>rankDecisionMakerTitle(title);
+ for(const title of ['Vice President of Finance','Vice President, Marketing','VP of Operations','VP Finance','SVP Sales','Vice President','EVP of Technology'])expect(rank(title),title).toBeNull();
+ expect(['Vice President of Property Management','VP of Property Management','VP, Property Management','Property Management Vice President','Director of Property Management'].map(rank)).toEqual([2,2,2,2,2]);
+ expect(rank('Vice President of Property Management')!).toBeGreaterThan(rank('Owner')!);
+ expect(['President','President & CEO','Owner and Vice President','Vice President & Principal','Co-Owner, VP of Finance'].map(rank)).toEqual([0,0,0,0,0]);
+ expect(rank('Assistant Vice President of Property Management')).toBeNull();
+});
+it('refuses a placeholder or role first name before it is recorded as found, with the same predicate that blanks {first_name}',()=>{
+ for(const firstName of ['Office','Team','Unknown','N/A','None','TBD','null','office'])expect(acceptablePerson(person({firstName}),'cobalt.example'),firstName).toEqual({ok:false,reason:'no_name'});
+ expect(acceptablePerson(person({firstName:'Officer'}),'cobalt.example')).toMatchObject({ok:true});
+});

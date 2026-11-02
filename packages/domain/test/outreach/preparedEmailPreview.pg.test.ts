@@ -11,7 +11,7 @@ import {withReadOnlyTransaction} from '../../db/queryable.ts';
 let world:Awaited<ReturnType<typeof preparedEmailWorld>>;
 beforeAll(async()=>{world=await preparedEmailWorld();},180_000);
 afterAll(async()=>world?.stop());
-const TABLES=['outreach_email_verifications','outreach_people_contacts','outreach_email_campaign_admissions','firms','contacts','email_addresses','sequence_enrollments','jobs'];
+const TABLES=['outreach_email_verifications','outreach_people_lookups','outreach_people_contacts','outreach_email_campaign_admissions','firms','contacts','email_addresses','sequence_enrollments','jobs'];
 const counts=async()=>Object.fromEntries(await Promise.all(TABLES.map(async table=>[table,(await world.runtime.query<{n:number}>(`SELECT count(*)::int AS n FROM ${table}`)).rows[0]!.n])));
 const preview=(limit=25,regions=['OH','WA'])=>withReadOnlyTransaction(world.runtime,()=>previewPreparedEmailAdmission(world.ctx(),{limit,regions}));
 

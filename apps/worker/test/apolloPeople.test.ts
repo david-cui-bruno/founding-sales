@@ -39,9 +39,23 @@ it.each([['verified','verified'],['unverified','unverified'],['likely to engage'
  const result=await ask(sequence(search({id:'p-2',title:'Owner'}),match({...found,email_status:apollo})));
  expect(result).toMatchObject({ok:true,creditsUsed:1,person:{emailStatus:ours}});
 });
-it('charges nothing and reports an unavailable person for a missing or locked email',async()=>{
- expect(await ask(sequence(search({id:'p-2',title:'Owner'}),match({...found,email:null,email_status:null})))).toMatchObject({ok:true,creditsUsed:0,person:{email:null,emailStatus:'unavailable'}});
- expect(await ask(sequence(search({id:'p-2',title:'Owner'}),match({...found,email:'email_not_unlocked@cobalt.example',email_status:'verified'})))).toMatchObject({ok:true,person:{emailStatus:'unavailable'}});
+it('reports an unavailable person for a missing or locked email, and still charges the matched person',async()=>{
+ expect(await ask(sequence(search({id:'p-2',title:'Owner'}),match({...found,email:null,email_status:null})))).toMatchObject({ok:true,creditsUsed:1,person:{email:null,emailStatus:'unavailable'}});
+ expect(await ask(sequence(search({id:'p-2',title:'Owner'}),match({...found,email:'email_not_unlocked@cobalt.example',email_status:'verified'})))).toMatchObject({ok:true,creditsUsed:1,person:{emailStatus:'unavailable'}});
+});
+// Apollo's rule (docs.apollo.io/docs/api-pricing): one credit for demographics OR email; none when match_confidence is none; low only if it returns data we did not send.
+it.each([
+ ['a high match with an email',found,1],
+ ['a high match with demographics and no email',{...found,email:null,email_status:null},1],
+ ['a medium match with demographics and no email',{...found,email:null,email_status:null,match_confidence:'medium'},1],
+ ['a low match that returns data we did not send',{...found,email:null,email_status:null,match_confidence:'low'},1],
+ ['a low match that returns an email',{...found,first_name:null,last_name:null,title:null,match_confidence:'low'},1],
+ ['a match with no confidence field (undecidable, charged)',{...found,email:null,email_status:null,match_confidence:null},1],
+ ['an unrecognised confidence (charged)',{...found,email:null,email_status:null,match_confidence:'certain'},1],
+ ['a none match, even with fields present',{...found,email:null,email_status:null,match_confidence:'none'},0],
+ ['a low match that returns nothing beyond the id',{id:'p-2',match_confidence:'low'},0],
+] as const)('charges %s by the match outcome, not the email: %i credit(s)',async(_label,person,credits)=>{
+ expect(await ask(sequence(search({id:'p-2',title:'Owner'}),match(person)))).toMatchObject({ok:true,creditsUsed:credits});
 });
 it.each([[401,'auth_failed'],[403,'auth_failed'],[402,'quota_exhausted'],[429,'rate_limited']] as const)('maps HTTP %s to %s on search and on enrichment without retrying or paying',async(status,code)=>{
  const onSearch=vi.fn(async()=>new Response('DO-NOT-RETAIN-ERROR',{status}));

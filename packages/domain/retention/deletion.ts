@@ -1,4 +1,4 @@
-import {privateDraftDeletionRows} from './socialDraftDeletion.ts'; import {measureResearchErasure,eraseOfficeAssessments} from './officeAssessments.ts';
+import {privateDraftDeletionRows} from './socialDraftDeletion.ts'; import {measureResearchErasure,eraseOfficeAssessments} from './officeAssessments.ts'; import {measurePeopleErasure,erasePeople} from './peopleErasure.ts';
 import { measurePhoneHandoffDeletion, erasePhoneHandoffs } from './phoneHandoffs.ts';
 import {lockAskLifecycle} from '../crm/askAnswerLifecycle.ts';
 import {lockDiscoveryReviewSources} from '../sourcing/discoveryReviewVisibility.ts';
@@ -528,6 +528,7 @@ async function measure(
 }> {
   const workspace = context.scope.workspaceId;
   const firm = scope.firmId;
+  const people = await measurePeopleErasure(context, scope);
   const contact = scope.contactId;
   const byContact = [workspace, contact, firm] as const;
   const handoffs = await measurePhoneHandoffDeletion(context, scope); const privateDrafts=await privateDraftDeletionRows(context,scope,MEETING_IN_SCOPE);
@@ -579,6 +580,7 @@ async function measure(
       byContact,
     ),
     ...await measureResearchErasure(context,scope,(await identityDeletionClosure(context,scope))?.firms??[scope.firmId]),
+    ...people.removes,
     call_logs: await countOf(
       context,
       `SELECT count(*) AS count FROM call_logs
@@ -877,6 +879,7 @@ async function measure(
   };
 
   const retains: Record<string, number> = {
+    ...people.retains,
     crm_ask_index_receipts:await countOf(context,`SELECT count(*) AS count FROM crm_ask_index_receipts WHERE workspace_id=$1 AND work_id IN(${CRM_ASK_INDEX_IDS})`,byContact),
     crm_ask_actions:await countOf(context,`SELECT count(*) AS count FROM crm_ask_actions a WHERE a.workspace_id=$1 AND ${CRM_ASK_ACTION_IN_SCOPE}`,byContact),
     crm_ask_history_dependencies:await countOf(context,`SELECT count(*) AS count FROM crm_ask_history_dependencies WHERE workspace_id=$1 AND request_id IN(${CRM_ASK_REQUEST_IDS})`,byContact),
@@ -1341,7 +1344,7 @@ export async function commitDeletion(
 
   const workspace = context.scope.workspaceId;
   const byContact = [workspace, scope.contactId, scope.firmId] as const;
-  const removed: Record<string, number> = await eraseOfficeAssessments(context,scope,closure.firms);
+  const removed: Record<string, number> = {...await eraseOfficeAssessments(context,scope,closure.firms),...await erasePeople(context,scope)};
   const redacted: Record<string, number> = {social_private_drafts:measured.redacts['social_private_drafts']??0};
   const erasedHandoffs = await erasePhoneHandoffs(context, scope);
   if(row.target_kind==='firm')await erasePreparationForFirm(context,scope.firmId);

@@ -14,7 +14,7 @@ export async function preparedCampaignActor(ctx:RepositoryContext,owner:string):
  const member=(await ctx.db.query<{role:string;status:string}>('SELECT role,status FROM workspace_memberships WHERE workspace_id=$1 AND user_id=$2 FOR SHARE',[ctx.scope.workspaceId,owner])).rows[0];
  return member?.role==='admin'&&member.status==='active';
 }
-export interface PreparedEmailProof {route:EmailEvidenceRoute;/** The resolved business name (`resolveBusinessName`): the Firm's name. */businessName:string;/** ms epoch after which this proof no longer holds. */validUntil:number}
+export interface PreparedEmailProof {route:EmailEvidenceRoute;/** The resolved business name (`resolveBusinessName`): the Firm's name. */businessName:string;/** ms epoch after which this proof no longer holds: the earliest of the provider contact's expiry, the campaign's and the prepared evidence's deadline. */validUntil:number}
 /** The association confidence a provider's match earns: a high match is the person at this company; a medium one clears the route floor. */
 const CONFIDENCE={high:0.95,medium:0.85} as const;
 /** Exactly the selected run, revision and address, read under the caller's locks: the company is still prepared (its brief, name and region)
@@ -25,5 +25,5 @@ export async function preparedEmailProof(ctx:RepositoryContext,campaign:EmailCam
  if(!read||read.runId!==target.runId||!campaign.regions.some(region=>region===read.region))return null;
  const person=await currentPeopleContact(ctx,target.candidateId,target.candidateRevision);
  if(!person||person.email!==target.address||person.host!==read.host||!await currentValidEmailVerification(ctx,person.email))return null;
- return {businessName:read.businessName,route:{address:person.email,sourceObservationId:person.id,blockId:`person:${person.provider}`,identityKind:'named',displayName:`${person.firstName} ${person.lastName}`,person:{title:person.title,associationConfidence:CONFIDENCE[person.matchConfidence]}},validUntil:Math.min(person.expiresAt.getTime(),campaign.expires_at.getTime())};
+ return {businessName:read.businessName,route:{address:person.email,sourceObservationId:person.id,blockId:`person:${person.provider}`,identityKind:'named',displayName:`${person.firstName} ${person.lastName}`,person:{title:person.title,associationConfidence:CONFIDENCE[person.matchConfidence]}},validUntil:Math.min(person.expiresAt.getTime(),campaign.expires_at.getTime(),read.evidenceDeadline)};
 }
