@@ -38,7 +38,7 @@ export async function readPreparedEmail(ctx:RepositoryContext,input:{candidateId
 }
 /** Advisory, nonlocking selection in the prepared list's priority order, one company per host. Admission rereads each choice
  * under locks with `readPreparedEmail`; nothing here grants anything. */
-export async function listPreparedEmailCandidates(ctx:RepositoryContext,input:{limit:number;regions:readonly string[];skip:ReadonlySet<string>;/** Applied before the limit and the one-per-host rule, so an excluded company takes neither. */accept?:(read:PreparedEmailRead)=>boolean|Promise<boolean>}):Promise<PreparedEmailRead[]>{
+export async function listPreparedEmailCandidates(ctx:RepositoryContext,input:{limit:number;regions:readonly string[];skip:ReadonlySet<string>;/** Applied before the limit and the one-per-host rule, so an excluded company takes neither. It acts only inside the bounded scan below (the first 400 records of the priority order); a scan cursor is the follow-up if refusals ever fill that window. */accept?:(read:PreparedEmailRead)=>boolean|Promise<boolean>}):Promise<PreparedEmailRead[]>{
  const found:PreparedEmailRead[]=[],hosts=new Set<string>();
  for(let offset=0;offset<8*50&&found.length<input.limit;offset+=50){
   const order=await preparedPriorityOrder(ctx,offset),selected=order.rows.slice(0,50).filter(entry=>!input.skip.has(entry.id));
