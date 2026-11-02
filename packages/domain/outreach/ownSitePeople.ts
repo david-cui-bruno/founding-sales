@@ -30,9 +30,18 @@ const NAME_ONLY=new RegExp(`^(${NAME})\\.?$`,'u'),TITLE_ONLY=new RegExp(`^(${TIT
 const WRAPPING=/^[<>()[\]"'“”‘’,.;:|•·]+|[<>()[\]"'“”‘’,.;:|•·]+$/gu;
 const COMPANY_SIDE=/\b(?:broker|ceo|chief executive|president|founder|principal|property manager)\b/iu;
 const CUSTOMER_WORDS=/\b(?:testimonials?|reviews?|reviewed|stars?|tenants?|residents?|renters?|clients?|customers?|homeowners?)\b/iu;
+/** A heading that opens a section of what customers say: a person named under it is a customer or reviewer, whatever title follows (an "Owner" is as likely a customer's). */
+const TESTIMONIAL_HEADING=/\b(?:testimonials?|reviews?|what (?:our |the |other )?(?:clients?|customers?|tenants?|owners?|residents?|landlords?|homeowners?|people|others|neighbors?)(?: are)? (?:say|saying)|(?:happy|satisfied) (?:clients?|customers?|tenants?|owners?|residents?|landlords?)|success stories|kind words)\b/iu;
+/** A block that is the label of a person's role, never a section heading. */
+const ROLE_LINE=/\b(?:agent|manager|assistant|administrator|coordinator|supervisor|specialist|accountant|bookkeeper|representative|associate|technician|owner|broker|director|president|founder|partner|officer|realtor|chairman|chairwoman|principal)\b/iu;
+const SMALL_WORDS=new Set(['of','the','and','our','to','for','in','at','a','an','on','with','your','you','us','we','is','are','from','by','what','who','why','how','&']);
 const SIGNATURE_LEAD=/(?:^|\s)[–—~-]\s*$/u;
 
 interface Mention {key:string;firstName:string;lastName:string;title:string;rank:number;email:string|null;confidence:'high'|'medium';order:number;blockId:string;observationId:string;url:string;quote:string}
+/** A section heading's words: a short line with no sentence punctuation (a trailing colon or bang aside), else null. */
+const headingWords=(text:string):string|null=>{const bare=text.replace(/[:!]+$/u,'').trim();return bare.length>=3&&bare.length<=70&&!/[.,;?@"“”]/u.test(bare)?bare:null;};
+/** A heading a testimonial section ends at: Title Case or ALL CAPS (never a customer's, a role's or a person's own line), so that a different heading demonstrably intervened. */
+const endsTestimonials=(bare:string):boolean=>bare.split(/\s+/u).every(word=>SMALL_WORDS.has(word)||/^[\p{Lu}\d&]/u.test(word))&&/\p{Lu}/u.test(bare)&&!TESTIMONIAL_HEADING.test(bare)&&!CUSTOMER_WORDS.test(bare)&&!ROLE_LINE.test(bare)&&!(splitName(NAME_ONLY.exec(titleCase(bare))?.[1]??'')??null);
 const tidy=(text:string):string=>text.replace(/\s+/gu,' ').trim();
 const titleCase=(text:string):string=>text===text.toUpperCase()&&/\p{L}/u.test(text)?text.toLowerCase().replace(/(^|[\s'’/|,–—-])(\p{L})/gu,(_m,lead:string,letter:string)=>`${lead}${letter.toUpperCase()}`).replace(/\b(?:Ceo|Coo|Cfo|Cio|Cpm|Rmp|Ccim|Arm|Evp|Svp|Vp|Dre|Trec|Tx|Ca)\b/gu,acronym=>acronym.toUpperCase()):text;
 /** First name (the nickname in quotes or parentheses wins: "William "Hoss" Evey" is Hoss), last name (the last word, with a Jr/III suffix) and a key that ignores middle names. */
@@ -59,21 +68,25 @@ const personal=(addresses:readonly string[],host:string):string[]=>addresses.fla
 const localOf=(address:string)=>address.slice(0,address.indexOf('@'));
 
 /** `phrase` is the COMPLETE local title: the matched title plus the qualifier words joined to it ("Assistant" in "Assistant Property Manager: Jane", "Leasing Agent" in "Property Manager / Leasing Agent"). */
-interface Hit {name:string;title:string;phrase:string;signature:boolean;quote:string}
+interface Hit {name:string;title:string;phrase:string;signature:boolean;quote:string;/** The text of THIS person's own statement: from where their statement starts to the next other named person or separator. */clause:string;/** No other named person (titled or not) appears in the block: the block's one address is then this person's. */alone:boolean}
+const NAME_MENTION=new RegExp(`(?<![\\p{L}\\p{N}])(${NAME})(?![\\p{L}\\p{N}])`,'gu'),SEPARATOR=/[|•·©;]/gu;
 const HEAD_WORDS=/(?<![\p{L}\p{N}'’®@.])(?:[\p{L}'’®]+[\s/&+–—-]+){1,3}$/u,TAIL_WORDS=/^(?:[\s/&+–—-]+[\p{L}'’®]+(?=[\s/&+–—,;:)|•·-]|$)){1,3}/u;
 /** The statement around a match: its text between the nearest `|`, bullet or copyright marks, so a footer's citation is the line that names the person, not the whole footer. */
 const statement=(text:string,start:number,end:number):string=>{
  const before=Math.max(text.lastIndexOf('|',start),text.lastIndexOf('•',start),text.lastIndexOf('·',start),text.lastIndexOf('©',start)),stops=[...'|•·©'].map(mark=>text.indexOf(mark,end)).filter(index=>index>=0);
  return tidy(text.slice(before+1,stops.length?Math.min(...stops):text.length));
 };
+/** The named people of a text (two or more name words), by position: every person the block names, whatever their title, so an excluded "Jane Doe, Office Administrator" counts as another person. */
+const namesIn=(text:string):{start:number;end:number;key:string}[]=>[...text.matchAll(NAME_MENTION)].flatMap(match=>{const person=splitName(match[1]!);return person?[{start:match.index,end:match.index+match[0].length,key:person.key}]:[];});
 function hitsIn(block:string):Hit[]{
- const text=titleCase(block),hits:Hit[]=[];
+ const text=titleCase(block),hits:Hit[]=[],names=namesIn(text);
  for(const pattern of [NAME_TITLE,TITLE_NAME,NAME_IS_TITLE]){
   pattern.lastIndex=0;
   for(const match of text.matchAll(pattern)){
    const [name,title]=pattern===TITLE_NAME?[match[2]!,match[1]!]:[match[1]!,match[2]!];
    const start=match.index,end=start+match[0].length,phrase=pattern===TITLE_NAME?`${HEAD_WORDS.exec(text.slice(0,start))?.[0]??''}${title}`:`${title} ${TAIL_WORDS.exec(text.slice(end))?.[0]??''}`;
-   hits.push({name:tidy(name),title:tidy(title),phrase:tidy(phrase),signature:pattern===NAME_TITLE&&SIGNATURE_LEAD.test(text.slice(0,start)),quote:statement(text,start,end)});
+   const own=splitName(name)?.key,others=names.filter(other=>other.key!==own&&(other.end<=start||other.start>=end)),after=[...others.filter(other=>other.start>=end).map(other=>other.start),...[...text.matchAll(SEPARATOR)].map(mark=>mark.index).filter(index=>index>=end)];
+   hits.push({name:tidy(name),title:tidy(title),phrase:tidy(phrase),signature:pattern===NAME_TITLE&&SIGNATURE_LEAD.test(text.slice(0,start)),quote:statement(text,start,end),clause:text.slice(start,after.length?Math.min(...after):text.length),alone:others.length===0});
   }
  }
  return hits;
@@ -84,17 +97,21 @@ function mentionsOf(pages:readonly PreparedPageText[],host:string):Mention[]{
  const found:Mention[]=[];let order=0;
  for(const page of pages){
   const blocks=page.blocks.map(block=>({id:block.id,text:tidy(block.text)}));
-  const push=(raw:{name:string;title:string;phrase?:string;signature:boolean},block:string,quote:string,context:string,emails:string[],adjacent:boolean,soleHit:boolean)=>{
+  const push=(raw:{name:string;title:string;phrase?:string;signature:boolean},block:string,quote:string,context:string,emails:string[],adjacent:boolean,alone:boolean)=>{
    const person=splitName(raw.name),rank=rankDecisionMakerTitle(raw.title);
    // The customer veto reads the whole untrimmed block (never the citation trimmed to one `|` cell), the title veto the complete local title phrase.
    if(!person||rank===null||isExcludedTitle(raw.phrase??raw.title)||CUSTOMER_WORDS.test(context)||raw.signature&&!COMPANY_SIDE.test(raw.title)||raw.name.length>60)return;
-   const mine=personal(emails,host),pool=adjacent||!soleHit?mine.filter(address=>belongsTo(localOf(address),person)):mine.length===1?mine:mine.filter(address=>belongsTo(localOf(address),person));
+   const mine=personal(emails,host),pool=adjacent||!alone?mine.filter(address=>belongsTo(localOf(address),person)):mine.length===1?mine:mine.filter(address=>belongsTo(localOf(address),person));
    found.push({...person,title:raw.title,rank,email:pool[0]??null,confidence:raw.signature?'medium':'high',order:order++,blockId:block,observationId:page.observationId,url:page.url,quote:tidy(quote).slice(0,500)});
   };
+  let testimonial=false;
   for(let i=0;i<blocks.length;i++){
    const block=blocks[i]!;if(block.text.length<5)continue;
-   const hits=block.text.length<=600?hitsIn(block.text):[];
-   if(hits.length){for(const hit of hits)push(hit,block.id,hit.quote,block.text,emailsIn(block.text),false,hits.length===1);continue;}
+   const hits=block.text.length<=600?hitsIn(block.text):[],heading=hits.length?null:headingWords(block.text);
+   // A testimonial heading marks every person under it as a customer until a DIFFERENT heading intervenes; an order that shows none refuses (the section state is per page).
+   if(heading!==null){if(TESTIMONIAL_HEADING.test(heading))testimonial=true;else if(endsTestimonials(heading))testimonial=false;}
+   if(testimonial)continue;
+   if(hits.length){for(const hit of hits)push(hit,block.id,hit.quote,block.text,emailsIn(hit.alone?block.text:hit.clause),false,hit.alone);continue;}
    // A team card: a block that is only a name, directly followed by a block that is only a title; the card's following blocks may carry the address.
    const name=block.text.length<=60?NAME_ONLY.exec(titleCase(block.text.replace(/[:,]$/u,'')))?.[1]:undefined,next=blocks[i+1];
    const title=name&&next&&next.text.length<=90?TITLE_ONLY.exec(titleCase(next.text))?.[1]:undefined;

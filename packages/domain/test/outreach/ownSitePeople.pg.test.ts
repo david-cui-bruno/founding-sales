@@ -7,7 +7,8 @@ import {recordingSendHandoff} from '../../sequences/sendHandoff.ts';
 import {withReadOnlyTransaction,withTransaction} from '../../db/queryable.ts';
 import {previewPreparedEmailAdmission} from '../../outreach/preparedEmailPreview.ts';
 import {listPreparedProspects} from '../../sourcing/preparedProspects.ts';
-import {BOOKING_LINK,POSTAL_ADDRESS,goodMx,preparedEmailWorld} from './preparedEmailFixture.ts';
+import {currentPeopleContacts} from '../../outreach/peopleContacts.ts';
+import {BOOKING_LINK,POSTAL_ADDRESS,fakePeople,goodMx,preparedEmailWorld} from './preparedEmailFixture.ts';
 
 // ADR0037: the real own-site source over a real prepared capture (the page text the capture retained), through the real enrichment pass and admission.
 // No provider, no network, no credit: the company's own page names the decision-maker.
@@ -90,4 +91,42 @@ it('keeps a person but drops an address that is another company\'s domain or a r
  expect((await world.runtime.query('SELECT count(*)::int AS n FROM outreach_people_lookups WHERE workspace_id=$1 AND candidate_id=$2',[world.ws,company.candidateId])).rows).toEqual([{n:1}]);
  expect((await world.runtime.query('SELECT count(*)::int AS n FROM outreach_people_contacts WHERE workspace_id=$1 AND candidate_id=$2',[world.ws,company.candidateId])).rows).toEqual([{n:1}]);
  expect(await lookup(company.candidateId)).toMatchObject({state:'found',first_name:'Jon',credits:0});
+});
+
+it('makes a person current only while the page it cites is: the custody row expires with that page\'s deadline, and past it the person is neither listed, previewed nor admitted',async()=>{
+ const company=await world.prepared('OH',team,'Columbus',true);
+ await world.enrichOwnSite();
+ const days=async()=>Number((await world.runtime.query<{days:string}>('SELECT (extract(epoch FROM expires_at-clock_timestamp())/86400)::text AS days FROM outreach_people_lookups WHERE workspace_id=$1 AND candidate_id=$2',[world.ws,company.candidateId])).rows[0]!.days);
+ // The page was retrieved just now: its deadline is seven days out, well before the thirty-day person lifetime.
+ expect(await days()).toBeGreaterThan(6);expect(await days()).toBeLessThanOrEqual(7.001);
+ expect((await currentPeopleContacts(world.ctx(),[company.candidateId])).get(company.candidateId)).toMatchObject({firstName:'Tyler',source:{url:`https://${company.domain}/`}});
+ // The cited page's deadline passes.
+ await world.runtime.query("UPDATE outreach_people_lookups SET reserved_at=clock_timestamp()-interval '8 days',expires_at=clock_timestamp()-interval '1 second' WHERE workspace_id=$1 AND candidate_id=$2",[world.ws,company.candidateId]);
+ expect((await currentPeopleContacts(world.ctx(),[company.candidateId])).size).toBe(0);
+ expect((await preview())!.candidates.map(row=>row.candidateId)).not.toContain(company.candidateId);
+ expect(await world.pass()).toEqual({admitted:0,checked:0,failed:0});
+ expect((await world.runtime.query('SELECT 1 FROM outreach_email_campaign_admissions WHERE workspace_id=$1 AND candidate_id=$2',[world.ws,company.candidateId])).rows).toEqual([]);
+ // The company's pages are read again in place, and the person is current again with a fresh deadline.
+ expect(await world.enrichOwnSite()).toMatchObject({looked:1,found:1});
+ expect(await days()).toBeGreaterThan(6);
+});
+
+it('scopes the skip sets to the active provider: an old paid provider\'s custody row blocks only paid re-lookups, never reading the company\'s own pages, and its credits still count',async()=>{
+ const company=await world.prepared('OH',team,'Columbus',true),spent=async()=>Number((await world.runtime.query<{n:string}>('SELECT coalesce(sum(credits),0)::text AS n FROM outreach_people_lookups WHERE workspace_id=$1',[world.ws])).rows[0]!.n);
+ const before=await spent();
+ await world.setPeople({enabled:true,dailyCredits:100});
+ const paid=fakePeople(()=>({ok:true,person:null,creditsUsed:1}));
+ expect(await world.enrich(paid)).toMatchObject({looked:1,none:1,credits:1});
+ expect(paid.calls).toEqual([company.domain]);
+ await world.setPeople({enabled:true,dailyCredits:0});
+ // The own_site pass still reads the company: its own row sits beside the paid provider's (the unique fences are per provider).
+ expect(await world.enrichOwnSite()).toMatchObject({looked:1,found:1,credits:0});
+ const providers=(await world.runtime.query<{provider:string;state:string;credits:number}>('SELECT provider,state,credits FROM outreach_people_lookups WHERE workspace_id=$1 AND candidate_id=$2 ORDER BY provider',[world.ws,company.candidateId])).rows;
+ expect(providers).toEqual([{provider:'fake_people',state:'none',credits:1},{provider:'own_site',state:'found',credits:0}]);
+ // The day's credits still include the paid provider's, the own_site row is read once, and the paid provider is still fenced by every provider's row.
+ expect(await spent()).toBe(before+1);
+ expect(await world.enrichOwnSite()).toMatchObject({looked:0});
+ await world.setPeople({enabled:true,dailyCredits:100});
+ expect(await world.enrich(paid)).toMatchObject({looked:0});expect(paid.calls).toEqual([company.domain]);
+ await world.setPeople({enabled:true,dailyCredits:0});
 });

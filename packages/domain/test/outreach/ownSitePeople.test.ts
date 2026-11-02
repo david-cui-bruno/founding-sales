@@ -146,6 +146,52 @@ describe('what is never a person or an address',()=>{
  });
 });
 
+describe('a testimonial section is a customer section until a different heading intervenes (the section state is per page)',()=>{
+ const found=(...blocks:string[])=>extractOwnSitePeople([page('https://peak.org/about',...blocks)],'peak.org');
+ it('refuses a name and title that follow a testimonial heading in separate blocks',()=>{
+  for(const heading of ['Testimonials','Reviews','TESTIMONIALS','What Our Clients Say','What our tenants are saying!','Client Reviews','Happy Customers'])expect(found(heading,'Jane Doe','Owner','jane@peak.org'),heading).toEqual([]);
+  expect(found('Testimonials','Great service and fast repairs.','Jane Doe','Owner','jane@peak.org')).toEqual([]);
+  expect(found('Reviews','Jane Doe, Owner jane@peak.org')).toEqual([]);
+ });
+ it('accepts the same blocks under a team heading, or after a team heading that follows the testimonials',()=>{
+  expect(found('Our Team','Jane Doe','Owner','jane@peak.org')[0]).toMatchObject({firstName:'Jane',lastName:'Doe',title:'Owner',email:'jane@peak.org'});
+  expect(found('Testimonials','Sam Lee','Owner','Great work!','Our Team','Jane Doe','Owner','jane@peak.org').map(person=>person.firstName)).toEqual(['Jane']);
+  expect(found('TESTIMONIALS','Meet the Owners','Jane Doe','Owner')[0]).toMatchObject({firstName:'Jane'});
+ });
+ it('is conservative: a customer, a role or a person line is not a heading, so nothing shows the section ended',()=>{
+  expect(found('Testimonials','Happy Tenant','Jane Doe','Owner')).toEqual([]);
+  expect(found('Testimonials','Sam Lee','Leasing Agent','Jane Doe','Owner')).toEqual([]);
+  expect(found('Testimonials','Sam Lee','Owner','Jane Doe','Owner')).toEqual([]);
+  expect(found('Testimonials','a sentence, with a comma that is not a heading','Jane Doe','Owner')).toEqual([]);
+ });
+ it('does not carry a testimonial section across pages',()=>{
+  const people=extractOwnSitePeople([page('https://peak.org/reviews','Testimonials','Sam Lee','Owner'),page('https://peak.org/team','Jane Doe','Owner')],'peak.org');
+  expect(people.map(person=>person.firstName)).toEqual(['Jane']);
+ });
+});
+
+describe('a mailbox is the person\'s only inside their own statement, never by a sole-hit shortcut while another person is named',()=>{
+ const found=(...blocks:string[])=>extractOwnSitePeople([page('https://peak.org/team',...blocks)],'peak.org').map(person=>({name:`${person.firstName} ${person.lastName}`,email:person.email}));
+ it('gives the broker no address when the only address in the block is the administrator\'s, and does not name the administrator',()=>{
+  expect(found('John Smith, Broker | Jane Doe, Office Administrator jane@peak.org')).toEqual([{name:'John Smith',email:null}]);
+  expect(found('Jane Doe, Office Administrator jane@peak.org | John Smith, Broker')).toEqual([{name:'John Smith',email:null}]);
+ });
+ it('still assigns the one address of a block that names one person',()=>{
+  expect(found('John Smith, Broker john@peak.org')).toEqual([{name:'John Smith',email:'john@peak.org'}]);
+  expect(found('John Smith, Broker | jsmith@peak.org')).toEqual([{name:'John Smith',email:'jsmith@peak.org'}]);
+  expect(found('John Smith, Broker jane@peak.org')).toEqual([{name:'John Smith',email:'jane@peak.org'}]);
+ });
+ it('assigns each person only the address inside their own statement',()=>{
+  const both=[{name:'Ann Roe',email:'ann@peak.org'},{name:'John Smith',email:'john@peak.org'}];
+  expect(found('John Smith, Broker john@peak.org | Ann Roe, Owner ann@peak.org')).toEqual(both);
+  expect(found('John Smith, Broker john@peak.org Ann Roe, Owner ann@peak.org')).toEqual(both);
+  expect(found('John Smith, Broker; Ann Roe, Owner ann@peak.org')).toEqual([{name:'Ann Roe',email:'ann@peak.org'},{name:'John Smith',email:null}]);
+ });
+ it('refuses, with another person named in the block, an address inside the person\'s statement that carries another person\'s name',()=>{
+  expect(found('John Smith, Broker jane@peak.org | Jane Doe, Office Administrator')).toEqual([{name:'John Smith',email:null}]);
+ });
+});
+
 describe('the own_site provider',()=>{
  const ask=(host:string,...pages:PreparedPageText[])=>ownSitePeople().findDecisionMaker({domain:host,companyName:'Peak',candidateId:'c1',pages});
  it('is free and answers the best person with the page citation, published when the page publishes the address',async()=>{

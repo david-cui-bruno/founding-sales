@@ -44,12 +44,12 @@ export async function reservePeopleLookup(ctx:RepositoryContext,input:{provider:
   return row?{kind:'reserved',id:row.id,credits:input.credits}:{kind:'taken'};
  });
 }
-type Settlement={state:'found';person:AcceptedPerson;credits:number}|{state:'none';reason:PersonRefusal;credits:number}|{state:'failed';reason:string}|{state:'unknown';reason:string};
+type Settlement={state:'found';person:AcceptedPerson;credits:number;/** ms epoch of the cited page's own deadline (an own-site person): the person is current no longer than it. */citedDeadline:number|null}|{state:'none';reason:PersonRefusal;credits:number}|{state:'failed';reason:string}|{state:'unknown';reason:string};
 /** One statement settles a reservation that is still reserved. A failed settle leaves it reserved; the next pass reads it as unknown. */
 async function settle(ctx:RepositoryContext,id:string,s:Settlement):Promise<void>{
  const w=ctx.scope.workspaceId;
  if(s.state==='found')await withTransaction(ctx.db,async()=>{
-  const settled=await ctx.db.query(`UPDATE outreach_people_lookups SET state='found',reason=NULL,credits=$3,observed_at=clock_timestamp() WHERE workspace_id=$1 AND id=$2 AND state='reserved'`,[w,id,s.credits]);
+  const settled=await ctx.db.query(`UPDATE outreach_people_lookups SET state='found',reason=NULL,credits=$3,observed_at=clock_timestamp(),expires_at=CASE WHEN $4::double precision IS NULL THEN expires_at ELSE greatest(reserved_at+interval '1 millisecond',least(expires_at,to_timestamp($4::double precision/1000))) END WHERE workspace_id=$1 AND id=$2 AND state='reserved'`,[w,id,s.credits,s.citedDeadline]);
   if(settled.rowCount)await ctx.db.query(`INSERT INTO outreach_people_contacts(workspace_id,lookup_id,candidate_id,host,provider_person_id,first_name,last_name,title,email,email_status,match_confidence,source_url,source_block_id,source_quote)
    SELECT workspace_id,id,candidate_id,host,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12 FROM outreach_people_lookups WHERE workspace_id=$1 AND id=$2`,[w,id,s.person.providerPersonId,s.person.firstName,s.person.lastName,s.person.title,s.person.email,s.person.emailStatus,s.person.confidence,s.person.source?.url??null,s.person.source?.blockId??null,s.person.source?.quote??null]);
  });
@@ -68,10 +68,10 @@ async function enrichmentRegions(ctx:RepositoryContext):Promise<string[]>{
  const rows=(await ctx.db.query<{regions:string[]}>('SELECT regions FROM outreach_email_campaigns WHERE workspace_id=$1 AND revoked_at IS NULL AND expires_at>clock_timestamp()',[ctx.scope.workspaceId])).rows;
  return rows.length?[...new Set(rows.flatMap(row=>row.regions))]:[...US_BUSINESS_REGIONS];
 }
-/** Candidates and hosts the providers already hold custody for (any unexpired-failed or settled row): the reservation fence is per HOST, so duplicate-host candidates are excluded before the batch limit. An `own_site` row that is expired, or older than its candidate's revision, is read again (see `reservePeopleLookup`) and holds nothing. */
-const enrichedCustody=async(ctx:RepositoryContext):Promise<{candidates:Set<string>;hosts:Set<string>}>=>{
+/** Candidates and hosts the ACTIVE provider's extraction skips (ADR0037): a free `own_site` pass skips only what its OWN rows hold (an old paid provider's custody row blocks that provider's re-lookups, never the company's own pages being read); a paid provider is skipped by any provider's row, because its host fence guards spend. A failed row is skipped until its cool-down passes; an `own_site` row that is expired, or older than its candidate's revision, is read again (see `reservePeopleLookup`) and holds nothing. Accounting (`creditsOnDate`, the per-provider unique fences) still sees every provider's rows. */
+const enrichedCustody=async(ctx:RepositoryContext,provider:string):Promise<{candidates:Set<string>;hosts:Set<string>}>=>{
  const rows=(await ctx.db.query<{candidate_id:string;host:string}>(`SELECT l.candidate_id,l.host FROM outreach_people_lookups l LEFT JOIN sourcing_candidates c ON c.workspace_id=l.workspace_id AND c.id=l.candidate_id
-  WHERE l.workspace_id=$1 AND NOT (l.state='failed' AND l.expires_at<=clock_timestamp()) AND NOT (l.provider=$2 AND l.state<>'reserved' AND (l.expires_at<=clock_timestamp() OR l.candidate_revision IS DISTINCT FROM c.revision))`,[ctx.scope.workspaceId,OWN_SITE_PROVIDER])).rows;
+  WHERE l.workspace_id=$1 AND (l.provider=$3 OR $3<>$2) AND NOT (l.state='failed' AND l.expires_at<=clock_timestamp()) AND NOT (l.provider=$2 AND l.state<>'reserved' AND (l.expires_at<=clock_timestamp() OR l.candidate_revision IS DISTINCT FROM c.revision))`,[ctx.scope.workspaceId,OWN_SITE_PROVIDER,provider])).rows;
  return {candidates:new Set(rows.map(row=>row.candidate_id)),hosts:new Set(rows.map(row=>row.host))};
 };
 /** ADR0036/0037. The worker's enrichment pass: in the prepared list's order (one company per host; the prepared brief, business name, no existing
@@ -86,7 +86,7 @@ export async function runPeopleEnrichment(ctx:RepositoryContext,deps:{provider:P
  await markStaleReservations(ctx);
  // Nothing to scan for once the day's cap is spent: the pass ends without reading the prepared list. A free source has no cap.
  if(!free&&await creditsOnDate(ctx,(await businessDateNow(ctx)).date)+provider.maxCreditsPerLookup>setting.dailyCredits){pass.stopped='cap';return pass;}
- const custody=await enrichedCustody(ctx),skip=custody.candidates;for(const id of await admittedCandidateIds(ctx))skip.add(id);
+ const custody=await enrichedCustody(ctx,provider.providerKey),skip=custody.candidates;for(const id of await admittedCandidateIds(ctx))skip.add(id);
  const refused=async(read:Parameters<typeof preparedAdmissionRefusedInAdvance>[2])=>preparedAdmissionRefusedInAdvance(ctx,null,read);
  const batch=await listPreparedEmailCandidates(ctx,{limit:free?FREE_PASS_LOOKUPS:PASS_LOOKUPS,regions:await enrichmentRegions(ctx),skip,accept:async read=>!custody.hosts.has(read.host)&&!await refused(read)});
  for(const company of batch){
@@ -103,14 +103,17 @@ export async function runPeopleEnrichment(ctx:RepositoryContext,deps:{provider:P
   }
   const credits=Math.min(Math.max(0,Math.trunc(lookup.creditsUsed)),9);pass.credits+=credits;
   const accepted=acceptablePerson(lookup.person,company.host);
-  if(accepted.ok){await settle(ctx,reservation.id,{state:'found',person:accepted.person,credits});pass.found++;}
+  // An own-site person is current only while the page it cites is: its custody row expires with that page's own deadline, and a citation to no admitted page is no person.
+  const cited=accepted.ok&&accepted.person.source?company.pages.find(page=>page.url===accepted.person.source!.url):undefined;
+  if(accepted.ok&&accepted.person.source&&!cited){await settle(ctx,reservation.id,{state:'none',reason:'no_person',credits});pass.none++;}
+  else if(accepted.ok){await settle(ctx,reservation.id,{state:'found',person:accepted.person,credits,citedDeadline:cited?.deadline??null});pass.found++;}
   else{await settle(ctx,reservation.id,{state:'none',reason:accepted.reason,credits});pass.none++;}
  }
  return pass;
 }
 
 /** Companies the provider has not yet been asked about that the next pass could take: the preview's "awaiting enrichment" count (bounded by the scan). */
-export async function countAwaitingEnrichment(ctx:RepositoryContext,regions:readonly string[]):Promise<number>{
- const custody=await enrichedCustody(ctx),skip=custody.candidates;for(const id of await admittedCandidateIds(ctx))skip.add(id);
+export async function countAwaitingEnrichment(ctx:RepositoryContext,regions:readonly string[],provider:string=OWN_SITE_PROVIDER):Promise<number>{
+ const custody=await enrichedCustody(ctx,provider),skip=custody.candidates;for(const id of await admittedCandidateIds(ctx))skip.add(id);
  return (await listPreparedEmailCandidates(ctx,{limit:1000,regions,skip,accept:async read=>!custody.hosts.has(read.host)&&!await preparedAdmissionRefusedInAdvance(ctx,null,read)})).length;
 }
