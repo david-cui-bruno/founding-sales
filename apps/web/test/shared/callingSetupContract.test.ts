@@ -10,7 +10,7 @@ it('only admits exact setup and explicit audio-test methods; generic settings an
   for(const method of ['GET','PUT','DELETE'])expect(browserApiPathAllowed(method,path)).toBe(false);
   expect(browserApiPathAllowed('POST',`${path}/extra`)).toBe(false);
  }
- for(const [method,path] of [['POST','/calling/setup'],['GET','/calling/setup/provider'],['GET','/calling/setup/receipt'],['POST','/settings/update'],['GET','/settings/integrations'],['POST','/calling/setup/provider/extra']])expect(browserApiPathAllowed(method!,path!)).toBe(false);
+ for(const [method,path] of [['POST','/calling/setup'],['GET','/calling/setup/provider'],['GET','/calling/setup/receipt'],['POST','/settings/update'],['POST','/settings/history'],['GET','/settings/integrations'],['POST','/calling/setup/provider/extra']])expect(browserApiPathAllowed(method!,path!)).toBe(false);
 });
 it('strict schemas refuse new scope, extra settings/secret metadata and incomplete command identity',()=>{
  const command={commandId:id,clientVersion:'1.4.0',expectedVersion:0,provider:'twilio'};expect(callingSetupCommandSchema.safeParse(command).success).toBe(true);

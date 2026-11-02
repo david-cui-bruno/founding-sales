@@ -14,7 +14,7 @@ import { privateDraftBrowserResult } from './privateDraftBoundary.ts';
 import { socialFactsBrowserResult, socialFactsBrowserSchemas, isSocialFactsBrowserPath } from './socialFactsBoundary.ts';
 import { socialGenerationBrowserResult } from './socialGenerationBoundary.ts';
 import { campaignOpeningBrowserResult } from './campaignOpeningBoundary.ts';
-import { bookingLinkBrowserResult, bookingLinkBrowserSchemas } from './settingsBoundary.ts';
+import { bookingLinkApiRequest, bookingLinkBrowserResult, bookingLinkBrowserSchemas } from './settingsBoundary.ts';
 import { manualProspectBrowserResult } from './manualProspectBoundary.ts';
 import { callingBrowserResult } from './callingBoundary.ts';
 import {callingSetupBrowserResult} from './callingSetupBoundary.ts';
@@ -214,10 +214,11 @@ async function product(request: ApiRequest, path: string, context: BrowserReques
   }
   if (isSocialFactsBrowserPath(path) && !socialFactsBrowserSchemas[path]!.safeParse(body).success) throw new Refusal(400);
   // Construct a closed transport envelope. Neither body nor browser headers set API credentials.
-  const result = await route(request.method, path, { ...context.api, auth: context.auth }, {
+  const bookingLinkRoute = bookingLinkApiRequest(path, body);
+  const result = await route(request.method, bookingLinkRoute?.path ?? path, { ...context.api, auth: context.auth }, {
     query: request.query,
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-    body,
+    body: bookingLinkRoute === null ? body : bookingLinkRoute.body,
   });
   if (path === '/dial/check') {
     const input = dialCheckRequestSchema.parse(body);

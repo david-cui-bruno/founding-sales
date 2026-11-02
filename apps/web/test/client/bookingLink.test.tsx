@@ -12,8 +12,8 @@ function setup(role: 'admin' | 'salesperson', stored: string | null = null, refu
   const commands: Record<string, unknown>[] = [];
   const send = vi.fn<typeof fetch>(async (url, init) => {
     if (url === '/browser/session') return json(session);
-    if (url === '/browser/api/settings/history') return json({ settingKey: 'booking_link', current: { value: { url: stored }, version: stored === null ? 0 : 1 }, versions: [] });
-    if (url === '/browser/api/settings/update') {
+    if (url === '/browser/api/settings/booking-link/read') return json({ settingKey: 'booking_link', current: { value: { url: stored }, version: stored === null ? 0 : 1 }, versions: [] });
+    if (url === '/browser/api/settings/booking-link/update') {
       commands.push(JSON.parse(String(init?.body)));
       return json(refuse ? { status: 'refused', replayed: false, reason: 'invalid_value' } : { status: 'accepted', replayed: false, result: {} });
     }
@@ -38,10 +38,10 @@ describe('the Settings booking link', () => {
     fireEvent.change(input, { target: { value: 'https://cal.example.test/demo' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save booking link' }));
     await screen.findByText('Booking link saved.');
-    expect(scope.commands).toEqual([{ settingKey: 'booking_link', value: { url: 'https://cal.example.test/demo' }, commandId: expect.stringMatching(/^[0-9a-f-]{36}$/u) }]);
+    expect(scope.commands).toEqual([{ value: { url: 'https://cal.example.test/demo' }, commandId: expect.stringMatching(/^[0-9a-f-]{36}$/u) }]);
     fireEvent.click(screen.getByRole('button', { name: 'Clear booking link' }));
     await screen.findByText('Booking link cleared.');
-    expect(scope.commands[1]).toMatchObject({ settingKey: 'booking_link', value: { url: null } });
+    expect(scope.commands[1]).toMatchObject({ value: { url: null } });
     const ids = scope.commands.map(command => command['commandId']);
     expect(new Set(ids).size).toBe(2);
   });

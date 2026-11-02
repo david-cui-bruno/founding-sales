@@ -18,7 +18,7 @@ export function BrowserBookingLink({ client }: { client: BrowserClient }): JSX.E
   useEffect(() => {
     const epoch = client.epoch;
     let live = true;
-    client.request('/settings/history', current, { settingKey: 'booking_link', limit: 1 }).then(read => {
+    client.request('/settings/booking-link/read', current, {}).then(read => {
       if (!live || !client.isCurrent(epoch)) return;
       setSaved(read.current.value.url); setDraft(read.current.value.url ?? '');
     }, () => { if (live && client.isCurrent(epoch)) setNotice('Booking link unavailable. Refresh the page to try again.'); });
@@ -30,7 +30,7 @@ export function BrowserBookingLink({ client }: { client: BrowserClient }): JSX.E
     const epoch = client.epoch;
     setBusy(true); setNotice('');
     try {
-      const answer = await client.request('/settings/update', receipt, { settingKey: 'booking_link', value: value.data, commandId: globalThis.crypto.randomUUID() });
+      const answer = await client.request('/settings/booking-link/update', receipt, { value: value.data, commandId: globalThis.crypto.randomUUID() });
       if (!client.isCurrent(epoch)) return;
       if (answer.status === 'refused') setNotice('That link was refused. Use one public https link.');
       else { setSaved(value.data.url); setDraft(value.data.url ?? ''); setNotice(value.data.url === null ? 'Booking link cleared.' : 'Booking link saved.'); }
