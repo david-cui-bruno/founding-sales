@@ -65,7 +65,7 @@ const ROUNDS=8;
  * companies in the prepared list's order (one per host), check each published address once (syntax, real MX, no consumer/disposable
  * domain; no SMTP, no third party) and admit the valid ones. A resolver error records nothing and the address is asked again next
  * pass. A recorded invalid answer, an existing Firm with the company's name or website host and an unresolvable time zone (the refusals
- * admission would repeat on every pass) are excluded before the list's limit and scan window, and what was tried this pass is skipped by the next list, so
+ * admission would repeat on every pass) are excluded before the list's limit, within the bounded 400-record scan, and what was tried this pass is skipped by the next list, so
  * refused or invalid companies never starve later valid ones. The check and reads run in autocommit before any admission lock; each
  * admission is its own transaction (the caller must not already hold one), so a check commits whatever an admission does. */
 export async function runPreparedEmailAdmission(ctx:RepositoryContext,deps:{verifier:EmailVerifier}):Promise<PreparedEmailPass>{
