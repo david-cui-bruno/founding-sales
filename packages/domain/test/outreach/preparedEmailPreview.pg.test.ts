@@ -1,6 +1,8 @@
 import {afterAll,beforeAll,expect,it} from 'vitest';
 import {preparedEmailWorld} from './preparedEmailFixture.ts';
 import {previewPreparedEmailAdmission} from '../../outreach/preparedEmailPreview.ts';
+import {admittedCandidateIds,preparedEmailAccept} from '../../outreach/preparedEmailSelection.ts';
+import {listPreparedEmailCandidates} from '../../sourcing/preparedEmailRead.ts';
 import {recordEmailVerification} from '../../outreach/emailVerification.ts';
 import {repositoryContext,workspaceScope} from '../../db/workspaceScope.ts';
 import {withReadOnlyTransaction} from '../../db/queryable.ts';
@@ -19,7 +21,9 @@ it('lists the next pass in admission order with company, place, address and the 
  await world.tx(()=>recordEmailVerification(world.ctx(true),`hello@${dropped.domain}`,'invalid'));
  const before=await counts(),first=(await preview())!;
  expect(await counts()).toEqual(before);
- expect(first.candidates.map(row=>row.candidateId).sort()).toEqual([oh.candidateId,wa.candidateId].sort());
+ const admissionOrder=await withReadOnlyTransaction(world.runtime,async()=>(await listPreparedEmailCandidates(world.ctx(),{limit:25,regions:['OH','WA'],skip:await admittedCandidateIds(world.ctx()),accept:await preparedEmailAccept(world.ctx(),null)})).map(read=>read.candidateId));
+ expect([...admissionOrder].sort()).toEqual([oh.candidateId,wa.candidateId].sort());
+ expect(first.candidates.map(row=>row.candidateId)).toEqual(admissionOrder);
  expect(first.candidates).toEqual(expect.arrayContaining([
   {candidateId:oh.candidateId,host:oh.domain,companyName:expect.stringMatching(/ Property Management$/u),website:`https://${oh.domain}/`,locality:'Columbus',region:'OH',address:`info@${oh.domain}`,verification:null},
   {candidateId:wa.candidateId,host:wa.domain,companyName:expect.stringMatching(/ Property Management$/u),website:`https://${wa.domain}/`,locality:'Seattle',region:'WA',address:`office@${wa.domain}`,verification:null},

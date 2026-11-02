@@ -48,7 +48,7 @@ export async function withTransaction<T>(session: SessionQueryable, work: () => 
   }
 }
 
-/** Run `work` in one `READ ONLY` transaction: the database itself refuses any write, and the snapshot is one read. */
+/** Run `work` in one `READ ONLY` transaction: the database itself refuses any write. It does not make the reads a single snapshot: under the default READ COMMITTED each statement still sees what has committed by then. */
 export async function withReadOnlyTransaction<T>(session: SessionQueryable, work: () => Promise<T>): Promise<T> {
   await session.query('BEGIN READ ONLY');
   try {
