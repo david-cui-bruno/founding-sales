@@ -1,12 +1,13 @@
 import {expect,it} from 'vitest';
-import type {DiscoveryIntakeSaveInput,ManualPhoneChoice,ManualProspect} from '@fss/contracts';
+import type {ManualPhoneChoice,ManualProspect} from '@fss/contracts';
 import {createTestDatabase} from '@fss/domain/db/testing/testDatabase.ts';
 import {seedTwoWorkspaces} from '@fss/domain/test/db/support/fixtures.ts';
+import {seedDiscoveryCandidate,type DiscoverySeed} from '@fss/domain/test/sourcing/support/discoverySeed.ts';
 import {manualDiscoveryFixture} from '@fss/domain/test/sourcing/support/manualProspectFixture.ts';
 import {repositoryContext,workspaceScope} from '@fss/domain/db/workspaceScope.ts';
 import {withTransaction} from '@fss/domain/db/queryable.ts';
 import {saveCandidate} from '@fss/domain/sourcing/candidates.ts';
-import {saveDiscoveryCandidate,discoveryResearchSeed,discoveryResearchEligibleSql} from '@fss/domain/sourcing/discoveryIntake.ts';
+import {discoveryResearchSeed,discoveryResearchEligibleSql} from '@fss/domain/sourcing/discoveryIntake.ts';
 import {listManualProspects,recordManualProspectFeedback} from '@fss/domain/sourcing/manualProspects.ts';
 import {readPreparedProspect} from '@fss/domain/sourcing/preparedProspects.ts';
 import {readCallingPreparation} from '@fss/domain/calling/preparation.ts';
@@ -29,10 +30,8 @@ async function fixture(ceiling=100){
  const ctx=(actor:'scheduler'|'admin')=>repositoryContext(workspaceScope(alpha.workspaceId,actor==='admin'?{kind:'user',role:'admin',userId:alpha.admin.userId}:{kind:'system',component:'scheduler'}),session);
  const save=async(row:Row)=>{
   const base=manualDiscoveryFixture(row.name),source={...base.row.source,...(row.provider?{provider:row.provider}:{}),release:'2026-10-22.0',retrievedAt:'2026-10-23T00:00:00.000Z'};
-  const input:DiscoveryIntakeSaveInput={origins:base.origins.map(origin=>({...origin,source})),row:{...base.row,source,observations:[source],firmName:row.name,website:row.website,locality:row.locality,region:row.region}};
-  const saved=await withTransaction(session,()=>saveDiscoveryCandidate(ctx('scheduler'),input));
-  if(!saved.ok)throw new Error(saved.reason);
-  return saved.value.id;
+  const input:DiscoverySeed={origins:base.origins.map(origin=>({...origin,source})),row:{...base.row,source,observations:[source],firmName:row.name,website:row.website,locality:row.locality,region:row.region}};
+  return (await withTransaction(session,()=>seedDiscoveryCandidate(ctx('scheduler'),input))).id;
  };
  const pass=()=>runSchedulerPass(session,{sources:[sourcingQualificationSource(true)],now:new Date().toISOString()});
  return {database,session,alpha,ctx,save,pass};

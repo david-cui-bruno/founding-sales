@@ -1,7 +1,9 @@
 import {updateFirm} from '@fss/domain/crm/firms.ts';
 import {repositoryContext,workspaceScope} from '@fss/domain/db/workspaceScope.ts';
 import {readFileSync} from 'node:fs';
-import {discoveryIntakeSaveInputSchema} from '@fss/contracts';
+import {discoveryIntakeRowV1Schema,discoveryOriginSchema} from '@fss/contracts';
+import {withTransaction} from '@fss/domain/db/queryable.ts';
+import {seedDiscoveryCandidate,type DiscoverySeed} from '@fss/domain/test/sourcing/support/discoverySeed.ts';
 import {randomUUID} from 'node:crypto';
 import {afterAll,beforeAll,expect,it} from 'vitest';
 import {dispatch,type ApiRequest} from '../src/server.ts';
@@ -19,9 +21,8 @@ const seed={firmName:'Synthetic preparation',website:'https://preparation.exampl
 async function raw(changes:Record<string,unknown>={}){
  const source={provider:'overture_places',release:'fixture',recordId:randomUUID(),retrievedAt:null,sourceUrl:'https://example.test/source'};
  const row={source,observations:[source],firmName:seed.firmName,website:seed.website,locality:seed.locality,region:seed.region,sourceConfidence:null,residentialFit:'unknown',websiteAssociation:'unknown',officePhoneEvidence:'unknown',probableGroupKey:null,...changes};
- const input={row,origins:[{source,sourceMetadata:{sourcesJson:'[]'},licenses:['fixture'],notices:[{label:'Fixture',url:'https://example.test/license',sha256:'a'.repeat(64)}]}]};
- const saved=await request('/sourcing/candidates/discovery/save-v1',admin,envelope(input));expect(saved.body).toMatchObject({status:'accepted'});
- const id=(saved.body as {result:{id:string}}).result.id;
+ const input={row,origins:[{source,sourceMetadata:{sourcesJson:'[]'},licenses:['fixture'],notices:[{label:'Fixture',url:'https://example.test/license',sha256:'a'.repeat(64)}]}]} as DiscoverySeed;
+ const {id}=await withTransaction(f.db,()=>seedDiscoveryCandidate(repositoryContext(workspaceScope(f.alpha.workspaceId,{kind:'user',userId:f.alpha.admin.userId,role:'admin'}),f.db),input));
  return {id,input,command:envelope({discoveryCandidateId:id,expectedRevision:1,source:{provider:source.provider,release:source.release,recordId:source.recordId},candidate:{...seed,firmName:row.firmName,website:row.website,locality:row.locality,region:row.region}})};
 }
 beforeAll(async()=>{f=await createAuthFixture();admin=(await issueSessionFor(f,f.alpha,f.alpha.admin)).accessToken;sales=(await issueSessionFor(f,f.alpha,f.alpha.salesperson)).accessToken;beta=(await issueSessionFor(f,f.beta,f.beta.admin)).accessToken;});
@@ -115,13 +116,12 @@ const retainedInputs=process.env['FSS_RETAINED_DISCOVERY_INPUTS'],retainedPage=p
 it.skipIf(!retainedInputs||!retainedPage)('actual retained Tree seed reaches normal owner research draft and Today while qualification stays unknown',async()=>{
  const inputs:unknown=JSON.parse(readFileSync(retainedInputs!,'utf8'));
  if(!Array.isArray(inputs))throw new Error('Expected retained discovery array');
- const selected=inputs.map(value=>discoveryIntakeSaveInputSchema.parse(value)).find(value=>value.row.source.recordId==='28ff4bbf-3596-4ce7-a6ab-92d5ae0dea2f');
+ const selected=inputs.map((value:{row:unknown;origins:unknown[]})=>({row:discoveryIntakeRowV1Schema.parse(value.row),origins:value.origins.map(origin=>discoveryOriginSchema.parse(origin))})).find(value=>value.row.source.recordId==='28ff4bbf-3596-4ce7-a6ab-92d5ae0dea2f');
  if(!selected)throw new Error('Retained Tree source missing');
  const page=JSON.parse(readFileSync(retainedPage!,'utf8')) as {recordId:string;contentHash:string;retrievedAt:string;sourceUrl:string;fitEvidence:{blockId:string;text:string}[]};
  expect(page.recordId).toBe(selected.row.source.recordId);expect(page.contentHash).toBe('1df9a012e6a2c3b8736e456d9895a66b2e3a20384c82c0cb039ab13e5b59f824');
  const quote=page.fitEvidence.find(block=>block.blockId==='b16')?.text;if(!quote)throw new Error('Actual retained service paragraph missing');
- const saved=await request('/sourcing/candidates/discovery/save-v1',admin,envelope(selected));expect(saved.body).toMatchObject({status:'accepted'});
- const discoveryCandidateId=(saved.body as {result:{id:string}}).result.id;
+ const {id:discoveryCandidateId}=await withTransaction(f.db,()=>seedDiscoveryCandidate(repositoryContext(workspaceScope(f.alpha.workspaceId,{kind:'user',userId:f.alpha.admin.userId,role:'admin'}),f.db),selected));
  const command=envelope({discoveryCandidateId,expectedRevision:1,source:{provider:selected.row.source.provider,release:selected.row.source.release,recordId:selected.row.source.recordId},candidate:{firmName:selected.row.firmName,website:selected.row.website,locality:selected.row.locality,region:selected.row.region,signal:'fit_only',evidence:quote,sourceUrl:page.sourceUrl,observedOn:page.retrievedAt.slice(0,10),preparedBy:'Retained public-business seed review, not native qualification'}});
  const prepared=await request(prepare,admin,command);expect(prepared.body).toMatchObject({status:'accepted',result:{qualificationRequested:false}});
  const qualificationCandidateId=(prepared.body as {result:{qualificationCandidateId:string}}).result.qualificationCandidateId;

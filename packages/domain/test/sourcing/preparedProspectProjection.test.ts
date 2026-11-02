@@ -36,19 +36,29 @@ const callableOf=(brief:PreparedProspectBrief)=>brief.policyVersion==='prepared-
 it('marks an own-site prepared company with business context and a published US phone callable, without contact authority',()=>{
  const brief=callableBrief([peakBusiness,peakPhone,peakPerson]);
  expect(brief).toMatchObject({state:'prepared',contactAuthority:'not_granted'});
- expect(callableOf(brief)).toEqual({state:'callable',missing:[],phone:'(804) 555-0142',person:peakPerson,residential:true});
+ expect(callableOf(brief)).toEqual({state:'callable',missing:[],phone:'(804) 555-0142',person:peakPerson,residential:true,businessContext:true,software:false});
  expect(brief.passages.filter(p=>p.kind==='contact').map(p=>p.quote)).toEqual([peakPhone]);
  expect(brief.unknowns.join(' ')).toMatch(/not verified routes or contact permission/iu);
 });
 it.each([
  ['missing phone',[peakBusiness,'Email the office at office@peak.example.test for rental questions.'],'Peak Property Management',['no_published_phone']],
  ['unlabelled or ambiguous phone',[peakBusiness,'Fax: (804) 555-0143 · Phone: (804) 555-0142'],'Peak Property Management',['no_published_phone']],
- ['contrary context',[peakBusiness,peakPhone,'We do not manage residential homes or apartments in Richmond.'],'Peak Property Management',['needs_research','contrary_context']],
+ ['contrary context',[peakBusiness,peakPhone,'We do not manage residential homes or apartments in Richmond.'],'Peak Property Management',['contrary_context']],
  ['list page',[peakBusiness,peakPhone],'Top 10 Property Management Companies in Richmond',['list_page']],
- ['needs research',[peakPhone],'Peak Property Management',['needs_research','no_business_context']],
+ ['directory page without business wording',[peakPhone],'Top 10 Property Management Companies in Richmond',['list_page']],
 ] as const)('refuses callable for %s with closed reasons',(_label,texts,name,missing)=>{
  const callable=callableOf(callableBrief([...texts],name));
  expect(callable).toMatchObject({state:'not_callable',missing:[...missing]});
+});
+it('marks a company page with a published phone and no business wording callable, with the missing signals shown',()=>{
+ const brief=callableBrief([peakPhone]);
+ expect(brief.state).toBe('needs_research');
+ expect(callableOf(brief)).toEqual({state:'callable',missing:[],phone:'(804) 555-0142',person:null,residential:false,businessContext:false,software:false});
+});
+it('shows AppFolio or Buildium named in a shown passage as a signal, not a gate',()=>{
+ const brief=callableBrief([peakBusiness,peakPhone,'Tenants pay rent and submit maintenance requests through our AppFolio portal. Our team coordinates every repair for residents.']);
+ expect(callableOf(brief)).toMatchObject({state:'callable',software:true,businessContext:true});
+ expect(callableOf(callableBrief([peakBusiness,peakPhone]))).toMatchObject({software:false});
 });
 it('shows identical quote text once, keeping the first intact block',()=>{
  const workflow='Our team collects rent online and coordinates maintenance for tenants of the single-family homes in our care.';

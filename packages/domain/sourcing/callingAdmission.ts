@@ -18,7 +18,7 @@ import {recordCallingAssessment, type CallingAssessmentResult} from '../research
 import {assessCallingEvidence} from './callingEvidence.ts';
 import {sourcingTimeZone} from './admission.ts';
 import {retainedCandidateOnly} from './retainedAcquisition.ts';
-import {isLegacyCandidatePayload} from './discoveryIntake.ts';
+import {isLegacyCandidatePayload} from './candidatePayload.ts';
 
 const refused = (reason: string): {ok: false; reason: string} => ({ok: false, reason});
 const cityKey = (value: string) => firmNameKey(value).replace(/[^a-z ]/gu, '');

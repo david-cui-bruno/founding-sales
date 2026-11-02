@@ -24,7 +24,7 @@ it('pages newest discovery records first in bounded pages with an order-bound co
  const first=await list({offset:0,order:'newest'});if(!first.ok)throw Error(first.reason);
  expect(first.value.prospects).toHaveLength(50);expect(first.value.hasMore).toBe(true);
  expect(first.value.prospects.map(p=>p.target.candidateId)).toEqual(seeded.slice(1).reverse().map(s=>s.candidateId));
- expect(first.value.prospects[0]!.callable).toEqual({state:'callable',missing:[],phone:'(617) 555-0100',person:null,residential:true});
+ expect(first.value.prospects[0]!.callable).toEqual({state:'callable',missing:[],phone:'(617) 555-0100',person:null,residential:true,businessContext:true,software:false});
  expect(first.value.prospects.slice(1).every(p=>p.callable.state==='not_callable'&&p.callable.missing.includes('no_published_phone'))).toBe(true);
  const second=await list({offset:50,viewRevision:first.value.viewRevision,order:'newest'});if(!second.ok)throw Error(second.reason);
  expect(second.value.prospects.map(p=>p.target.candidateId)).toEqual([seeded[0]!.candidateId]);expect(second.value.hasMore).toBe(false);

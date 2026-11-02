@@ -9,7 +9,7 @@ import {lockSendGateForStopFact} from '../policy/sendGate.ts';
 import {lockPreparationCleanup} from '../calling/preparationLifecycle.ts';
 import {candidateIdentityKey} from './candidates.ts';
 import type {QualificationRunRow,SourcingResult} from './qualificationStore.ts';
-import {isCurrentPreparedCandidatePayload} from './discoveryIntake.ts';
+import {isCurrentPreparedCandidatePayload} from './candidatePayload.ts';
 const fold=(s:string)=>s.normalize('NFKC').replace(/\s+/gu,' ').trim().toLowerCase();
 const host=(s:string)=>new URL(s).hostname.toLowerCase().replace(/^www\./u,'');
 /** Internal owner: caller holds candidate and identity locks and has validated its own evidence. */

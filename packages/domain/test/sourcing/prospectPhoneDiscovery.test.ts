@@ -5,7 +5,7 @@ import {withTransaction,type SessionQueryable} from '../../db/queryable.ts';
 import {repositoryContext,workspaceScope} from '../../db/workspaceScope.ts';
 import {seedTwoWorkspaces,type TwoWorkspaces} from '../db/support/fixtures.ts';
 import {saveCandidate} from '../../sourcing/candidates.ts';
-import {saveDiscoveryCandidate} from '../../sourcing/discoveryIntake.ts';
+import {seedDiscoveryCandidate} from './support/discoverySeed.ts';
 import {requestProspectPhoneDiscovery,readProspectPhoneDiscovery,runProspectPhoneDiscovery,currentProspectPhoneDiscoveryAuthority,ProspectPhoneDiscoveryAuthorityChanged,expireProspectPhoneDiscoveryInTransaction} from '../../sourcing/prospectPhoneDiscovery.ts';
 import {listManualProspects} from '../../sourcing/manualProspects.ts';
 import {rememberExpiredManualSources} from '../../sourcing/manualProspectSourceLoss.ts';
@@ -19,7 +19,7 @@ const ctx=(session=runtime,workspace:'alpha'|'beta'='alpha')=>repositoryContext(
 const worker=(session=runtime)=>repositoryContext(workspaceScope(seed.alpha.workspaceId,{kind:'system',component:'worker'}),session);
 async function candidate(raw=false){
  const n=++serial,input=manualOrdinaryFixture(n);input.sourceUrl=`${input.website}about`;
- if(raw){const value=manualDiscoveryFixture(`phone-${n}`);value.row.website=input.website;const saved=await withTransaction(runtime,()=>saveDiscoveryCandidate(ctx(),value));if(!saved.ok)throw Error(saved.reason);return {id:saved.value.id,input,sourceUrl:value.row.source.sourceUrl};}
+ if(raw){const value=manualDiscoveryFixture(`phone-${n}`);value.row.website=input.website;const saved=await withTransaction(runtime,()=>seedDiscoveryCandidate(ctx(),value));return {id:saved.id,input,sourceUrl:value.row.source.sourceUrl};}
  const saved=await withTransaction(runtime,()=>saveCandidate(ctx(),input));if(!saved.ok)throw Error(saved.reason);return {id:saved.value.id,input,sourceUrl:input.sourceUrl};
 }
 async function request(id:string,authority?:()=>Promise<boolean>){const result=await withTransaction(runtime,()=>requestProspectPhoneDiscovery(ctx(),{candidateId:id,expectedRevision:1},authority));if(!result.ok)throw Error(result.reason);return result.value.runId;}

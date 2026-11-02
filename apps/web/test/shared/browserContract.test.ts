@@ -45,7 +45,7 @@ describe('browser boundary', () => {
   it('admits ordinary inventory without unrelated sourcing mutations', () => {
     expect(browserApiPathAllowed('POST', '/sourcing/candidates/list')).toBe(true);
     for (const method of ['GET', 'PUT', 'DELETE']) expect(browserApiPathAllowed(method, '/sourcing/candidates/list')).toBe(false);
-    for (const path of ['/sourcing/candidates/list/extra', '/sourcing/candidates/save', '/sourcing/candidates/review', '/sourcing/candidates/delete', '/sourcing/candidates/check', '/sourcing/experiments/activate', '/sourcing/candidates/discovery/list-v1']) {
+    for (const path of ['/sourcing/candidates/list/extra', '/sourcing/candidates/save', '/sourcing/candidates/review', '/sourcing/candidates/delete', '/sourcing/candidates/check', '/sourcing/experiments/activate']) {
       expect(browserApiPathAllowed('POST', path)).toBe(false);
     }
   });

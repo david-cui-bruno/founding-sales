@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { QualifiedResearchSelection, QualificationFact } from '@fss/contracts';
 import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
 import { withTransaction } from '@fss/domain/db/queryable.ts';
-import { saveDiscoveryCandidate } from '@fss/domain/sourcing/discoveryIntake.ts';
+import { seedDiscoveryCandidate } from '@fss/domain/test/sourcing/support/discoverySeed.ts';
 import { prepareDiscoveryCandidate, readDiscoveryPreparation } from '@fss/domain/sourcing/discoveryPromotion.ts';
 import { requestQualification, finishQualification } from '@fss/domain/sourcing/qualificationStore.ts';
 import { evaluateQualification } from '@fss/domain/sourcing/qualificationDecision.ts';
@@ -18,13 +18,12 @@ export async function seedQualifiedResearch(app: ThinHostApp, suffix: string, am
   const name = `Controlled Research ${suffix}`;
   const website = `https://research-${suffix.toLowerCase()}.example.test/`;
   const source = { provider: 'overture_places' as const, release: 'controlled-browser-fixture', recordId: randomUUID(), retrievedAt: null, sourceUrl: 'https://example.test/retained-source' };
-  const saved = await tx(() => saveDiscoveryCandidate(context, {
+  const saved = await tx(() => seedDiscoveryCandidate(context, {
     row: { source, observations: [source], firmName: name, website, locality: 'Dallas', region: 'TX', sourceConfidence: null, residentialFit: 'unknown', websiteAssociation: 'unknown', officePhoneEvidence: 'unknown', probableGroupKey: null },
     origins: [{ source, sourceMetadata: { sourcesJson: '[]' }, licenses: ['controlled-fixture'], notices: [{ label: 'Controlled fixture', url: 'https://example.test/license', sha256: 'a'.repeat(64) }] }],
   }));
-  assert(saved.ok, saved.ok ? '' : saved.reason);
   const prepared = await tx(() => prepareDiscoveryCandidate(context, {
-    discoveryCandidateId: saved.value.id, expectedRevision: saved.value.revision,
+    discoveryCandidateId: saved.id, expectedRevision: saved.revision,
     source: { provider: source.provider, release: source.release, recordId: source.recordId },
     candidate: { firmName: name, website, locality: 'Dallas', region: 'TX', signal: 'fit_only', evidence: 'Controlled human seed, not a qualification fact.', sourceUrl: website, observedOn: new Date().toISOString().slice(0, 10), preparedBy: 'Controlled browser acceptance' },
   }));
@@ -48,7 +47,7 @@ export async function seedQualifiedResearch(app: ThinHostApp, suffix: string, am
   assert(evaluated.ok, evaluated.ok ? '' : evaluated.reason);
   // Ordinary createFirm best-effort research must remain disabled during journey.
   await f.db.query('UPDATE research_settings SET enabled=false WHERE workspace_id=$1', [f.alpha.workspaceId]);
-  const selection: QualifiedResearchSelection = { discoveryCandidateId: saved.value.id, discoveryRevision: saved.value.revision, candidateId: preparation.qualificationCandidateId, candidateRevision: 1, runId: requested.value.runId };
+  const selection: QualifiedResearchSelection = { discoveryCandidateId: saved.id, discoveryRevision: saved.revision, candidateId: preparation.qualificationCandidateId, candidateRevision: 1, runId: requested.value.runId };
   return { selection, name, website, text, email, source, promotionId: prepared.value.promotionId, observationId };
 }
 export type QualifiedResearchSeed = Awaited<ReturnType<typeof seedQualifiedResearch>>;

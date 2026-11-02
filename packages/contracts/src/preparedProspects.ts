@@ -8,9 +8,14 @@ const passage=z.strictObject({kind:z.enum(['business','location','workflow','per
 export const preparedProspectPassageSchema=passage.extend({sourceCoverage:z.enum(['complete_page','partial_page'])});
 /** Research readiness from retained own-site passages (ADR0034); never contact permission. */
 export const preparedProspectCallableSchema=z.strictObject({state:z.enum(['callable','not_callable']),
- missing:z.array(z.enum(['needs_research','contrary_context','no_business_context','no_published_phone','list_page','not_company_page'])).max(6),
- phone:z.string().min(1).max(200).nullable(),person:z.string().min(1).max(200).nullable(),residential:z.boolean()})
+ missing:z.array(z.enum(['contrary_context','no_published_phone','list_page','not_company_page'])).max(4),
+ phone:z.string().min(1).max(200).nullable(),person:z.string().min(1).max(200).nullable(),residential:z.boolean(),
+ // Shown ordering signals, never gates: business wording in retained passages; AppFolio/Buildium named in the shown passages.
+ businessContext:z.boolean().default(false),software:z.boolean().default(false)})
  .refine(v=>new Set(v.missing).size===v.missing.length&&(v.state==='callable')===(v.missing.length===0)&&(v.state!=='callable'||v.phone!==null),'Callable requires a published phone and no missing condition');
+/** Explainable order of callable companies, best first: residential fit, a named person, AppFolio/Buildium named, business wording. Ties keep the caller's (newest) order. */
+export const preparedCallableRank=(v:Pick<z.infer<typeof preparedProspectCallableSchema>,'residential'|'person'|'software'|'businessContext'>)=>
+ 8*Number(v.residential)+4*Number(v.person!==null)+2*Number(v.software)+Number(v.businessContext);
 export const preparedProspectSummarySchema=z.strictObject({target:preparedProspectTargetSchema,displayName:z.string().min(1).max(300),
  discoveryLabel:z.string().min(1).max(300),website:z.string().url().max(2000).nullable(),
  targetingLocality:z.string().max(300),targetingRegion:z.string().max(10),

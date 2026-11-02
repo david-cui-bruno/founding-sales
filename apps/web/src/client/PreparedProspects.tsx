@@ -1,5 +1,5 @@
 import {useCallback,useEffect,useRef,useState,type JSX,type RefObject} from 'react';
-import {manualProspectListInputSchema,preparedProspectListResponseSchema,preparedProspectReadResponseSchema,type PreparedProspectBrief,type PreparedProspectCallable,type PreparedProspectSummary,type PreparedProspectTarget} from '@fss/contracts';
+import {manualProspectListInputSchema,preparedCallableRank,preparedProspectListResponseSchema,preparedProspectReadResponseSchema,type PreparedProspectBrief,type PreparedProspectCallable,type PreparedProspectSummary,type PreparedProspectTarget} from '@fss/contracts';
 import type {z} from 'zod';
 import {BrowserBoundaryError,type BrowserClient} from './BrowserClient.ts';
 import {groupAdjacentPreparedRecords} from './preparedResearchGroups.ts';
@@ -8,9 +8,12 @@ import './preparedProspects.css';
 
 type Order='priority'|'newest';
 type Page=Extract<z.infer<typeof preparedProspectListResponseSchema>,{prospects:unknown}> & {offset:number;order:Order;shownBefore:ReadonlySet<string>};
-/** ADR0034: one callable company per host, skipping hosts already shown on earlier pages of this continuation. */
-const callableCompanies=(rows:readonly PreparedProspectSummary[],shownBefore:ReadonlySet<string>)=>rows.filter((row,index)=>row.callable.state==='callable'&&
- (row.companyHost===null||!shownBefore.has(row.companyHost)&&rows.findIndex(other=>other.callable.state==='callable'&&other.companyHost===row.companyHost)===index));
+/** ADR0034: callable companies on this page, best first by preparedCallableRank (ties keep the newest order), one per website host,
+ * skipping hosts already shown on earlier pages of this continuation. */
+const callableCompanies=(rows:readonly PreparedProspectSummary[],shownBefore:ReadonlySet<string>)=>{
+ const ranked=rows.filter(row=>row.callable.state==='callable').sort((a,b)=>preparedCallableRank(b.callable)-preparedCallableRank(a.callable));
+ return ranked.filter((row,index)=>row.companyHost===null||!shownBefore.has(row.companyHost)&&ranked.findIndex(other=>other.companyHost===row.companyHost)===index);
+};
 type Operation={epoch:number;token:symbol};
 const current=(value:{validUntil:string|null})=>value.validUntil===null||Date.parse(value.validUntil)>Date.now();
 const targetMatches=(left:PreparedProspectTarget,right:PreparedProspectTarget)=>left.candidateId===right.candidateId&&left.candidateRevision===right.candidateRevision&&left.runId===right.runId;
@@ -28,7 +31,7 @@ function SourceNotices({notices}:{notices:PreparedProspectSummary['sourceNotices
 function CallableFacts({callable}:{callable:PreparedProspectCallable}):JSX.Element|null{
  if(callable.state!=='callable')return null;
  return <><span className="prepared-company-state prepared-company-callable">Callable</span>
-  <p className="prepared-company-callable-facts">Published phone: {callable.phone}{callable.person?<> · Person in sources: {callable.person}</>:null}{callable.residential?<> · Residential context observed</>:null}</p></>;
+  <p className="prepared-company-callable-facts">Published phone: {callable.phone}{callable.person?<> · Person in sources: {callable.person}</>:null}{callable.residential?<> · Residential context observed</>:null}{callable.software?<> · AppFolio or Buildium named in sources</>:null}{callable.businessContext?null:<> · No property-management wording found</>}</p></>;
 }
 
 function ResearchRecord({row,busy,onOpen}:{row:PreparedProspectSummary;busy:boolean;onOpen:(row:PreparedProspectSummary)=>Promise<void>}):JSX.Element {
@@ -150,7 +153,7 @@ export function PreparedProspects({client,onOpenCalling}:{client:BrowserClient;o
     <div className="prepared-companies-actions"><button type="button" aria-pressed={order==='newest'} disabled={busy!==null} onClick={()=>chooseOrder(order==='newest'?'priority':'newest')}>Callable today</button>
      <button type="button" disabled={busy!==null} onClick={()=>{void readPage(0,undefined,order);}}>Refresh companies</button></div></div>
    {busy==='list'?<div className="prepared-companies-loading" role="status">Reading current companies…</div>:null}
-   {page?<>{callableToday?<p className="prepared-company-note">{rows.length} callable {rows.length===1?'company':'companies'} (one per website host, not repeating earlier pages) among {page.prospects.length} newest records on this page. Callable means retained own-site text shows a published phone and property-management context; it is research readiness, not permission to call.</p>
+   {page?<>{callableToday?<p className="prepared-company-note">{rows.length} callable {rows.length===1?'company':'companies'} (one per website host, not repeating earlier pages) among {page.prospects.length} newest records on this page. Ordered by residential context, a named person, AppFolio or Buildium named, then property-management wording, then newest. Callable means a company's own retained pages publish a US phone with no conflicting context; it is research readiness, not permission to call.</p>
      :<p className="prepared-company-note">{prepared} prepared · {needsResearch} need research on this page. This is research supply, not a contact-ready count.</p>}
     {rows.length?<ul className="prepared-companies-list">{groupAdjacentPreparedRecords(rows).map(records=>records.length===1?<li key={records[0]!.target.candidateId}><ResearchRecord row={records[0]!} busy={busy!==null} onOpen={open}/></li>:<li key={records[0]!.target.candidateId} className="prepared-company-group"><div role="group" aria-label="Records with the same website">
      <p className="prepared-company-note"><strong>Records with the same website</strong> · {records.length} records</p><p className="prepared-company-note">These records have the same exact website and location hints. Original labels remain separate; identities are not merged or confirmed.</p>
