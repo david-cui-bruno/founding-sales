@@ -1,11 +1,12 @@
 import {isDeepStrictEqual} from 'node:util';
-import {emailCampaignApproveCommandSchema,emailCampaignRevokeCommandSchema,emailCampaignControlRequestSchema,emailCampaignControlSchema,emailCampaignCommandResultSchema} from '@fss/contracts';
+import {emailCampaignApproveCommandSchema,emailCampaignRevokeCommandSchema,emailCampaignControlRequestSchema,emailCampaignControlSchema,emailCampaignCommandResultSchema,emailCampaignPreparedPreviewRequestSchema,emailCampaignPreparedPreviewSchema} from '@fss/contracts';
 import {approveEmailCampaign,revokeEmailCampaign,readEmailCampaignControl} from '@fss/domain/outreach/emailCampaign.ts';
-import {withTransaction} from '@fss/domain/db/queryable.ts';
+import {previewPreparedEmailAdmission} from '@fss/domain/outreach/preparedEmailPreview.ts';
+import {withReadOnlyTransaction,withTransaction} from '@fss/domain/db/queryable.ts';
 import {runCommand} from '../auth/commands.ts';
 import {commandReply,contextForPrincipal,requirePrincipal} from './routeSupport.ts';
 import type {ApiRequest,RouteResult,RoutingOptions} from './types.ts';
-export const EMAIL_CAMPAIGN_PATHS=['/outreach/email-campaigns/control','/outreach/email-campaigns/approve','/outreach/email-campaigns/revoke'] as const;
+export const EMAIL_CAMPAIGN_PATHS=['/outreach/email-campaigns/control','/outreach/email-campaigns/approve','/outreach/email-campaigns/revoke','/outreach/email-campaigns/prepared-preview'] as const;
 export async function routeEmailCampaigns(request:ApiRequest,options:RoutingOptions):Promise<RouteResult|null>{
  if(!(EMAIL_CAMPAIGN_PATHS as readonly string[]).includes(request.path))return null;
  if(request.method!=='POST')return {status:405,body:{error:'method_not_allowed'}};
@@ -19,6 +20,12 @@ export async function routeEmailCampaigns(request:ApiRequest,options:RoutingOpti
   const control=await withTransaction(auth.db,()=>readEmailCampaignControl(scoped.context));
   if(!await currentAuthority())return {status:401,body:{error:'unauthenticated'}};
   return control?{status:200,body:emailCampaignControlSchema.parse(control)}:{status:404,body:{error:'campaign_control_unavailable'}};
+ }
+ if(request.path==='/outreach/email-campaigns/prepared-preview'){
+  const input=emailCampaignPreparedPreviewRequestSchema.safeParse(request.body);if(!input.success)return {status:400,body:{error:'malformed_body'}};
+  const preview=await withReadOnlyTransaction(auth.db,()=>previewPreparedEmailAdmission(scoped.context,input.data));
+  if(!await currentAuthority())return {status:401,body:{error:'unauthenticated'}};
+  return preview?{status:200,body:emailCampaignPreparedPreviewSchema.parse(preview)}:{status:404,body:{error:'campaign_preview_unavailable'}};
  }
  const schema=request.path.endsWith('/approve')?emailCampaignApproveCommandSchema:emailCampaignRevokeCommandSchema;
  const parsed=schema.safeParse(request.body);if(!parsed.success)return {status:400,body:{error:'malformed_body'}};

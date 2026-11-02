@@ -1,7 +1,7 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import type { EnvelopeCipher } from './envelope.ts';
 import type { GmailAccessGrant, GmailAccessOutcome, GmailClient, GmailHistoryOutcome, GmailHistoryRecord, GmailOAuthConfig } from './gmailClient.ts';
-import {readProviderBinding,readProviderIncidents,recordProviderIncident,resolveProviderIncidentsAfterRead} from '../outbound/providerIncidents.ts';
+import {readProviderBinding,readProviderIncidents,recordProviderIncident,resolveProviderIncidentsAfterRead,supersedeStaleTokenRefreshIncidents} from '../outbound/providerIncidents.ts';
 import { compareHistoryIds, laterHistoryId } from './historyIds.ts';
 import {
   advanceCursor,
@@ -205,17 +205,21 @@ export async function accessForMailbox(
   { readonly ok: true; readonly access: GmailAccessGrant } | { readonly ok: false; readonly reason: 'grant_revoked'|'provider_incident' }
 > {
   const now=deps.now?.()??new Date();
+  await supersedeStaleTokenRefreshIncidents(context,mailboxId,now);
   const incidents=(await readProviderIncidents(context,mailboxId,now)).filter(i=>!(i.sourceKind==='provider_send'&&i.reason==='unresolved_submission'));
   if(incidents.some(i=>i.state!=='revalidation_due'))return {ok:false,reason:'provider_incident'};
   const binding=await readProviderBinding(context,mailboxId);
   const refreshToken = await readRefreshToken(context, { mailboxId, cipher: deps.cipher });
   if (refreshToken === null) return { ok: false, reason: 'grant_revoked' };
   let outcome:GmailAccessOutcome;
+  // The incident is stamped when the refresh result came back, never with the entry clock above: a reconnect may commit between entry and the binding read, and a failure of
+  // that new grant must not look observed before it (`resolveSupersededTokenRefreshIncidents` compares observed_at with connected_at). A reconnect after the binding read
+  // moves the generation, and the fenced record throws instead.
   try{outcome=await deps.gmail.refreshAccessToken(deps.oauth,refreshToken);}
-  catch{if(binding)await recordProviderIncident(context,{mailboxId,sourceKind:'token_refresh',sourceId:mailboxId,classification:'unknown',reason:'unknown_provider_failure',binding,now});return {ok:false,reason:'provider_incident'};}
+  catch{if(binding)await recordProviderIncident(context,{mailboxId,sourceKind:'token_refresh',sourceId:mailboxId,classification:'unknown',reason:'unknown_provider_failure',binding,now:deps.now?.()??new Date()});return {ok:false,reason:'provider_incident'};}
   if(!outcome.ok){
    const classification=outcome.classification??(outcome.reason==='rate_limited'?'transient':outcome.reason==='grant_revoked'?'authentication':'unknown');
-   if(binding)await recordProviderIncident(context,{mailboxId,sourceKind:'token_refresh',sourceId:mailboxId,classification,reason:outcome.incidentReason??outcome.reason,retryAt:outcome.retryAt,binding,now});
+   if(binding)await recordProviderIncident(context,{mailboxId,sourceKind:'token_refresh',sourceId:mailboxId,classification,reason:outcome.incidentReason??outcome.reason,retryAt:outcome.retryAt,binding,now:deps.now?.()??new Date()});
    return {ok:false,reason:classification==='authentication'&&outcome.reason==='grant_revoked'?'grant_revoked':'provider_incident'};
   }
   if(binding)await resolveProviderIncidentsAfterRead(context,mailboxId,binding,now,['token_refresh']);
