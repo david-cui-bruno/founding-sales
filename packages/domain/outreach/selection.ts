@@ -3,6 +3,7 @@ import {EMAIL_FIT_POLICY_VERSION} from './emailFitPolicy.ts';
 import {campaignCandidateProvenance,campaignDatabaseNow} from './emailCampaignAuthority.ts';
 export {EMAIL_FIT_POLICY_VERSION} from './emailFitPolicy.ts';
 import {existingEmailRoute} from './existingEmail.ts';
+import {CONSUMER_EMAIL_DOMAINS} from './consumerEmailDomains.ts';
 import {officeContactContext} from './contactContext.ts';
 import {decideAdminOnly} from '../crm/authorization.ts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
@@ -12,12 +13,13 @@ import {qualifyCandidate,supportedBusinessPhone} from '../sourcing/qualification
 import type {QualificationRunRow} from '../sourcing/qualificationStore.ts';
 import {firmNameKey,websiteDomain} from '../crm/import.ts';
 import {firstSuppressed} from '../suppression/effective.ts';
-import {qualificationEvidenceSchema,type AutomaticResearchTarget,type CandidateInput,type QualificationFact,type SourceObservation} from '@fss/contracts';
+import {qualificationEvidenceSchema,type CandidateInput,type QualificationFact,type SourceObservation} from '@fss/contracts';
+import type {InternalCampaignTarget} from './emailCampaignSource.ts';
+import {assessPreparedEmail} from './preparedEmailAssessment.ts';
 import type {SourcingIdentity} from '../sourcing/qualificationPolicy.ts';
 export interface EmailEvidenceRoute {address:string;sourceObservationId:string;blockId:string;identityKind:'named'|'role';displayName:string}
 const fold=(s:string)=>s.normalize('NFKC').replace(/\s+/gu,' ').trim().toLowerCase();
 const host=(s:string)=>{try{return new URL(s).hostname.toLowerCase().replace(/^www\./u,'');}catch{return '';}};
-const consumer=new Set(['gmail.com','googlemail.com','yahoo.com','outlook.com','hotmail.com','icloud.com','aol.com','proton.me','protonmail.com','live.com']);
 /** An explicit first-party address, associated with this office; never an inferred naming pattern. */
 export function supportedBusinessEmail(input:{facts:readonly QualificationFact[];observations:readonly SourceObservation[];identity:SourcingIdentity;now:string}):EmailEvidenceRoute|null{
  if(input.identity.status!=='resolved'||!qualificationEvidenceSchema.safeParse({facts:input.facts,observations:input.observations}).success)return null;
@@ -36,7 +38,7 @@ export function supportedBusinessEmail(input:{facts:readonly QualificationFact[]
   if(/\b(?:suggested|guess|example address|referral|vendor|web designer|powered by|on behalf of|try emailing)\b/u.test(text))continue;
   const addresses=[...f.value.matchAll(/\b[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/giu)].map(m=>m[0].toLowerCase());
   if(addresses.length!==1)continue;const address=addresses[0]!;const [local,emailDomain]=address.split('@');
-  if(!emailDomain||consumer.has(emailDomain)||emailDomain!==domain)continue;
+  if(!emailDomain||CONSUMER_EMAIL_DOMAINS.has(emailDomain)||emailDomain!==domain)continue;
   // A published office card establishes a company contact, never a person's name.
   const role=officeCard||/^(?:info|hello|office|contact|management|leasing|maintenance|support|admin|team)$/u.test(local??'');
   const person=/\bcontact\s+([A-Z][a-z]+(?:[-'][A-Z]?[a-z]+)?\s+[A-Z][a-z]+(?:[-'][A-Z]?[a-z]+)?)\s+(?:at|email:?)/u.exec(f.value)?.[1];
@@ -71,7 +73,8 @@ export function qualifyEmailCandidate(input: Parameters<typeof qualifyCandidate>
 // send/identity locks. It does not itself create a prospect or authorize contact.
 
 export interface EmailAssessment {firmId:string|null;route:EmailEvidenceRoute;lane:'call_first'|'email_first';rank:'help_request'|'operational_burden'|'investigation'|'fit_only';emailRank:'help_request'|'operational_burden'|'investigation'|'fit_only';reviewRequired:boolean;verifiedFit:boolean}
-export async function assessEmailCandidate(ctx:RepositoryContext,input:{candidateId:string;qualificationRunId:string;campaignId?:string},automaticSource?:AutomaticResearchTarget):Promise<{ok:true;value:EmailAssessment}|{ok:false;reason:string}>{
+export async function assessEmailCandidate(ctx:RepositoryContext,input:{candidateId:string;qualificationRunId:string;campaignId?:string},automaticSource?:InternalCampaignTarget):Promise<{ok:true;value:EmailAssessment}|{ok:false;reason:string}>{
+ if(automaticSource?.kind==='prepared_capture')return assessPreparedEmail(ctx,input,automaticSource);
  if(!decideAdminOnly(ctx).permitted)return {ok:false,reason:'admin_required'};
  const w=ctx.scope.workspaceId;
  const candidate=(await ctx.db.query<{payload:CandidateInput;revision:number;status:string;qualification_blocked:boolean}>('SELECT payload,revision,status,qualification_blocked FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2',[w,input.candidateId])).rows[0];

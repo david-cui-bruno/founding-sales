@@ -24,7 +24,9 @@ it('removes admission activation/configuration routes and the automatic worker w
   expect((await dispatch({method:'GET',path,body:undefined,query:new URLSearchParams(),headers:{authorization:`Bearer ${grant.accessToken}`}},{session:fixture.db,auth:fixture.deps,supportedClientVersions:fixture.deps.config.supportedClientVersions,sendingEnabled:false})).status,path).toBe(404);
  }
  const registry=registerHandlers(new HandlerRegistry(),{classifier:undefined,mail:undefined,send:undefined,research:undefined});
- for(const kind of ['outreach.email_admit','outreach.reply'])expect(registry.get(kind),kind).toBeUndefined();
+ // The retired automatic admission worker stays gone; `outreach.email_admit` is now ADR0035's prepared-company admission pass.
+ expect(registry.get('outreach.reply'),'outreach.reply').toBeUndefined();
+ expect(registry.get('outreach.email_admit'),'outreach.email_admit').toBeDefined();
  for(const kind of ['sequence.action','reply.human_send','sequence.terminal_stop'])expect(registry.get(kind),kind).toBeDefined();
 });
 

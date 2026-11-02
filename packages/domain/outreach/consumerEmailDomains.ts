@@ -1,0 +1,3 @@
+/** Personal-mailbox providers and throwaway-address services. An address here is never a company's published business address. */
+export const CONSUMER_EMAIL_DOMAINS:ReadonlySet<string>=new Set(['gmail.com','googlemail.com','yahoo.com','ymail.com','outlook.com','hotmail.com','msn.com','icloud.com','me.com','mac.com','aol.com','proton.me','protonmail.com','live.com','comcast.net','verizon.net','att.net','sbcglobal.net','bellsouth.net','cox.net','gmx.com','mail.com',
+ 'mailinator.com','guerrillamail.com','10minutemail.com','tempmail.com','temp-mail.org','yopmail.com','trashmail.com','sharklasers.com','getnada.com','throwawaymail.com','dispostable.com','maildrop.cc']);

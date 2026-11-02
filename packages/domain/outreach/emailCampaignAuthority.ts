@@ -1,4 +1,6 @@
-import type {AutomaticResearchTarget,CandidateInput,EmailCampaign,EmailCampaignPolicy} from '@fss/contracts';
+import type {CandidateInput,EmailCampaign,EmailCampaignPolicy} from '@fss/contracts';
+import type {InternalCampaignTarget} from './emailCampaignSource.ts';
+import {preparedCampaignActor,preparedEmailProof} from './preparedEmailProof.ts';
 import {automaticResearchOwner} from '../sourcing/automaticResearchAuthority.ts';
 import {automaticCampaignActor,automaticCampaignSourceProof} from './emailCampaignAutomatic.ts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
@@ -29,8 +31,8 @@ export async function currentEmailCampaign(ctx:RepositoryContext,id:string):Prom
  return (await ctx.db.query<EmailCampaignRow>('SELECT * FROM outreach_email_campaigns WHERE workspace_id=$1 AND id=$2',[ctx.scope.workspaceId,id])).rows[0]??null;
 }
 /** A persisted audience approval is independent of content and mailbox permission. */
-export async function campaignAuthorityCurrent(ctx:RepositoryContext,row:EmailCampaignRow,automaticSource?:AutomaticResearchTarget):Promise<boolean>{
- const actorCurrent=async()=>automaticSource?automaticCampaignActor(ctx,row.owner_user_id)&&(await automaticCampaignSourceProof(ctx,automaticSource))?.owner===row.owner_user_id:ctx.scope.actor.kind==='user'&&ctx.scope.actor.userId===row.owner_user_id&&await researchActor(ctx);
+export async function campaignAuthorityCurrent(ctx:RepositoryContext,row:EmailCampaignRow,automaticSource?:InternalCampaignTarget):Promise<boolean>{
+ const actorCurrent=async()=>automaticSource?.kind==='prepared_capture'?preparedCampaignActor(ctx,row.owner_user_id):automaticSource?automaticCampaignActor(ctx,row.owner_user_id)&&(await automaticCampaignSourceProof(ctx,automaticSource))?.owner===row.owner_user_id:ctx.scope.actor.kind==='user'&&ctx.scope.actor.userId===row.owner_user_id&&await researchActor(ctx);
  if(!await actorCurrent()||row.revoked_at||row.expires_at.getTime()<=Date.parse(await campaignDatabaseNow(ctx)))return false;
  const auth=await authorizationForMailbox(ctx,row.mailbox_id);
  if(!auth.allowed||auth.revision!==row.authorization_revision||await campaignKind(ctx,row.sequence_version_id)!=='email_first')return false;
@@ -38,8 +40,16 @@ export async function campaignAuthorityCurrent(ctx:RepositoryContext,row:EmailCa
  return !!current&&current.owner_user_id===row.owner_user_id&&current.mailbox_id===row.mailbox_id&&current.sequence_version_id===row.sequence_version_id&&current.authorization_revision===row.authorization_revision&&current.revision===row.revision&&!current.revoked_at&&current.expires_at.getTime()>Date.parse(await campaignDatabaseNow(ctx))&&await actorCurrent();
 }
 /** No caller-supplied reviewed flag can manufacture this provenance. */
-export async function campaignCandidateProvenance(ctx:RepositoryContext,input:{campaignId:string;candidateId:string;qualificationRunId:string},automaticSource?:AutomaticResearchTarget):Promise<{firmId:string;campaign:EmailCampaignRow;route:EmailEvidenceRoute}|null>{
+export async function campaignCandidateProvenance(ctx:RepositoryContext,input:{campaignId:string;candidateId:string;qualificationRunId:string},automaticSource?:InternalCampaignTarget):Promise<{firmId:string|null;campaign:EmailCampaignRow;route:EmailEvidenceRoute}|null>{
  const campaign=await currentEmailCampaign(ctx,input.campaignId);if(!campaign||!await campaignAuthorityCurrent(ctx,campaign,automaticSource))return null;
+ if(automaticSource?.kind==='prepared_capture'){
+  // ADR0035: the company's Firm exists only once admission creates it, from this very candidate.
+  if(input.candidateId!==automaticSource.candidateId||input.qualificationRunId!==automaticSource.runId)return null;
+  const proof=await preparedEmailProof(ctx,campaign,automaticSource);
+  if(!proof||!await campaignAuthorityCurrent(ctx,campaign,automaticSource)||Date.parse(await campaignDatabaseNow(ctx))>=proof.validUntil)return null;
+  const firm=(await ctx.db.query<{firm_id:string}>('SELECT firm_id FROM outreach_email_sources WHERE workspace_id=$1 AND candidate_id=$2 AND run_id=$3',[ctx.scope.workspaceId,input.candidateId,input.qualificationRunId])).rows[0];
+  return {firmId:firm?.firm_id??null,campaign,route:proof.route};
+ }
  if(automaticSource){
   if(input.candidateId!==automaticSource.candidateId||input.qualificationRunId!==automaticSource.runId)return null;
   const proof=await automaticCampaignSourceProof(ctx,automaticSource);

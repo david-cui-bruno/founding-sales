@@ -213,6 +213,8 @@ export const RESEARCH_FIRM_JOB_KEY_PREFIX = 'research-firm:';
 export const jobIdempotencyKey = Object.freeze({
   sourcingQualify: (runId:string):string => `sourcing-qualify:${runId}`,
   sourcingPhoneDiscover: (runId:string):string => `sourcing-phone-discover:${runId}`,
+  /** One prepared-company admission pass per workspace per ten-minute bucket of the scheduler's clock (`now` is an ISO instant). */
+  outreachEmailAdmit: (workspaceId:string,now:string):string => `outreach-email-admit:${workspaceId}:${now.slice(0,15)}`,
   sourcingCheck: (id:string,checkId:string):string => `sourcing-check:${id}:${checkId}`,
   meetingAnalyze: (meetingId: string, notes: number, transcript: number): string => `meeting-analyze:${meetingId}:n${String(notes)}:t${String(transcript)}`,
   meetingAnalysisRequest: (requestId: string, revision: number): string => `meeting-analysis-request:${requestId}:r${String(revision)}`,
