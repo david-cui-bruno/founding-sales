@@ -7,7 +7,7 @@ import {OWN_SITE_PROVIDER,isExcludedTitle,personalAddressAtHost,rankDecisionMake
  * model, no network, no credit. A person is a NAME next to a decision-maker TITLE: "Name, Title" (team cards, bylines, the TX TREC and CA DRE licence footers
  * "Ryan Stetson, Broker", "Designated Broker ~ Ethan D. Autry TREC #"), "Title: Name", "Name is the Owner", or a name block directly followed by a title block.
  * A dash-led signature ("- Jon Smith, Owner / Broker") counts only with a company-side title (a bare "Owner" is as likely a customer's). An address is attached only
- * when the page publishes it for that person: in the same block, in the next blocks of the card, or in a line that names the person; a role mailbox, another
+ * when the page publishes it for that person: in the same block, in the next blocks of the card, or in the person's own statement (never from elsewhere on the page); a role mailbox, another
  * domain and a consumer domain never are, and an address is never built from a name. The capture keeps visible text only: JSON-LD, <title> and mailto
  * targets are not in it, so a person published only there is not found. */
 export interface OwnSiteFinding {firstName:string;lastName:string;title:string;rank:number;email:string|null;confidence:'high'|'medium';source:{observationId:string;url:string;blockId:string;quote:string}}
@@ -26,8 +26,8 @@ const NAME_TITLE=new RegExp(`(?<![\\p{L}\\p{N}])(${NAME})(?:\\s*,\\s*|\\s+[–�
 const TITLE_NAME=new RegExp(`(?<![\\p{L}\\p{N}])(${TITLE})\\s*(?:~|:|–|—|\\s-\\s|,)\\s*(${NAME})(?![\\p{L}\\p{N}])(?=$|\\s*[,.;:)|•·–—~(\\[#/]|\\s+-\\s|\\s+${LICENCE})`,'gu');
 const NAME_IS_TITLE=new RegExp(`(?<![\\p{L}\\p{N}])(${NAME})\\s+(?:is|serves as|has been|was)\\s+(?:the|our|a|an)\\s+(?:current\\s+)?(${TITLE})${AFTER}`,'gu');
 const NAME_ONLY=new RegExp(`^(${NAME})\\.?$`,'u'),TITLE_ONLY=new RegExp(`^(${TITLE})(?:\\s*,?\\s*(?:${LICENCE}.*)?)?$`,'u');
-/** Characters that wrap an address in running text and are never part of one a person publishes: brackets, quotes, sentence and list punctuation, table bars. */
-const WRAPPING=/^[<>()[\]"'“”‘’,.;:|•·]+|[<>()[\]"'“”‘’,.;:|•·]+$/gu;
+/** What may wrap an address in running text: a MATCHED pair (brackets, quotes, curly quotes), trailing sentence punctuation and a leading `mailto:`. Nothing else is stripped: an unpaired leading or trailing character is the parser's to accept whole or refuse (`'jane@x.org` is never `jane@x.org`). */
+const PAIRS:readonly (readonly [string,string])[]=[['(',')'],['[',']'],['<','>'],['"','"'],["'","'"],['“','”'],['‘','’']],SENTENCE_END=/[.,;:!?]+$/u;
 const COMPANY_SIDE=/\b(?:broker|ceo|chief executive|president|founder|principal|property manager)\b/iu;
 const CUSTOMER_WORDS=/\b(?:testimonials?|reviews?|reviewed|stars?|tenants?|residents?|renters?|clients?|customers?|homeowners?)\b/iu;
 /** A heading that opens a section of what customers say: a person named under it is a customer or reviewer, whatever title follows (an "Owner" is as likely a customer's). */
@@ -57,10 +57,18 @@ function belongsTo(local:string,person:{firstName:string;lastName:string;key:str
  const mailbox=letters(local),first=letters(person.key.split(' ')[0]!),nick=letters(person.firstName),last=letters(person.lastName.replace(/\b(?:Jr|Sr|II|III|IV)\.?$/u,''));
  return [first,nick].some(name=>name.length>=3&&(mailbox.includes(name)||name.startsWith(mailbox)&&mailbox.length>=3))||last.length>=3&&mailbox.includes(last);
 }
-/** The COMPLETE mailbox literals of a text: each whitespace-delimited token that carries an `@`, trimmed of wrapping characters only (and a `mailto:`), must parse whole as an address; a token that does not (`a(b@x.org`, `a@b.org,c@d.org`) is refused, and a suffix of a token is never rescanned (`jordan.o'connor@x.org` is never `connor@x.org`). */
+/** The COMPLETE mailbox literals of a text: each whitespace-delimited token that carries an `@`, trimmed of a matched wrapper pair, trailing sentence punctuation and a leading `mailto:` only, must parse whole as an address; a token that does not (`a(b@x.org`, `a@b.org,c@d.org`) is refused, and a suffix of a token is never rescanned (`jordan.o'connor@x.org` is never `connor@x.org`). */
+const unwrapped=(token:string):string=>{
+ for(let bare=token;;){
+  const next=bare.replace(SENTENCE_END,'').replace(/^mailto:/iu,''),pair=PAIRS.find(([open,close])=>next.length>2&&next.startsWith(open)&&next.endsWith(close));
+  const after=pair?next.slice(1,-1):next;
+  if(after===bare)return bare;
+  bare=after;
+ }
+};
 const emailsIn=(text:string):string[]=>[...new Set(text.split(/\s+/u).flatMap(token=>{
  if(!token.includes('@'))return [];
- const parsed=parseEmailAddress(token.replace(WRAPPING,'').replace(/^mailto:/iu,'').replace(WRAPPING,''));
+ const parsed=parseEmailAddress(unwrapped(token));
  return parsed?[`${parsed.localPart}@${parsed.domain}`.toLowerCase()]:[];
 }))];
 /** A person's page address: valid at the company host and not a role or consumer mailbox. */
@@ -70,6 +78,21 @@ const localOf=(address:string)=>address.slice(0,address.indexOf('@'));
 /** `phrase` is the COMPLETE local title: the matched title plus the qualifier words joined to it ("Assistant" in "Assistant Property Manager: Jane", "Leasing Agent" in "Property Manager / Leasing Agent"). */
 interface Hit {name:string;title:string;phrase:string;signature:boolean;quote:string;/** The text of THIS person's own statement: from where their statement starts to the next other named person or separator. */clause:string;/** No other named person (titled or not) appears in the block: the block's one address is then this person's. */alone:boolean}
 const NAME_MENTION=new RegExp(`(?<![\\p{L}\\p{N}])(${NAME})(?![\\p{L}\\p{N}])`,'gu'),SEPARATOR=/[|•·©;]/gu;
+/** One comma-separated clause of title qualifiers (at most three words) before or after the matched title: "Leasing Agent" in "Property Manager, Leasing Agent jane@…". */
+const CLAUSE='[\\p{L}\'’®]+(?:[\\s/&+–—-]+[\\p{L}\'’®]+){0,2}';
+const TAIL_CLAUSE=new RegExp(`^\\s*,\\s*(${CLAUSE})(?=[\\s,;:)|•·-]|$)`,'u'),HEAD_CLAUSE=new RegExp(`(?<![\\p{L}\\p{N}'’®@.])(${CLAUSE})\\s*,\\s*$`,'u');
+/** The title qualifiers joined to the match by commas (any number of clauses): every clause that is itself a title, up to and including the first EXCLUDED one (which refuses the whole phrase); a clause that is neither (a name, a sentence) ends the scan, so a list of people is never one title. */
+function commaClauses(text:string,side:'head'|'tail'):string{
+ let rest=text,phrase='';
+ for(let count=0;count<3;count++){
+  const clause=(side==='tail'?TAIL_CLAUSE:HEAD_CLAUSE).exec(rest);
+  if(!clause||!isExcludedTitle(clause[1]!)&&!TITLE_ONLY.test(clause[1]!))break;
+  phrase=side==='tail'?`${phrase}, ${clause[1]!}`:`${clause[1]!}, ${phrase}`;
+  rest=side==='tail'?rest.slice(clause[0].length):rest.slice(0,clause.index);
+  if(isExcludedTitle(clause[1]!))break;
+ }
+ return phrase;
+}
 const HEAD_WORDS=/(?<![\p{L}\p{N}'’®@.])(?:[\p{L}'’®]+[\s/&+–—-]+){1,3}$/u,TAIL_WORDS=/^(?:[\s/&+–—-]+[\p{L}'’®]+(?=[\s/&+–—,;:)|•·-]|$)){1,3}/u;
 /** The statement around a match: its text between the nearest `|`, bullet or copyright marks, so a footer's citation is the line that names the person, not the whole footer. */
 const statement=(text:string,start:number,end:number):string=>{
@@ -84,7 +107,7 @@ function hitsIn(block:string):Hit[]{
   pattern.lastIndex=0;
   for(const match of text.matchAll(pattern)){
    const [name,title]=pattern===TITLE_NAME?[match[2]!,match[1]!]:[match[1]!,match[2]!];
-   const start=match.index,end=start+match[0].length,phrase=pattern===TITLE_NAME?`${HEAD_WORDS.exec(text.slice(0,start))?.[0]??''}${title}`:`${title} ${TAIL_WORDS.exec(text.slice(end))?.[0]??''}`;
+   const start=match.index,end=start+match[0].length,words=pattern===TITLE_NAME?`${HEAD_WORDS.exec(text.slice(0,start))?.[0]??''}${title}`:`${title} ${TAIL_WORDS.exec(text.slice(end))?.[0]??''}`,phrase=pattern===TITLE_NAME?`${commaClauses(text.slice(0,start-(HEAD_WORDS.exec(text.slice(0,start))?.[0].length??0)),'head')} ${words}`:`${words}${commaClauses(text.slice(end+(TAIL_WORDS.exec(text.slice(end))?.[0].length??0)),'tail')}`;
    const own=splitName(name)?.key,others=names.filter(other=>other.key!==own&&(other.end<=start||other.start>=end)),after=[...others.filter(other=>other.start>=end).map(other=>other.start),...[...text.matchAll(SEPARATOR)].map(mark=>mark.index).filter(index=>index>=end)];
    hits.push({name:tidy(name),title:tidy(title),phrase:tidy(phrase),signature:pattern===NAME_TITLE&&SIGNATURE_LEAD.test(text.slice(0,start)),quote:statement(text,start,end),clause:text.slice(start,after.length?Math.min(...after):text.length),alone:others.length===0});
   }
@@ -120,16 +143,6 @@ function mentionsOf(pages:readonly PreparedPageText[],host:string):Mention[]{
    for(const later of blocks.slice(i+2,i+4)){if(NAME_ONLY.test(titleCase(later.text))||hitsIn(titleCase(later.text)).length)break;tail.push(later.text);}
    const card=[block.text,...tail.filter(text=>text.length<=160)].join(' / ');
    push({name,title,signature:false},block.id,card,card,tail.flatMap(text=>emailsIn(text)),true,true);
-  }
- }
- // A line that names the person and publishes their address (any page): "Email Bob at bob@example.com". Attached only to a person with no address yet.
- for(const page of pages)for(const block of page.blocks){
-  const text=tidy(block.text),addresses=personal(emailsIn(text),host);
-  if(!addresses.length||text.length>300)continue;
-  for(const mention of found){
-   if(mention.email!==null)continue;
-   const address=addresses.find(candidate=>belongsTo(localOf(candidate),mention)),first=letters(mention.key.split(' ')[0]!),words=new Set(text.replace(/\S*@\S*/gu,' ').toLowerCase().split(/[^\p{L}]+/u));
-   if(address&&[first,letters(mention.firstName),letters(mention.lastName)].some(name=>name.length>=3&&words.has(name))){mention.email=address;mention.confidence='medium';mention.quote=tidy(`${mention.quote} … ${page.url===mention.url?'':`${page.url}: `}${text}`).slice(0,600);}
   }
  }
  return found;

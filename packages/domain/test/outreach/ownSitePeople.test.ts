@@ -13,7 +13,7 @@ const R1:[string,string,PreparedPageText[],{name:string;title:string;email:strin
  ['rentcobalt.com team cards: name, title, address blocks','rentcobalt.com',[page('https://www.rentcobalt.com/about','Meet the Team','Doc Nicolson','Designated Broker / Principal','doc@rentcobalt.com','William "Hoss" Evey','Senior Property Manager, Principal','hoss@rentcobalt.com')],{name:'Doc Nicolson',title:'Designated Broker / Principal',email:'doc@rentcobalt.com'}],
  ['woodpropertymanagement.com licence footer "Name, Broker CABRE"','woodpropertymanagement.com',[page('https://woodpropertymanagement.com/','Property management in San Diego.','© 2026 Wood Property Management | Vicki Franklin, Broker CABRE #01234567 | woodproperty@gmail.com')],{name:'Vicki Franklin',title:'Broker',email:null}],
  ['choosermg.com blog byline with a DRE number; an address in the next block is not claimed (a byline is not a card)','choosermg.com',[page('https://www.choosermg.com/about','Authored by Scott Engle, Broker DRE #01234567','scott@choosermg.com'),],{name:'Scott Engle',title:'Broker',email:null}],
- ['rpgre.com about: "Name, President-Broker"; homepage line that names Bob and gives his address','rpgre.com',[page('https://www.rpgre.com/about-us','Bob Rodrigues, President-Broker'),page('https://www.rpgre.com/','Email Bob at bob@rpgre.com')],{name:'Bob Rodrigues',title:'President-Broker',email:'bob@rpgre.com'}],
+ ['rpgre.com about: "Name, President-Broker"; a homepage line that names Bob and gives his address is NOT attached (only the same card or own statement is)','rpgre.com',[page('https://www.rpgre.com/about-us','Bob Rodrigues, President-Broker'),page('https://www.rpgre.com/','Email Bob at bob@rpgre.com')],{name:'Bob Rodrigues',title:'President-Broker',email:null}],
  ['bargeproperties.com team: fifteen staff, name/title/address triples','bargeproperties.com',[page('https://www.bargeproperties.com/team','Our Team','V. W. (Bill) Barge III','Chairman & Founder','Tyler Bradford','President, CPM','tyler@bargeproperties.com','Amy Lowe','Leasing Agent','amy@bargeproperties.com','Raul Ortiz','Maintenance Supervisor','raul@bargeproperties.com')],{name:'Tyler Bradford',title:'President, CPM',email:'tyler@bargeproperties.com'}],
  ['sophiaassociates TX licence footer; the address on the page is a consumer domain','sophiaassociatesrealestatellc.propertywaresites.com',[page('https://sophiaassociatesrealestatellc.propertywaresites.com/about-us/','Kyle James Wheatley, Broker Texas License #444878','Aracelis Wheatley, Property Manager','kyle.wheatley@me.com')],{name:'Kyle Wheatley',title:'Broker',email:null}],
  ['colonialrepm.com: "Designated Broker ~ Name TREC #"; ceo@ and president@ are role aliases','colonialrepm.com',[page('https://www.colonialrepm.com/team','Designated Broker ~ Ethan D. Autry TREC # 754551-B','CEO: Ethan D. Autry — ceo@colonialrepm.com','Tonya Autry, President','president@colonialrepm.com')],{name:'Ethan Autry',title:'CEO',email:null}],
@@ -45,10 +45,10 @@ const R1:[string,string,PreparedPageText[],{name:string;title:string;email:strin
 ];
 describe('own-site people on the shapes of the R1 table',()=>{
  it.each(R1)('%s',(_label,host,pages,expected)=>{expect(brief(host,...pages)??null).toEqual(expected);});
- it('measures the yield of the reconstructed R1 shapes: names every reconstructed shape that names a decision-maker (29 of 32) and an own-domain address for 9',()=>{
+ it('measures the yield of the reconstructed R1 shapes: names every reconstructed shape that names a decision-maker (29 of 32) and an own-domain address for 8',()=>{
   const people=R1.map(([,host,pages])=>top(host,...pages));
   expect(R1).toHaveLength(32);expect(people.filter(Boolean)).toHaveLength(29);
-  expect(people.filter(person=>person?.email).length).toBe(9);
+  expect(people.filter(person=>person?.email).length).toBe(8);
  });
 });
 
@@ -125,6 +125,20 @@ describe('what is never a person or an address',()=>{
   expect(email('Jane Doe, Owner, mailto:jane@peak.org;')).toBe('jane@peak.org');
   expect(email('Jane Doe, Owner, "Jane@Peak.org".')).toBe('jane@peak.org');
  });
+ it('strips only matched wrapper pairs, trailing sentence punctuation and a leading mailto: and never mutates an unpaired leading or trailing character: the parser takes the whole token or refuses it',()=>{
+  const email=(text:string)=>none(text)[0]?.email;
+  // An apostrophe or a bar is a valid local-part character: the whole token is the address (never `jane@peak.org`), and it is not a role or consumer mailbox.
+  expect(email("Jane Doe, Owner, 'jane@peak.org")).toBe("'jane@peak.org");
+  expect(email('Jane Doe, Owner, |jane@peak.org')).toBe('|jane@peak.org');
+  for(const text of ["Jane Doe, Owner, 'jane@peak.org","Jane Doe, Owner, |jane@peak.org"])expect(email(text)).not.toBe('jane@peak.org');
+  expect(email("Jane Doe, Owner, 'jane@peak.org'")).toBe('jane@peak.org');
+  expect(email('Jane Doe, Owner, (jane@peak.org).')).toBe('jane@peak.org');
+  expect(email('Jane Doe, Owner, “jane@peak.org”,')).toBe('jane@peak.org');
+  expect(email('Jane Doe, Owner, [jane@peak.org];')).toBe('jane@peak.org');
+  expect(email('Jane Doe, Owner, (mailto:jane@peak.org)')).toBe('jane@peak.org');
+  // Unpaired brackets, a trailing bar or quote that the parser cannot take are refused, not repaired.
+  for(const token of ['(jane@peak.org','jane@peak.org)','jane@peak.org|','jane@peak.org\'','<jane@peak.org','jane@peak.org>>',"“jane@peak.org"])expect(email(`Jane Doe, Owner, ${token}`),token).toBeNull();
+ });
  it('refuses an eligible title joined to an excluded qualifier: the COMPLETE local title phrase is checked, before or after the eligible words',()=>{
   expect(none('Assistant Property Manager: Jane Doe — jane@peak.org')).toEqual([]);
   expect(none('Jane Doe, Property Manager / Leasing Agent')).toEqual([]);
@@ -133,6 +147,14 @@ describe('what is never a person or an address',()=>{
   expect(none('Associate Broker: Jane Doe')).toEqual([]);
   expect(none('Jane Doe, Broker Associate')).toEqual([]);
   expect(none('Jane Doe is the Property Manager and Leasing Agent')).toEqual([]);
+  // Comma-separated qualifiers anywhere in the contiguous title phrase, before or after the eligible words.
+  expect(none('Jane Doe, Property Manager, Leasing Agent jane@peak.org')).toEqual([]);
+  expect(none('Jane Doe, Owner, Associate Broker')).toEqual([]);
+  expect(none('Jane Doe, Property Manager, Broker, Leasing Agent')).toEqual([]);
+  expect(none('Leasing Agent, Property Manager: Jane Doe')).toEqual([]);
+  expect(none('Jane Doe, Owner, Designated Broker')[0]).toMatchObject({firstName:'Jane',rank:0});
+  // A name between the commas ends the scan: a list of people is never one title phrase.
+  expect(none('Jane Doe, Owner, Ann Roe, Leasing Agent').map(person=>person.firstName)).toContain('Jane');
   expect(none('Assistant Property Manager: Jane Doe','Property Manager: Ann Roe').map(person=>person.firstName)).toEqual(['Ann']);
   expect(none('Designated Broker: Jane Doe')[0]).toMatchObject({firstName:'Jane',title:'Designated Broker',rank:2});
   expect(none('Property Manager: Jane Doe')[0]).toMatchObject({firstName:'Jane',rank:5});
@@ -189,6 +211,21 @@ describe('a mailbox is the person\'s only inside their own statement, never by a
  });
  it('refuses, with another person named in the block, an address inside the person\'s statement that carries another person\'s name',()=>{
   expect(found('John Smith, Broker jane@peak.org | Jane Doe, Office Administrator')).toEqual([{name:'John Smith',email:null}]);
+ });
+});
+
+describe('no address is attached from elsewhere on the page',()=>{
+ const found=(...blocks:string[])=>extractOwnSitePeople([page('https://peak.org/about',...blocks)],'peak.org').map(person=>({name:`${person.firstName} ${person.lastName}`,email:person.email}));
+ it('leaves a person found without an address when a first-name address sits in another block, another page or a testimonial section',()=>{
+  expect(found('Jane Doe, Owner','Questions? Email Jane at jane@peak.org')).toEqual([{name:'Jane Doe',email:null}]);
+  expect(found('Jane Doe, Owner','Our Team','Contact Jane Doe: jane@peak.org')).toEqual([{name:'Jane Doe',email:null}]);
+  expect(extractOwnSitePeople([page('https://peak.org/a','Jane Doe, Owner'),page('https://peak.org/b','Email Jane at jane@peak.org')],'peak.org')[0]).toMatchObject({firstName:'Jane',email:null});
+  expect(found('Jane Doe, Owner','Testimonials','Jane is wonderful! Email her at jane@peak.org')).toEqual([{name:'Jane Doe',email:null}]);
+  expect(found('Our Team','Jane Doe, Owner','Testimonials','Thanks Jane! jane@peak.org')).toEqual([{name:'Jane Doe',email:null}]);
+ });
+ it('still attaches the address of the same card or the person\'s own statement',()=>{
+  expect(found('Jane Doe','Owner','jane@peak.org')).toEqual([{name:'Jane Doe',email:'jane@peak.org'}]);
+  expect(found('Jane Doe, Owner jane@peak.org')).toEqual([{name:'Jane Doe',email:'jane@peak.org'}]);
  });
 });
 
