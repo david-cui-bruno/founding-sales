@@ -154,7 +154,7 @@ describe('what is never a person or an address',()=>{
   expect(none('Leasing Agent, Property Manager: Jane Doe')).toEqual([]);
   expect(none('Jane Doe, Owner, Designated Broker')[0]).toMatchObject({firstName:'Jane',rank:0});
   // A name between the commas ends the scan: a list of people is never one title phrase.
-  expect(none('Jane Doe, Owner, Ann Roe, Leasing Agent').map(person=>person.firstName)).toContain('Jane');
+  expect(none('Jane Doe, Owner, Ann Roe, Leasing Agent').map(person=>person.firstName)).toEqual(['Jane']);
   expect(none('Assistant Property Manager: Jane Doe','Property Manager: Ann Roe').map(person=>person.firstName)).toEqual(['Ann']);
   expect(none('Designated Broker: Jane Doe')[0]).toMatchObject({firstName:'Jane',title:'Designated Broker',rank:2});
   expect(none('Property Manager: Jane Doe')[0]).toMatchObject({firstName:'Jane',rank:5});
@@ -211,6 +211,24 @@ describe('a mailbox is the person\'s only inside their own statement, never by a
  });
  it('refuses, with another person named in the block, an address inside the person\'s statement that carries another person\'s name',()=>{
   expect(found('John Smith, Broker jane@peak.org | Jane Doe, Office Administrator')).toEqual([{name:'John Smith',email:null}]);
+ });
+});
+
+describe('a title is one person\'s: overlapping name-first and title-first readings resolve to the name that owns the title',()=>{
+ const found=(...blocks:string[])=>extractOwnSitePeople([page('https://peak.org/team',...blocks)],'peak.org').map(person=>({name:`${person.firstName} ${person.lastName}`,title:person.title,email:person.email}));
+ it('does not make the next person the owner: "Owner, Ann Roe" after "Jane Doe, Owner" is not Ann\'s title, and her own excluded title refuses her',()=>{
+  expect(found('Jane Doe, Owner, Ann Roe, Leasing Agent ann@peak.org')).toEqual([{name:'Jane Doe',title:'Owner',email:null}]);
+  expect(found('Jane Doe, Owner, Ann Roe, Leasing Agent')).toEqual([{name:'Jane Doe',title:'Owner',email:null}]);
+ });
+ it('gives each person their OWN title and their own-statement address when both are eligible, and never makes the second an owner',()=>{
+  expect(found('Jane Doe, Owner, Ann Roe, Broker ann@peak.org')).toEqual([{name:'Ann Roe',title:'Broker',email:'ann@peak.org'},{name:'Jane Doe',title:'Owner',email:null}]);
+ });
+ it('keeps the title-first cards: "Owner: Jane Doe", "Owner, Jane Doe", "President — Tyler Smith" and "Title: Name" followed by something that is no title',()=>{
+  expect(found('Owner: Jane Doe')).toEqual([{name:'Jane Doe',title:'Owner',email:null}]);
+  expect(found('Owner, Jane Doe')).toEqual([{name:'Jane Doe',title:'Owner',email:null}]);
+  expect(found('President — Tyler Smith')).toEqual([{name:'Tyler Smith',title:'President',email:null}]);
+  expect(found('Designated Broker ~ Ethan D. Autry TREC # 754551-B')).toEqual([{name:'Ethan Autry',title:'Designated Broker',email:null}]);
+  expect(found('Owner: Jane Doe, call us jane@peak.org')).toEqual([{name:'Jane Doe',title:'Owner',email:'jane@peak.org'}]);
  });
 });
 
