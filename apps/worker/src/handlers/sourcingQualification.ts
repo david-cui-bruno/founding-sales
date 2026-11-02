@@ -3,7 +3,7 @@ import {withTransaction} from '@fss/domain/db/queryable.ts';
 import {evaluateQualification} from '@fss/domain/sourcing/qualificationDecision.ts';
 import {advanceVerifiedFirm} from '@fss/domain/sourcing/verifiedFirmPipeline.ts';
 import {advanceAutomaticResearchFirm} from '@fss/domain/sourcing/automaticResearch.ts';
-import {discoveryResearchEligibleSql} from '@fss/domain/sourcing/discoveryIntake.ts';
+import {discoveryResearchEligibleSql,DISCOVERY_RESEARCH_WINNERS_CTE} from '@fss/domain/sourcing/discoveryIntake.ts';
 import {verifiedFirmOwner,VERIFIED_FIRM_POLICY_VERSION,IDENTITY_REVIEW_REASONS} from '@fss/domain/sourcing/verifiedFirmPolicy.ts';
 import {lockSendGateForStopFact} from '@fss/domain/policy/sendGate.ts';
 import {lockDiscoveryReviewSources} from '@fss/domain/sourcing/discoveryReviewVisibility.ts';
@@ -63,15 +63,16 @@ export function sourcingQualificationSource(enabled:boolean):DueWorkSource {
    }
    await expireQualificationsInTransaction(ctx);
    // ADR0034: a raw Overture place with its own website is also due (never researched first, then like a Tavily draft);
-   // its manually skipped, no-website and unsupported-place rows are not. Publication and recovery above still exclude it.
+   // its manually skipped, no-website and unsupported-place rows are not, nor is one whose company host another candidate already stands for.
+   // Publication and recovery above still exclude it.
    // Old evidence versions are due now, but a version bump is not an identity
    // correction: the same-revision review stop remains outside every due alternative.
    // ADR0034: Tavily discovery capture needs no verified-firm attestation; requestQualification
    // still refuses disabled/held research and ceilings, and strict steps keep their owner checks.
    // Unreviewed drafts keep the identity-review stop without attestation; kept drafts are unchanged.
-   const due=(await session.query<{id:string;revision:number}>(`SELECT c.id,c.revision FROM sourcing_candidates c LEFT JOIN LATERAL
+   const due=(await session.query<{id:string;revision:number}>(`WITH ${DISCOVERY_RESEARCH_WINNERS_CTE} SELECT c.id,c.revision FROM sourcing_candidates c LEFT JOIN LATERAL
     (SELECT r.requested_at,r.candidate_revision,r.prompt_version,r.policy_version,r.state,r.reason,r.admission_reason FROM sourcing_qualification_runs r WHERE r.workspace_id=c.workspace_id AND r.candidate_id=c.id ORDER BY r.requested_at DESC,r.id DESC LIMIT 1) last ON true
-    WHERE c.workspace_id=$1 AND ((c.payload->>'kind' IS DISTINCT FROM 'discovery-v1' AND (c.status='kept' OR (c.status='needs_review' AND (c.payload->>'preparedBy'='Tavily Basic search · not verified' OR ($3 AND EXISTS(SELECT 1 FROM sourcing_apollo_candidate_origins origin JOIN sourcing_apollo_attempts attempt ON attempt.workspace_id=origin.workspace_id AND attempt.id=origin.attempt_id WHERE origin.workspace_id=c.workspace_id AND origin.candidate_id=c.id AND origin.candidate_revision<=c.revision AND origin.domain=regexp_replace(lower(split_part(c.payload->>'website','/',3)),'^www\\.','') AND attempt.state='complete')))))) OR ${discoveryResearchEligibleSql('c')}) AND NOT c.qualification_blocked AND NOT EXISTS(SELECT 1 FROM sourcing_retained_identity_decisions d WHERE d.workspace_id=c.workspace_id AND d.candidate_id=c.id) AND NOT (($3 OR c.status='needs_review') AND last.candidate_revision=c.revision AND COALESCE(last.admission_reason=ANY($4::text[]),false)) AND (last.requested_at IS NULL OR last.candidate_revision<>c.revision OR
+    WHERE c.workspace_id=$1 AND ((c.payload->>'kind' IS DISTINCT FROM 'discovery-v1' AND (c.status='kept' OR (c.status='needs_review' AND (c.payload->>'preparedBy'='Tavily Basic search · not verified' OR ($3 AND EXISTS(SELECT 1 FROM sourcing_apollo_candidate_origins origin JOIN sourcing_apollo_attempts attempt ON attempt.workspace_id=origin.workspace_id AND attempt.id=origin.attempt_id WHERE origin.workspace_id=c.workspace_id AND origin.candidate_id=c.id AND origin.candidate_revision<=c.revision AND origin.domain=regexp_replace(lower(split_part(c.payload->>'website','/',3)),'^www\\.','') AND attempt.state='complete')))))) OR (${discoveryResearchEligibleSql('c')} AND c.id IN (SELECT id FROM winners))) AND NOT c.qualification_blocked AND NOT EXISTS(SELECT 1 FROM sourcing_retained_identity_decisions d WHERE d.workspace_id=c.workspace_id AND d.candidate_id=c.id) AND NOT (($3 OR c.status='needs_review') AND last.candidate_revision=c.revision AND COALESCE(last.admission_reason=ANY($4::text[]),false)) AND (last.requested_at IS NULL OR last.candidate_revision<>c.revision OR
      last.prompt_version<>$5 OR last.policy_version<>$6 OR last.requested_at<$2::timestamptz-interval '7 days' OR (last.state='unavailable' AND last.requested_at<$2::timestamptz-interval '1 day'))
     ORDER BY EXISTS(SELECT 1 FROM sourcing_admissions a WHERE a.workspace_id=c.workspace_id AND a.candidate_id=c.id),c.status<>'kept',last.requested_at NULLS FIRST,c.created_at,c.id LIMIT 25`,[workspace.id,now,automatic,IDENTITY_REVIEW_REASONS,QUALIFICATION_PROMPT_VERSION,QUALIFICATION_POLICY_VERSION])).rows;
    for(const candidate of due){

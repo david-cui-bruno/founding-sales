@@ -5,6 +5,7 @@ import {seedTwoWorkspaces} from '@fss/domain/test/db/support/fixtures.ts';
 import {manualDiscoveryFixture} from '@fss/domain/test/sourcing/support/manualProspectFixture.ts';
 import {repositoryContext,workspaceScope} from '@fss/domain/db/workspaceScope.ts';
 import {withTransaction} from '@fss/domain/db/queryable.ts';
+import {saveCandidate} from '@fss/domain/sourcing/candidates.ts';
 import {saveDiscoveryCandidate,discoveryResearchSeed,discoveryResearchEligibleSql} from '@fss/domain/sourcing/discoveryIntake.ts';
 import {listManualProspects,recordManualProspectFeedback} from '@fss/domain/sourcing/manualProspects.ts';
 import {readPreparedProspect} from '@fss/domain/sourcing/preparedProspects.ts';
@@ -139,5 +140,37 @@ it('does not schedule an Overture place while research is held or disabled',asyn
   expect(await f.pass()).toMatchObject({inserted:0});
   expect((await f.session.query('SELECT qualification_wait_reason FROM sourcing_discovery_settings')).rows).toEqual([{qualification_wait_reason:'research_held'}]);
   expect((await f.session.query('SELECT 1 FROM sourcing_qualification_runs')).rows).toHaveLength(0);
+ }finally{await f.database.drop();}
+});
+
+const researched=async(f:Awaited<ReturnType<typeof fixture>>)=>(await f.session.query<{candidate_id:string}>('SELECT candidate_id FROM sourcing_qualification_runs')).rows.map(row=>row.candidate_id).sort();
+
+it('researches only the Tavily candidate when Overture places share its company host',async()=>{
+ const f=await fixture();try{
+  const first=await f.save(good('dup-a','http://dup.example.test'));
+  const second=await f.save({...good('dup-b','https://WWW.Dup.Example.Test/about'),locality:'Plano'});
+  const other=await f.save(good('solo'));
+  const tavily=await withTransaction(f.session,()=>saveCandidate(f.ctx('scheduler'),{firmName:'Dup Tavily',website:'https://dup.example.test/',locality:'Dallas',region:'TX',signal:'fit_only',evidence:'Unknown',sourceUrl:'https://dup.example.test/',observedOn:'2026-10-23',preparedBy:'Tavily Basic search · not verified'}));
+  if(!tavily.ok)throw new Error(tavily.reason);
+  expect(await f.pass()).toMatchObject({inserted:2});
+  expect(await researched(f)).toEqual([tavily.value.id,other].sort());
+  expect(await f.pass()).toMatchObject({inserted:0});
+  expect(await researched(f)).not.toContain(first);expect(await researched(f)).not.toContain(second);
+ }finally{await f.database.drop();}
+});
+
+it('researches one of two Overture places on one host, the earliest, and the next when the first is skipped',async()=>{
+ const f=await fixture();try{
+  const first=await f.save(good('twin-a','https://twin.example.test/'));
+  const second=await f.save({...good('twin-b','http://www.twin.example.test/contact'),locality:'Plano'});
+  expect(await f.pass()).toMatchObject({inserted:1});
+  expect(await researched(f)).toEqual([first]);
+  expect(await f.pass()).toMatchObject({inserted:0});
+  // A skipped place no longer stands for its company; a researched one keeps its place.
+  const third=await f.save(good('twin-c','https://other-twin.example.test/')),fourth=await f.save(good('twin-d','https://www.other-twin.example.test/'));
+  await f.session.query("INSERT INTO sourcing_manual_prospect_states(workspace_id,candidate_id,candidate_revision,state) VALUES($1,$2,1,'skipped')",[f.alpha.workspaceId,third]);
+  expect(await f.pass()).toMatchObject({inserted:1});
+  expect(await researched(f)).toEqual([first,fourth].sort());
+  expect(await researched(f)).not.toContain(second);
  }finally{await f.database.drop();}
 });

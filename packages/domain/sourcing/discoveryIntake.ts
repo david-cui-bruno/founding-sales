@@ -46,6 +46,16 @@ export const discoveryResearchEligibleSql=(c:string)=>`(${c}.payload->>'kind'='d
  AND ${c}.payload->'row'->>'region' IN (${US_BUSINESS_REGIONS.map(region=>`'${region}'`).join(',')})
  AND (${c}.payload->'row'->'source'->>'retrievedAt' IS NOT NULL OR ${c}.payload->'row'->'source'->>'release' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}')
  AND NOT EXISTS(SELECT 1 FROM sourcing_manual_prospect_states skipped WHERE skipped.workspace_id=${c}.workspace_id AND skipped.candidate_id=${c}.id AND skipped.state='skipped'))`;
+/** One company, one research: the candidate that stands for each company host in workspace $1 (companyHost: lowercase, no www.), so
+ * David is not given two briefs for one company. Order: a kept or Tavily candidate, then an Overture place that already has a run,
+ * then the earliest place that would otherwise be scheduled. A place that is not its host's winner is not due. */
+export const DISCOVERY_RESEARCH_WINNERS_CTE=`winners AS MATERIALIZED (SELECT DISTINCT ON (host) id FROM (
+ SELECT o.id,o.created_at,CASE WHEN o.payload->>'kind' IS DISTINCT FROM 'discovery-v1' THEN 0 WHEN EXISTS(SELECT 1 FROM sourcing_qualification_runs q WHERE q.workspace_id=o.workspace_id AND q.candidate_id=o.id) THEN 1 ELSE 2 END AS rank,
+  regexp_replace(regexp_replace(lower(substring(btrim(CASE WHEN o.payload->>'kind'='discovery-v1' THEN o.payload->'row'->>'website' ELSE o.payload->>'website' END) from '^[A-Za-z]+://([^/?#:@]+)')),'[.]$',''),'^www[.]','') AS host
+ FROM sourcing_candidates o WHERE o.workspace_id=$1 AND o.status<>'dismissed' AND (
+  (o.payload->>'kind' IS DISTINCT FROM 'discovery-v1' AND (o.status='kept' OR o.payload->>'preparedBy'='Tavily Basic search · not verified'))
+  OR (o.payload->>'kind'='discovery-v1' AND (EXISTS(SELECT 1 FROM sourcing_qualification_runs q WHERE q.workspace_id=o.workspace_id AND q.candidate_id=o.id) OR ${discoveryResearchEligibleSql('o')})))
+) hosts WHERE host IS NOT NULL ORDER BY host,rank,created_at,id)`;
 const originValue=(row:OriginRow):DiscoveryOrigin=>discoveryOriginSchema.parse({source:row.source,sourceMetadata:row.source_metadata,licenses:row.licenses,notices:row.notices});
 const rowIdentity=(row:Payload['row'])=>canonical({firmName:row.firmName,website:row.website,locality:row.locality,region:row.region,probableGroupKey:row.probableGroupKey});
 const originSelect=`SELECT candidate_id,source,source_metadata,licenses,notices FROM sourcing_candidate_discovery_origins WHERE workspace_id=$1 AND candidate_id=$2 ORDER BY provider,release,record_id`;
