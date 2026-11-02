@@ -10,20 +10,15 @@ const matchSchema=z.object({person:z.object({
  email:text(320).nullable().optional(),email_status:text(40).nullable().optional(),match_confidence:text(20).nullable().optional(),
 }).nullable().optional()});
 const CONFIDENCE=new Set(['high','medium','low','none']);
-/** Apollo's People Enrichment charge rule (docs.apollo.io/docs/api-pricing): one credit for demographics OR an email; no demographic credit when
- * `match_confidence` is `none`; a `low` match is charged only when it returns data we did not send. We send an id and a domain and ask for no phone,
- * waterfall or personal-email reveal, so the most one call costs is one credit. The charge follows the match, never the email: a high or medium
- * match without an email is still one credit. Conservative where the rule is not decidable: a missing or unrecognised confidence is charged, and
- * a `low` match is free only when it returned nothing beyond the id. */
-function enrichmentCredits(found:{first_name?:string|null|undefined;last_name?:string|null|undefined;title?:string|null|undefined;email?:string|null|undefined},confidence:string|undefined):number{
- if(confidence==='none')return 0;
- if(confidence==='low')return found.first_name||found.last_name||found.title||found.email?1:0;
- return 1;
-}
+/** Apollo's People Enrichment charge rule (docs.apollo.io/docs/api-pricing): one credit for demographics OR an email, and email credit usage does not
+ * depend on `match_confidence`. We send an id and a domain and ask for no phone, waterfall or personal-email reveal, so one call costs at most one credit.
+ * The simplest safe rule: any 2xx answer that contains a person object, at any confidence, costs one credit; only an explicit no-match (no person) costs
+ * nothing. Where a zero charge cannot be established the credit is kept. */
+const enrichmentCredits=():number=>1;
 const refusal=(status:number):'auth_failed'|'quota_exhausted'|'rate_limited'|null=>status===401||status===403?'auth_failed':status===402?'quota_exhausted':status===429?'rate_limited':null;
 
 /** ADR0036. Apollo people lookup: People API Search (0 credits, no emails) picks the best decision-maker title at the company's domain, then
- * ONE People Enrichment (`/people/match`, one credit for any matched person's demographics or email, none for no match, see `enrichmentCredits`) returns the name and
+ * ONE People Enrichment (`/people/match`, one credit for any answer that contains a person, none for no person, see `enrichmentCredits`) returns the name and
  * email. Fixed endpoints, query-string parameters as the docs show, header `x-api-key`; no retries, no waterfall, no phone or personal-email
  * reveal; response bodies, vendor errors and the key never leave this file. Whether the answer is acceptable is the domain's call. */
 export function apolloPeople(apiKey:string,options:{http?:ProviderHttp}={}):PeopleProvider{
@@ -59,7 +54,7 @@ export function apolloPeople(apiKey:string,options:{http?:ProviderHttp}={}):Peop
    const person:ProviderPerson={providerPersonId:found.id,firstName:found.first_name??'',lastName:found.last_name??'',title:found.title??'',email,
     emailStatus:email===null||/^email_not_unlocked@/u.test(email)||status==='unavailable'?'unavailable':status==='verified'?'verified':'unverified',
     matchConfidence:confidence&&CONFIDENCE.has(confidence)?confidence as ProviderPerson['matchConfidence']:null};
-   return {ok:true,person,creditsUsed:enrichmentCredits(found,confidence)};
+   return {ok:true,person,creditsUsed:enrichmentCredits()};
   }catch{return {ok:false,code:'unavailable',mayHaveCharged:true};}
  }};
 }

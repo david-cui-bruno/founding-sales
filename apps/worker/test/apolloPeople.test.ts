@@ -43,7 +43,7 @@ it('reports an unavailable person for a missing or locked email, and still charg
  expect(await ask(sequence(search({id:'p-2',title:'Owner'}),match({...found,email:null,email_status:null})))).toMatchObject({ok:true,creditsUsed:1,person:{email:null,emailStatus:'unavailable'}});
  expect(await ask(sequence(search({id:'p-2',title:'Owner'}),match({...found,email:'email_not_unlocked@cobalt.example',email_status:'verified'})))).toMatchObject({ok:true,creditsUsed:1,person:{emailStatus:'unavailable'}});
 });
-// Apollo's rule (docs.apollo.io/docs/api-pricing): one credit for demographics OR email; none when match_confidence is none; low only if it returns data we did not send.
+// Apollo's rule (docs.apollo.io/docs/api-pricing): email credit usage does not depend on match_confidence, so any answer containing a person costs one credit; only no person costs nothing.
 it.each([
  ['a high match with an email',found,1],
  ['a high match with demographics and no email',{...found,email:null,email_status:null},1],
@@ -52,8 +52,8 @@ it.each([
  ['a low match that returns an email',{...found,first_name:null,last_name:null,title:null,match_confidence:'low'},1],
  ['a match with no confidence field (undecidable, charged)',{...found,email:null,email_status:null,match_confidence:null},1],
  ['an unrecognised confidence (charged)',{...found,email:null,email_status:null,match_confidence:'certain'},1],
- ['a none match, even with fields present',{...found,email:null,email_status:null,match_confidence:'none'},0],
- ['a low match that returns nothing beyond the id',{id:'p-2',match_confidence:'low'},0],
+ ['a none-confidence person object, even with fields present (charged)',{...found,email:null,email_status:null,match_confidence:'none'},1],
+ ['a low match that returns nothing beyond the id (charged: a zero charge cannot be established)',{id:'p-2',match_confidence:'low'},1],
 ] as const)('charges %s by the match outcome, not the email: %i credit(s)',async(_label,person,credits)=>{
  expect(await ask(sequence(search({id:'p-2',title:'Owner'}),match(person)))).toMatchObject({ok:true,creditsUsed:credits});
 });
