@@ -27,6 +27,14 @@ it.each([
  ['a no-reply mailbox','Automated notices come from noreply@peak.example.test'],
  ['no literal address (a guess is never made)','Email the office, our usual first-initial last-name addresses work.'],
 ])('refuses %s',(_label,text)=>{expect(route([business,text])).toBeNull();});
+it('reads the whole mailbox token and never restarts inside it',()=>{
+ expect(route([business,"Owner: o'connor@peak.example.test."])).toBe("o'connor@peak.example.test");
+ expect(route([business,'Write to <Info@Peak.example.test>, or (mailto:office@peak.example.test).'])).toBe('info@peak.example.test');
+ expect(route([business,'Email "sales@peak.example.test"'])).toBe('sales@peak.example.test');
+ expect(route([business,'Email a(b@peak.example.test'])).toBeNull();
+ expect(route([business,'Email a"b@peak.example.test or a..b@peak.example.test or ab@@peak.example.test'])).toBeNull();
+ expect(route([business,'Email x"info@peak.example.test'])).toBeNull();
+});
 it('prefers a role mailbox in a fixed order, then the first alphabetically',()=>{
  expect(route([business,'Sales: sales@peak.example.test | Office: office@peak.example.test | General: info@peak.example.test'])).toBe('info@peak.example.test');
  expect(route([business,'Reach zed@peak.example.test or amy@peak.example.test'])).toBe('amy@peak.example.test');

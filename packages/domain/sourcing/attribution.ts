@@ -10,6 +10,8 @@ export type InteractionKind='call'|'email'|'meeting'|'deal';
 interface AttributionInput {
  firmId:string;candidateId:string|null;qualificationRunId:string|null;queryId:string|null;
  hypothesis:string;policyVersion:string;acquisition:Acquisition;
+ /** ADR0035: an own-site prepared company is valid by its prepared brief whatever the run's reason; admission sets this, never a caller. */
+ preparedSource?:boolean;
 }
 type AttributionRow = {
  id:string;firm_id:string;candidate_id:string|null;run_id:string|null;query_id:string|null;
@@ -27,9 +29,9 @@ export async function attachSourcingAttribution(ctx:RepositoryContext,input:Attr
  const w=ctx.scope.workspaceId;
  if(input.candidateId!==null||input.qualificationRunId!==null){
   const linked=await ctx.db.query(`SELECT r.id FROM sourcing_qualification_runs r
-   WHERE r.workspace_id=$1 AND r.id=$2 AND r.candidate_id=$3 AND r.reason IS NULL AND (
-   EXISTS(SELECT 1 FROM sourcing_admissions a WHERE a.workspace_id=r.workspace_id AND a.candidate_id=r.candidate_id AND a.firm_id=$4 AND NOT a.association_review_required)
-   OR EXISTS(SELECT 1 FROM outreach_email_sources e WHERE e.workspace_id=r.workspace_id AND e.candidate_id=r.candidate_id AND e.run_id=r.id AND e.firm_id=$4 AND NOT e.association_review_required))`,[w,input.qualificationRunId,input.candidateId,input.firmId]);
+   WHERE r.workspace_id=$1 AND r.id=$2 AND r.candidate_id=$3 AND (
+   (r.reason IS NULL AND EXISTS(SELECT 1 FROM sourcing_admissions a WHERE a.workspace_id=r.workspace_id AND a.candidate_id=r.candidate_id AND a.firm_id=$4 AND NOT a.association_review_required))
+   OR EXISTS(SELECT 1 FROM outreach_email_sources e WHERE e.workspace_id=r.workspace_id AND e.candidate_id=r.candidate_id AND e.run_id=r.id AND e.firm_id=$4 AND NOT e.association_review_required AND (r.reason IS NULL OR ($5::boolean AND e.campaign_id IS NOT NULL AND NOT e.reviewed))))`,[w,input.qualificationRunId,input.candidateId,input.firmId,input.preparedSource===true]);
   if(!linked.rows.length)return deny('source_mismatch');
  }else if(input.acquisition==='cold_sourced')return deny('source_required');
  const key=createHash('sha256').update(JSON.stringify([input.candidateId,input.qualificationRunId,input.queryId,input.hypothesis,input.policyVersion,input.acquisition])).digest('hex');
@@ -94,7 +96,7 @@ export async function readFirmSourcing(ctx:RepositoryContext,firmId:string){
  const firm=await readFirm(ctx,firmId);if(!firm||firm.status==='merged'||decideFirmRead(ctx,firm)!=='assigned_or_admin')return null;
  const w=ctx.scope.workspaceId;
  const sources=(await ctx.db.query<AttributionRow>(`SELECT a.*,CASE WHEN a.acquisition<>'cold_sourced' THEN true ELSE
-   a.candidate_id IS NOT NULL AND a.run_id IS NOT NULL AND r.reason IS NULL AND NOT COALESCE(c.qualification_blocked,true) AND (NOT COALESCE(d.association_review_required,true) OR NOT COALESCE(e.association_review_required,true)) END AS source_available
+   a.candidate_id IS NOT NULL AND a.run_id IS NOT NULL AND (r.reason IS NULL OR EXISTS(SELECT 1 FROM outreach_email_campaign_admissions x WHERE x.workspace_id=a.workspace_id AND x.firm_id=a.firm_id AND x.candidate_id=a.candidate_id AND x.qualification_run_id=a.run_id AND x.source_kind='prepared_capture')) AND NOT COALESCE(c.qualification_blocked,true) AND (NOT COALESCE(d.association_review_required,true) OR NOT COALESCE(e.association_review_required,true)) END AS source_available
    FROM sourcing_attributions a LEFT JOIN sourcing_qualification_runs r ON r.workspace_id=a.workspace_id AND r.id=a.run_id
    LEFT JOIN sourcing_candidates c ON c.workspace_id=a.workspace_id AND c.id=a.candidate_id
    LEFT JOIN sourcing_admissions d ON d.workspace_id=a.workspace_id AND d.candidate_id=a.candidate_id AND d.firm_id=a.firm_id

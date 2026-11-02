@@ -5,6 +5,10 @@ it.each(['approve', 'revoke'])('maps only finite %s refusal content without losi
   const body = { status: 'refused', replayed: false, reason: 'already_configured' };
   expect(campaignOpeningBrowserResult(`/outreach/email-campaigns/opening/${action}`, 409, body)).toEqual({ status: 200, body });
 });
+it('keeps the prepared-admission refusal code, so the console shows why approval is unavailable', () => {
+  const body = { status: 'refused', replayed: false, reason: 'prepared_admissions_present' };
+  expect(campaignOpeningBrowserResult(path, 409, body)).toEqual({ status: 200, body });
+});
 it.each([
   [path, 401, { status: 'refused', replayed: false, reason: 'campaign_unavailable' }],
   [path, 409, { status: 'refused', replayed: false, reason: 'command_id_reused' }],

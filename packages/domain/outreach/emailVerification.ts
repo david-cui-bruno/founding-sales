@@ -33,6 +33,10 @@ export async function latestEmailVerification(ctx:RepositoryContext,address:stri
  const row=(await ctx.db.query<{result:EmailVerificationResult;outcome:EmailVerificationOutcome;checked_at:Date}>('SELECT result,outcome,checked_at FROM outreach_email_verifications WHERE workspace_id=$1 AND address_key=$2 ORDER BY checked_at DESC,id DESC LIMIT 1',[ctx.scope.workspaceId,emailVerificationKey(address)])).rows[0];
  return row?{result:row.result,outcome:row.outcome,checkedAt:row.checked_at}:null;
 }
+/** Address keys whose latest answer is invalid and still inside its thirty-day window, by database time: selection excludes them up front. */
+export async function droppedEmailAddressKeys(ctx:RepositoryContext):Promise<Set<string>>{
+ return new Set((await ctx.db.query<{address_key:string}>(`SELECT address_key FROM (SELECT DISTINCT ON (address_key) address_key,outcome,checked_at FROM outreach_email_verifications WHERE workspace_id=$1 ORDER BY address_key,checked_at DESC,id DESC) l WHERE outcome='drop' AND checked_at>clock_timestamp()-make_interval(days=>$2)`,[ctx.scope.workspaceId,EMAIL_VERIFICATION_RECHECK_DAYS])).rows.map(row=>row.address_key));
+}
 /** Valid and recent by database time: the only answer admission accepts. */
 export async function currentValidEmailVerification(ctx:RepositoryContext,address:string):Promise<boolean>{
  return (await ctx.db.query(`SELECT 1 FROM outreach_email_verifications WHERE workspace_id=$1 AND address_key=$2 AND outcome='ok' AND checked_at>clock_timestamp()-make_interval(days=>$3) LIMIT 1`,[ctx.scope.workspaceId,emailVerificationKey(address),EMAIL_VERIFICATION_VALID_DAYS])).rows.length>0;

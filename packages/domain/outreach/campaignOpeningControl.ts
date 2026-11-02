@@ -5,7 +5,7 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import { recordCrmAuditEvent } from '../crm/audit.ts';
 import { campaignDatabaseNow } from './emailCampaignAuthority.ts';
-import { openingAdmin, openingBaseline, openingPolicyRow, ownedOpeningCampaign, type OpeningAuthority } from './campaignOpeningControlRead.ts';
+import { openingAdmin, openingBaseline, openingPolicyRow, ownedOpeningCampaign, preparedAdmissionsExist, type OpeningAuthority } from './campaignOpeningControlRead.ts';
 export { readCampaignOpeningControl } from './campaignOpeningControlRead.ts';
 export type OpeningControlResult = { ok: true; value: CampaignOpeningCommandResult } | { ok: false; reason: string };
 export class CampaignOpeningControlChanged extends Error {
@@ -66,6 +66,7 @@ export async function approveCampaignOpening(ctx: RepositoryContext, raw: Campai
   if (!campaign) return { ok: false, reason: 'campaign_unavailable' };
   if (campaign.revision !== input.expectedCampaignRevision) return { ok: false, reason: 'stale_campaign' };
   if (await openingPolicyRow(ctx, campaign.id)) return { ok: false, reason: 'already_configured' };
+  if (await preparedAdmissionsExist(ctx, campaign.id)) return { ok: false, reason: 'prepared_admissions_present' };
   const baseline = await openingBaseline(ctx, campaign.sequence_version_id, true);
   if (!baseline || baseline.templateVersionId !== input.templateVersionId || baseline.templateContentHash !== input.templateContentHash) return { ok: false, reason: 'baseline_unavailable' };
   return atomicOpeningWrite(ctx, async () => {

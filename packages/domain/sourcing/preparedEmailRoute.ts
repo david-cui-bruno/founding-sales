@@ -2,10 +2,18 @@ import type {ManualPhoneSnapshot} from './manualProspectPhone.ts';
 import {admitPreparedPages} from './preparedPageAdmission.ts';
 import {PREPARED_PHONE_HORIZON_MS} from './preparedPhoneSource.ts';
 import {CONSUMER_EMAIL_DOMAINS} from '../outreach/consumerEmailDomains.ts';
+import {parseEmailAddress} from '../crm/routeValidation.ts';
 
 /** One exact address a company published on its own admitted pages (ADR0035). Evidence, never contact permission. */
 export interface PreparedEmailRoute {address:string;observationId:string;blockId:string;url:string;/** ms epoch: earliest page/capture/source deadline, at most seven days after retrieval. */expiresAt:number}
-const ADDRESS=/\b[A-Z0-9._%+-]+@[A-Z0-9](?:[A-Z0-9-]*[A-Z0-9])?(?:\.[A-Z0-9](?:[A-Z0-9-]*[A-Z0-9])?)*\.[A-Z]{2,}\b/giu;
+/** A mailbox is a whole whitespace-delimited token: only wrapping punctuation is trimmed from its ends (a quote pair, brackets, sentence
+ * punctuation, `mailto:`), and the token must be a complete address under the reviewed parser. A token the parser refuses is refused
+ * whole; the scan never restarts inside it, so `a(b@host.com` never yields `b@host.com`. */
+const mailboxes=(text:string):string[]=>text.split(/\s+/u).flatMap(raw=>{
+ if(!raw.includes('@'))return [];
+ const token=raw.replace(/^'(.*)'[.,;:!?)]*$/u,'$1').replace(/^[<>()[\]",.;:!?]+|[<>()[\]",.;:!?']+$/gu,'').replace(/^mailto:/iu,''),parsed=parseEmailAddress(token);
+ return parsed?[`${parsed.localPart}@${parsed.domain}`.toLowerCase()]:[];
+});
 /** Wording that makes an address someone else's, an example or a suggestion, as supportedBusinessEmail refuses it. */
 const NOT_THE_COMPANY=/\b(?:suggested|guess|example address|referral|vendor|web designer|website by|designed by|powered by|on behalf of|try emailing|testimonial)\b/iu;
 const NOT_FOR_SALES=/^(?:no-?reply|do-?not-?reply|donotreply|mailer-daemon|webmaster|postmaster|abuse|privacy|legal|careers?|jobs?|hr|press|media|unsubscribe|billing|accounting|payroll|ap|ar)$/u;
@@ -34,8 +42,8 @@ export function preparedEmailRoute(snapshot:ManualPhoneSnapshot,now:number):Prep
   const pageHost=hostOf(source.url);
   for(const block of source.blocks){
    if(block.text.length>2000||NOT_THE_COMPANY.test(block.text))continue;
-   for(const match of block.text.matchAll(ADDRESS)){
-    const address=match[0].toLowerCase(),[local,domain]=address.split('@');
+   for(const address of mailboxes(block.text)){
+    const [local,domain]=address.split('@');
     if(!local||!domain||CONSUMER_EMAIL_DOMAINS.has(domain)||NOT_FOR_SALES.test(local)||domain!==companyHost&&domain!==pageHost)continue;
     if(!found.has(address))found.set(address,{address,observationId:source.id,blockId:block.id,url:source.url,expiresAt});
    }

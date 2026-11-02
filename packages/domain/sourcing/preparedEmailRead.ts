@@ -38,7 +38,7 @@ export async function readPreparedEmail(ctx:RepositoryContext,input:{candidateId
 }
 /** Advisory, nonlocking selection in the prepared list's priority order, one company per host. Admission rereads each choice
  * under locks with `readPreparedEmail`; nothing here grants anything. */
-export async function listPreparedEmailCandidates(ctx:RepositoryContext,input:{limit:number;regions:readonly string[];skip:ReadonlySet<string>}):Promise<PreparedEmailRead[]>{
+export async function listPreparedEmailCandidates(ctx:RepositoryContext,input:{limit:number;regions:readonly string[];skip:ReadonlySet<string>;/** Applied before the limit and the one-per-host rule, so an excluded company takes neither. */accept?:(read:PreparedEmailRead)=>boolean}):Promise<PreparedEmailRead[]>{
  const found:PreparedEmailRead[]=[],hosts=new Set<string>();
  for(let offset=0;offset<8*50&&found.length<input.limit;offset+=50){
   const order=await preparedPriorityOrder(ctx,offset),selected=order.rows.slice(0,50).filter(entry=>!input.skip.has(entry.id));
@@ -48,7 +48,7 @@ export async function listPreparedEmailCandidates(ctx:RepositoryContext,input:{l
    const snapshots=rows.length?await withPreparedPhoneSnapshots(ctx,rows,await manualPhoneSnapshotsUnlocked(ctx,rows),{principal:true,lockless:true}):[],now=await clock(ctx);
    for(const row of rows){
     const read=emailRead(row,snapshots.find(snapshot=>snapshot.candidate_id===row.id),now);
-    if(read&&!hosts.has(read.host)&&input.regions.includes(read.region)&&found.length<input.limit){hosts.add(read.host);found.push(read);}
+    if(read&&(input.accept?.(read)??true)&&!hosts.has(read.host)&&input.regions.includes(read.region)&&found.length<input.limit){hosts.add(read.host);found.push(read);}
    }
   }
   if(order.rows.length<=50)break;

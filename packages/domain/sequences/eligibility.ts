@@ -227,6 +227,8 @@ const SIGNAL_MANUAL_MODE_ORIGINS: ReadonlySet<string> = new Set([
  * run beside it.
  */
 export function controlModeSource(): StepEligibilitySource {
+  // A research source needs a clean qualification run (`reason IS NULL`). An own-site prepared company (ADR0035) is valid by its
+  // prepared brief whatever the run's reason, and its admission row names this exact enrollment, plan, candidate revision and run.
   return {
     name: 'control-mode',
     evaluate: async (context, input) => {
@@ -234,7 +236,8 @@ export function controlModeSource(): StepEligibilitySource {
         const plan=(await context.db.query<{state:string;origin_kind:string}>(`SELECT p.state,e.origin_kind FROM sequence_enrollments e
           JOIN outreach_plans p ON p.workspace_id=e.workspace_id AND p.id=e.outreach_plan_id AND p.firm_id=e.firm_id AND p.contact_id=e.contact_id AND p.owner_user_id=e.assigned_user_id
           JOIN sourcing_candidates c ON c.workspace_id=p.workspace_id AND c.id=p.candidate_id AND NOT c.qualification_blocked AND c.status<>'dismissed'
-          JOIN sourcing_qualification_runs r ON r.workspace_id=p.workspace_id AND r.id=p.qualification_run_id AND r.candidate_id=c.id AND r.candidate_revision=c.revision AND r.reason IS NULL
+          JOIN sourcing_qualification_runs r ON r.workspace_id=p.workspace_id AND r.id=p.qualification_run_id AND r.candidate_id=c.id AND r.candidate_revision=c.revision
+          AND (r.reason IS NULL OR EXISTS(SELECT 1 FROM outreach_email_campaign_admissions a WHERE a.workspace_id=p.workspace_id AND a.enrollment_id=e.id AND a.plan_id=p.id AND a.candidate_id=c.id AND a.qualification_run_id=r.id AND a.candidate_revision=c.revision AND a.source_kind='prepared_capture'))
           JOIN outreach_email_sources s ON s.workspace_id=p.workspace_id AND s.candidate_id=c.id AND s.run_id=r.id AND s.firm_id=p.firm_id AND s.contact_id=p.contact_id AND NOT s.association_review_required
           JOIN firms f ON f.workspace_id=p.workspace_id AND f.id=p.firm_id AND f.status='active' AND f.assigned_user_id=p.owner_user_id
           JOIN mailboxes m ON m.workspace_id=p.workspace_id AND m.id=p.mailbox_id AND m.owner_user_id=p.owner_user_id AND m.status='connected'

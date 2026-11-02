@@ -21,6 +21,10 @@ export async function openingPolicyRow(ctx: RepositoryContext, campaignId: strin
   return (await ctx.db.query<OpeningPolicyRow>(`SELECT id,policy,revoked_at FROM outreach_campaign_opening_policies
     WHERE workspace_id=$1 AND campaign_id=$2`, [ctx.scope.workspaceId, campaignId])).rows[0] ?? null;
 }
+/** ADR0035: a prepared own-site admission has no opening source, so its first email would be held; opening approval and prepared admission exclude each other. */
+export async function preparedAdmissionsExist(ctx: RepositoryContext, campaignId: string): Promise<boolean> {
+  return (await ctx.db.query(`SELECT 1 FROM outreach_email_campaign_admissions WHERE workspace_id=$1 AND campaign_id=$2 AND source_kind='prepared_capture' LIMIT 1`, [ctx.scope.workspaceId, campaignId])).rows.length > 0;
+}
 export async function openingBaseline(ctx: RepositoryContext, sequenceVersionId: string, lock = false): Promise<CampaignOpeningControl['baseline']> {
   const row = (await ctx.db.query<{ sequence_version_id: string; template_version_id: string; version: number; content_hash: string; subject: string; body: string; approved_at: Date }>(`SELECT s.sequence_version_id,s.template_version_id,t.version,t.content_hash,t.subject,t.body,t.approved_at
     FROM sequence_versions v JOIN sequence_steps s ON s.workspace_id=v.workspace_id AND s.sequence_version_id=v.id
@@ -50,6 +54,6 @@ export async function readCampaignOpeningControl(ctx: RepositoryContext, input: 
         || parsed.data.campaignRevision !== campaign.revision || parsed.data.sequenceVersionId !== baseline.sequenceVersionId
         || parsed.data.templateVersionId !== baseline.templateVersionId || parsed.data.templateContentHash !== baseline.templateContentHash ? 'held' as const : 'active' as const } : null;
   return campaignOpeningControlSchema.parse({ campaignId: campaign.id, campaignRevision: campaign.revision, campaignExpiresAt: campaign.expires_at.toISOString(),
-    baseline, policy, approvalState: stored ? 'already_configured' : baseline && !campaign.revoked_at && campaign.expires_at.getTime() > now ? 'available' : 'unavailable',
+    baseline, policy, approvalState: stored ? 'already_configured' : baseline && !campaign.revoked_at && !await preparedAdmissionsExist(ctx, campaign.id) && campaign.expires_at.getTime() > now ? 'available' : 'unavailable',
     selectorReadiness: 'not_established', sendingAuthority: 'unchanged' });
 }

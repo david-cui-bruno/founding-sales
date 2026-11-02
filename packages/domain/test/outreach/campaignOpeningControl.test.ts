@@ -22,6 +22,12 @@ it('reads full exact baseline, approves immutable provenance, revokes without au
   expect(writes.every(x => /^(INSERT INTO (outreach_campaign_opening_policies|audit_events)|UPDATE outreach_campaign_opening_policies)/u.test(x.sql))).toBe(true);
   expect(s.state.audits).toHaveLength(2); expect(JSON.stringify(s.state.audits)).not.toContain('Approved {{firm_name}}');
 });
+it('refuses approval, and offers none, once a prepared own-site admission exists (it has no opening source)', async () => {
+  const s = campaignOpeningControlFixture(); s.state.prepared = true;
+  expect(await approveCampaignOpening(s.context, controlInput, authority)).toEqual({ ok: false, reason: 'prepared_admissions_present' });
+  expect(await readCampaignOpeningControl(s.context, { campaignId: controlId }, authority)).toMatchObject({ approvalState: 'unavailable', policy: null });
+  expect(s.state.policy).toBeNull();
+});
 it.each(['expired', 'campaign_revoked', 'template_lost'] as const)('revokes exact policy after %s without replacing tombstone or checking unavailable baseline', async mode => {
   const s = campaignOpeningControlFixture(); await approveCampaignOpening(s.context, controlInput, authority);
   if (mode === 'expired') s.state.now = '2026-11-01T01:30:00.000Z';

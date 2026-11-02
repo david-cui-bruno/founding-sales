@@ -12,7 +12,7 @@ export function campaignOpeningControlFixture() {
   const campaign: EmailCampaignRow = { id: controlId, owner_user_id: controlId, mailbox_id: controlId, sequence_version_id: controlId, authorization_revision: 1,
     regions: ['TX'], max_enrollments: 25, daily_admission_limit: 5, approved_at: new Date(controlNow), expires_at: new Date('2026-10-28T01:30:00.000Z'), revision: 1, revoked_at: null };
   const baseline = { sequence_version_id: controlId, template_version_id: controlId, version: 1, content_hash: 'a'.repeat(64), subject: 'Exact subject', body: 'Exact baseline\n\nSigned off', approved_at: new Date(controlNow) };
-  const state = { campaign, baseline: baseline as typeof baseline | null, policy: null as OpeningPolicyRow | null, active: true, now: controlNow,
+  const state = { campaign, baseline: baseline as typeof baseline | null, policy: null as OpeningPolicyRow | null, active: true, prepared: false, now: controlNow,
     receipts: new Map<string, Receipt>(), audits: [] as unknown[][] };
   type Snapshot = Pick<typeof state, 'policy' | 'audits' | 'receipts'>;
   const snapshots = new Map<string, Snapshot>();
@@ -31,6 +31,7 @@ export function campaignOpeningControlFixture() {
     else if (sql.includes('FROM workspace_memberships')) rows = state.active ? [{}] : [];
     else if (sql.includes('FROM outreach_email_campaigns c')) rows = state.active && values[0] === controlId && values[1] === controlId && values[2] === state.campaign.owner_user_id ? [state.campaign] : [];
     else if (sql.includes('FROM sequence_versions v JOIN sequence_steps')) rows = state.baseline ? [state.baseline] : [];
+    else if (sql.includes('FROM outreach_email_campaign_admissions')) rows = state.prepared ? [{}] : [];
     else if (sql.startsWith('SELECT id,policy,revoked_at')) rows = state.policy ? [state.policy] : [];
     else if (sql === 'SELECT clock_timestamp() AS now') rows = [{ now: new Date(state.now) }];
     else if (sql.startsWith('INSERT INTO outreach_campaign_opening_policies')) {
