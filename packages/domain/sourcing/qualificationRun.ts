@@ -34,7 +34,7 @@ async function allowed(ctx:RepositoryContext,runId:string):Promise<Run|null>{
  if(row){const prepared=preparedCandidatePayload(row.payload);if(!prepared)return null;row.payload=prepared;}
  if(!row||!['pending','running'].includes(row.state)||row.candidate_status==='dismissed'||row.current_revision!==row.candidate_revision||row.deadline_at.getTime()<=Date.parse(await databaseNow(ctx)))return null;
  if(!(await readResearchSettings(ctx)).enabled||(await listApplicableHolds(ctx,{actionKind:'research',channel:'research'})).length)return null;
- const producer=row['producer_version']===undefined?LEGACY_QUALIFICATION_PRODUCER:row['producer_version'];
+ const producer=row['producer_version'];
  if(producer!==LEGACY_QUALIFICATION_PRODUCER&&producer!==PREPARED_IDENTITY_PRODUCER)return null;
  if(producer===PREPARED_IDENTITY_PRODUCER&&!await preparedIdentityProducerAuthority(ctx,row.candidate_id,row.candidate_revision,row.payload))return null;
  if(isPreparedCapturePolicy(row['capture_policy_version'])&&!await preparedCaptureSourcesAvailable(ctx,[row.payload.sourceUrl]))return null;

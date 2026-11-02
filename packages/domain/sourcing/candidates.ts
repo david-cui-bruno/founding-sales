@@ -12,7 +12,7 @@ import { recordCrmAuditEvent } from '../crm/audit.ts';
 import { databaseNow } from '../policy/clock.ts';
 import {verifiedFirmOwner,verifiedWebsiteKey,IDENTITY_REVIEW_REASONS} from './verifiedFirmPolicy.ts';
 import {discoveryQuotaRemaining} from './discoveryQuota.ts';
-import {isCurrentPreparedCandidatePayload} from './discoveryIntake.ts';
+import {isCurrentPreparedCandidatePayload} from './candidatePayload.ts';
 import {lockLivePreparationCleanup} from '../calling/preparationLifecycle.ts';
 
 type Result<T> = {ok:true;value:T} | {ok:false;reason:string};

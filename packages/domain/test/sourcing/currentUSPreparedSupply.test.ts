@@ -3,7 +3,7 @@ import {expect,it} from 'vitest';
 import {candidateInputSchema,currentPreparedCandidateInputSchema,legacyCandidateInputSchema,targetingQuerySchema,type QualificationFact,type SourceObservation} from '@fss/contracts';
 import {US_BUSINESS_REGIONS,US_BUSINESS_STATE_NAMES} from '../../../contracts/src/usBusinessGeography.ts';
 import {isCurrentUSBusinessGeography,currentNativeFirmPolicy,supportsCurrentUSServiceLocation} from '../../sourcing/currentUSBusinessGeography.ts';
-import {isCurrentPreparedCandidatePayload,isLegacyCandidatePayload} from '../../sourcing/discoveryIntake.ts';
+import {isCurrentPreparedCandidatePayload,isLegacyCandidatePayload} from '../../sourcing/candidatePayload.ts';
 import {nativeFirmCitations,nativeFirmEvidence,type NativeEvidenceInput} from '../../sourcing/nativeFirmEligibility.ts';
 import {verifiedFirmEvidence} from '../../sourcing/verifiedFirmPolicy.ts';
 import {isTargetGeography} from '../../sourcing/qualificationPolicy.ts';
