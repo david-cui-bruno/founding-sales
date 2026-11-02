@@ -1,4 +1,5 @@
 import type {RepositoryContext} from '../db/workspaceScope.ts';
+import {withTransaction} from '../db/queryable.ts';
 import {readPeopleEnrichmentSetting} from '../settings/peopleEnrichment.ts';
 import {listPreparedEmailCandidates} from '../sourcing/preparedEmailRead.ts';
 import type {EmailVerifier} from './emailVerification.ts';
@@ -40,17 +41,18 @@ async function paidCheck(ctx:RepositoryContext,verifier:AddressVerifier,company:
  return {kind:'checked',id:reservation.id,verdict:check.verdict,credits:verdictCredits(check.verdict)};
 }
 
-/** A PUBLISHED address's one paid check before admission (ADR0038): a custody row of its own (provider `millionverifier`, one per candidate), counted against the daily cap like a guess, so the company is never paid for twice. The verdict is returned for the admission pass to decide on (`invalid` and `disposable` refuse; the rest admit). Null: nothing was checked (the switch is off, the cap or an earlier check holds the company, or the verifier failed): the free DNS check decides alone. */
-export async function checkPublishedAddress(ctx:RepositoryContext,verifier:AddressVerifier,company:PeopleCompany,address:string):Promise<AddressVerdict|null>{
+/** A PUBLISHED address's one paid check before admission (ADR0038): a custody row of its own (provider `millionverifier`, one per candidate REVISION, never renewed), counted against the daily cap like a guess, so the company is never paid for twice. The verdict is returned for the admission pass to decide on (`invalid` and `disposable` refuse; the rest admit); the settled `verdict_invalid`/`verdict_disposable` row is itself a refusal that selection and the admission proof honour (`addressRefusedByCheck`), so a crash before the drop record is written admits nothing. Null: nothing was checked (the switch is off, the cap or an earlier check holds the company, or the verifier failed): the free DNS check decides alone. */
+export async function checkPublishedAddress(ctx:RepositoryContext,verifier:AddressVerifier,company:PeopleCompany,address:string,negative:(verdict:'invalid'|'disposable')=>Promise<void>):Promise<AddressVerdict|null>{
  const paid=await paidCheck(ctx,verifier,company,address);
  if(paid.kind!=='checked')return null;
- await settlePeopleLookup(ctx,paid.id,{state:'none',reason:REFUSALS[paid.verdict],credits:paid.credits});
+ // A negative answer and its address-bound refusal record commit together (and the settled row is a refusal on its own, `addressRefusedByCheck`): a completed negative check is never an unavailable-verifier fallback.
+ await withTransaction(ctx.db,async()=>{await settlePeopleLookup(ctx,paid.id,{state:'none',reason:REFUSALS[paid.verdict],credits:paid.credits});if(paid.verdict==='invalid'||paid.verdict==='disposable')await negative(paid.verdict);});
  return paid.verdict;
 }
 
 export interface AddressGuessPass {looked:number;verified:number;refused:number;credits:number;/** The verifier failure code that halted the pass, if any. */halted:string|null;stopped:'disabled'|'cap'|null}
 /** ADR0038. For each prepared company (the prepared list's order, one per host) whose current named person came from its own pages WITHOUT an address: guess `first@host` once, check the host has a mail exchanger (free), reserve a credit, ask the verifier once and record the answer. Only `ok` makes an address: a `verified_guess` copy of the person (the page the NAME was read from stays cited) for the cited page's own deadline. catch_all, unknown, invalid and disposable leave the person
- * without an address and the company in custody, so it is never guessed again until the custody row's thirty days pass or its candidate revision changes; an uncharged refusal is tried again after an hour. It stops at the daily credit cap and on the first verifier failure, and starts nothing after a minute. */
+ * without an address and the company in custody, so it is never guessed again for that candidate revision (a new revision is a new, separately counted row); an uncharged refusal is tried again after an hour. It stops at the daily credit cap and on the first verifier failure, and starts nothing after a minute. */
 export async function runAddressGuessing(ctx:RepositoryContext,deps:{verifier:AddressVerifier;mailDomain:EmailVerifier}):Promise<AddressGuessPass>{
  const pass:AddressGuessPass={looked:0,verified:0,refused:0,credits:0,halted:null,stopped:null},startedAt=Date.now();
  const setting=await readPeopleEnrichmentSetting(ctx);

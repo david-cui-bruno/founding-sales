@@ -90,13 +90,13 @@ export async function runPreparedEmailAdmission(ctx:RepositoryContext,deps:{veri
     let recorded=await latestEmailVerification(ctx,person.email);
     if(recorded&&!emailVerificationDecides(recorded,now))recorded=null;
     if(!recorded){
-     let result=await deps.verifier.verify(person.email),provider:EmailVerificationProvider='dns_mx';
+     let result=await deps.verifier.verify(person.email),provider:EmailVerificationProvider='dns_mx',wrote=false;const address=person.email;
      if(!result)continue;
      if(result==='valid'&&deps.paid&&person.emailStatus==='published'&&paidCheckTimeAvailable(startedAt)){
-      const verdict=await checkPublishedAddress(ctx,deps.paid,company,person.email);
-      if(verdict!==null){provider='millionverifier';if(verdict==='invalid'||verdict==='disposable')result='invalid';}
+      const verdict=await checkPublishedAddress(ctx,deps.paid,company,address,async()=>{await recordEmailVerification(ctx,address,'invalid','millionverifier');wrote=true;});
+      if(verdict!==null){provider='millionverifier';if(wrote)result='invalid';}
      }
-     await recordEmailVerification(ctx,person.email,result,provider);pass.checked++;
+     if(!wrote)await recordEmailVerification(ctx,address,result,provider);pass.checked++;
      recorded={result,outcome:emailVerificationOutcome(result),checkedAt:new Date(now)};
     }
     if(recorded.outcome!=='ok')continue;

@@ -9,6 +9,7 @@ import {preparedCandidatePayload} from '../sourcing/discoveryIntake.ts';
 import {existingEmailRoute} from './existingEmail.ts';
 import {campaignCandidateProvenance} from './emailCampaignAuthority.ts';
 import type {PreparedEmailTarget} from './emailCampaignSource.ts';
+import {addressRefusedByCheck} from './peopleContacts.ts';
 import type {EmailAssessment} from './selection.ts';
 
 /** Firms (any status) already carrying the company's resolved business name (the name admission gives the Firm) or website host, other than the Firm admission created from this candidate. Names compare by `businessIdentityKey` on both sides, so an existing "Acme Realty LLC" is the company "Acme Realty"; SQL narrows by name prefix, the key decides. */
@@ -24,6 +25,7 @@ const admittedFirm=async(ctx:RepositoryContext,candidateId:string,runId:string,c
  * person's address once there is one (enrichment runs before any, so it is then not checked). Advisory and unlocked; admission still decides. */
 export async function preparedAdmissionRefusedInAdvance(ctx:RepositoryContext,campaignId:string|null,read:{candidateId:string;runId:string;region:string;locality:string;businessName:string},email?:string):Promise<boolean>{
  if(preparedEmailTimeZone(read.region,read.locality)===null)return true;
+ if(email&&await addressRefusedByCheck(ctx,read.candidateId))return true;
  const w=ctx.scope.workspaceId;
  const candidate=(await ctx.db.query<{payload:unknown}>('SELECT payload FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2',[w,read.candidateId])).rows[0];
  const payload=candidate&&preparedCandidatePayload(candidate.payload);if(!payload)return false;
@@ -50,6 +52,7 @@ export async function assessPreparedEmail(ctx:RepositoryContext,input:{candidate
  const payload=preparedCandidatePayload(candidate.payload);if(!payload)return {ok:false,reason:'candidate_changed'};
  if(!proof.businessName)return {ok:false,reason:'business_name_unavailable'};
  const route=proof.route;
+ if(await addressRefusedByCheck(ctx,input.candidateId))return {ok:false,reason:'address_check_refused'};
  const admittedFirmId=await admittedFirm(ctx,input.candidateId,input.qualificationRunId,input.campaignId);
  if((await conflictingFirmIds(ctx,{businessName:proof.businessName,website:payload.website},admittedFirmId)).length)return {ok:false,reason:'firm_exists'};
  if(await firstSuppressed(ctx,[{scope:'handle',canonicalKey:route.address},...(admittedFirmId?[{scope:'firm' as const,canonicalKey:admittedFirmId}]:[])],'email'))return {ok:false,reason:'email_or_firm_stopped'};

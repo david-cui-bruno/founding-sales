@@ -52,3 +52,10 @@ it('keeps the grants and the lineage trigger of 0160: the application adds, read
  expect(grants).toEqual(['DELETE','INSERT','SELECT']);
  expect((await db.session.query("SELECT 1 FROM pg_trigger WHERE tgname='email_campaign_prepared_person_lineage' AND NOT tgisinternal")).rows).toHaveLength(1);
 });
+it('keeps the 0160 per-candidate and per-host fences for every other provider and fences a paid row per candidate REVISION, so an earlier revision\'s charge is a row of its own',async()=>{
+ const own=await lookup({},'own_site'),paid=await lookup({credits:1},'millionverifier'),row=(provider:string,revision:number,host:string,candidate:string)=>db.session.query(`INSERT INTO outreach_people_lookups(workspace_id,candidate_id,candidate_revision,host,provider,state,credits,business_date,business_time_zone,expires_at) VALUES($1,$2,$3,$4,$5,'reserved',1,'2026-11-02','America/New_York',now()+interval '1 day')`,[seeded.alpha.workspaceId,candidate,revision,host,provider]);
+ await expect(row('own_site',2,`x-${own.host}`,own.candidate)).rejects.toMatchObject({code:'23505',constraint:'outreach_people_lookups_candidate_provider_key'});
+ await expect(row('millionverifier',1,`x-${paid.host}`,paid.candidate)).rejects.toMatchObject({code:'23505',constraint:'outreach_people_lookups_paid_revision_key'});
+ await expect(row('millionverifier',2,paid.host,paid.candidate)).resolves.toBeDefined();
+ expect((await db.session.query<{n:string;c:string}>("SELECT count(*)::text n,sum(credits)::text c FROM outreach_people_lookups WHERE candidate_id=$1 AND provider='millionverifier'",[paid.candidate])).rows).toEqual([{n:'2',c:'2'}]);
+});

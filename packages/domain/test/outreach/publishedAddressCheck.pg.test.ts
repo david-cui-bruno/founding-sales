@@ -1,5 +1,5 @@
 import {afterAll,beforeAll,expect,it} from 'vitest';
-import type {AddressCheck,AddressVerdict} from '../../outreach/addressGuess.ts';
+import {checkPublishedAddress,type AddressCheck,type AddressVerdict} from '../../outreach/addressGuess.ts';
 import {fakeAddressVerifier,preparedEmailWorld} from './preparedEmailFixture.ts';
 
 // ADR0038: a PUBLISHED address is asked of the paid verifier once before admission, through the real own-site read and the real admission pass, with a fake verifier (no network, no key).
@@ -44,4 +44,34 @@ it('leaves a published address to the free check alone when the verifier fails o
  const never=fakeAddressVerifier();
  expect(await world.pass(undefined,never.verifier)).toMatchObject({admitted:1});expect(never.calls).toEqual([]);
  expect(await custody(off.candidateId)).toBeUndefined();
+});
+
+it('honours a persisted invalid or disposable answer as a refusal even when the drop record was never written (a crash between the custody settling and the record)',async()=>{
+ for(const reason of ['verdict_invalid','verdict_disposable']){
+  const company=await world.prepared('OH',published,'Columbus',true);
+  await world.enrichOwnSite();
+  const revision=(await world.runtime.query<{revision:number}>('SELECT revision FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2',[world.ws,company.candidateId])).rows[0]!.revision;
+  await world.runtime.query("INSERT INTO outreach_people_lookups(workspace_id,candidate_id,candidate_revision,host,provider,state,reason,credits,business_date,business_time_zone,observed_at,expires_at) VALUES($1,$2,$3,$4,'millionverifier','none',$5,1,current_date,'America/New_York',clock_timestamp(),clock_timestamp()+interval '30 days')",[world.ws,company.candidateId,revision,company.domain,reason]);
+  const paid=fakeAddressVerifier(()=>verdict('ok')),before=(await world.admissions()).length;
+  // Not selected, not previewed, never admitted, and no second paid call; the free check is never reached for it.
+  expect(await world.pass(undefined,paid.verifier),reason).toMatchObject({admitted:0});
+  expect(paid.calls,reason).toEqual([]);expect((await world.admissions()).length,reason).toBe(before);
+ }
+});
+
+it('commits a negative answer with its address-bound refusal record or neither: a failed record write rolls the settlement back and the company stays fenced, never re-asked',async()=>{
+ await world.setPeople({enabled:true,dailyCredits:100});
+ const company=await world.prepared('OH',published,'Columbus',true);
+ await world.enrichOwnSite();
+ const revision=(await world.runtime.query<{revision:number}>('SELECT revision FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2',[world.ws,company.candidateId])).rows[0]!.revision,target={candidateId:company.candidateId,candidateRevision:revision,host:company.domain};
+ const paid=fakeAddressVerifier(()=>verdict('invalid'));
+ await expect(checkPublishedAddress(world.ctx(),paid.verifier,target,`tyler@${company.domain}`,async()=>{throw new Error('record write failed');})).rejects.toThrow('record write failed');
+ expect(await custody(company.candidateId)).toMatchObject({state:'reserved'});
+ const again=fakeAddressVerifier(()=>verdict('ok'));
+ expect(await checkPublishedAddress(world.ctx(),again.verifier,target,`tyler@${company.domain}`,async()=>undefined)).toBeNull();expect(again.calls).toEqual([]);
+ let wrote:string|null=null;
+ const other=await world.prepared('OH',published,'Columbus',true);
+ const otherTarget={candidateId:other.candidateId,candidateRevision:(await world.runtime.query<{revision:number}>('SELECT revision FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2',[world.ws,other.candidateId])).rows[0]!.revision,host:other.domain};
+ expect(await checkPublishedAddress(world.ctx(),fakeAddressVerifier(()=>verdict('disposable')).verifier,otherTarget,`tyler@${other.domain}`,async v=>{wrote=v;})).toBe('disposable');
+ expect(wrote).toBe('disposable');expect(await custody(other.candidateId)).toMatchObject({state:'none',reason:'verdict_disposable'});
 });

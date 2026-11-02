@@ -24,5 +24,10 @@ export async function currentPeopleContact(ctx:RepositoryContext,candidateId:str
 /** Companies whose current named person has no address (ADR0037): named for Calling, not emailable. A company that also holds a current guessed, verified address (ADR0038) is emailable and not counted. Workspace-wide and advisory. */
 export async function countNamedWithoutEmail(ctx:RepositoryContext):Promise<number>{
  return Number((await ctx.db.query<{n:string}>(`SELECT count(DISTINCT p.candidate_id)::text AS n FROM ${FROM} WHERE p.workspace_id=$1 AND q.email IS NULL AND ${CURRENT}
-  AND NOT EXISTS(SELECT 1 FROM outreach_people_lookups g JOIN outreach_people_contacts h ON h.workspace_id=g.workspace_id AND h.lookup_id=g.id WHERE g.workspace_id=p.workspace_id AND g.candidate_id=p.candidate_id AND h.email IS NOT NULL AND g.state='found' AND g.expires_at>clock_timestamp())`,[ctx.scope.workspaceId])).rows[0]!.n);
+  AND NOT EXISTS(SELECT 1 FROM outreach_people_lookups g JOIN outreach_people_contacts h ON h.workspace_id=g.workspace_id AND h.lookup_id=g.id WHERE g.workspace_id=p.workspace_id AND g.candidate_id=p.candidate_id AND g.candidate_revision=p.candidate_revision AND h.email IS NOT NULL AND g.state='found' AND g.expires_at>clock_timestamp())`,[ctx.scope.workspaceId])).rows[0]!.n);
+}
+/** ADR0038. True when the paid address check answered `invalid` or `disposable` for this candidate's CURRENT revision inside its thirty days. That custody row settles before the admission pass writes its drop record, so a crash between the two must not let a known-invalid published address through: selection and the admission proof both honour the persisted row as a refusal. Advisory and unlocked at selection; the proof calls it inside its own transaction. */
+export async function addressRefusedByCheck(ctx:RepositoryContext,candidateId:string):Promise<boolean>{
+ return (await ctx.db.query(`SELECT 1 FROM outreach_people_lookups l JOIN sourcing_candidates c ON c.workspace_id=l.workspace_id AND c.id=l.candidate_id AND c.revision=l.candidate_revision
+  WHERE l.workspace_id=$1 AND l.candidate_id=$2 AND l.provider='millionverifier' AND l.state='none' AND l.reason IN ('verdict_invalid','verdict_disposable') AND l.expires_at>clock_timestamp() LIMIT 1`,[ctx.scope.workspaceId,candidateId])).rows.length>0;
 }

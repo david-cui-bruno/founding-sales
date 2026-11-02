@@ -17,3 +17,10 @@ ALTER TABLE outreach_people_contacts DROP CONSTRAINT outreach_people_contacts_fo
   AND ((email_status='verified' AND email IS NOT NULL) OR (email_status IN ('published','verified_guess') AND email IS NOT NULL AND source_url IS NOT NULL) OR (email_status='unavailable' AND email IS NULL)));
 ALTER TABLE outreach_email_verifications DROP CONSTRAINT email_verification_provider,
  ADD CONSTRAINT email_verification_provider CHECK(provider IN ('dns_mx','millionverifier'));
+--  (d) a paid row is never renewed: its credits and business date are the spend ledger the daily cap sums, so a new candidate revision gets a NEW row beside the old one. The two 0160
+--      one-row-per-candidate and per-host fences keep their names and still bind every other provider (own_site rows are free and are renewed in place); for 'millionverifier' the fence
+--      is one row per candidate REVISION, so a concurrent or later second paid check for the same revision is refused by the database and an earlier revision's charge stays counted.
+ALTER TABLE outreach_people_lookups DROP CONSTRAINT outreach_people_lookups_candidate_provider_key, DROP CONSTRAINT outreach_people_lookups_host_provider_key;
+CREATE UNIQUE INDEX outreach_people_lookups_candidate_provider_key ON outreach_people_lookups(workspace_id,candidate_id,provider) WHERE provider<>'millionverifier';
+CREATE UNIQUE INDEX outreach_people_lookups_host_provider_key ON outreach_people_lookups(workspace_id,host,provider) WHERE provider<>'millionverifier';
+CREATE UNIQUE INDEX outreach_people_lookups_paid_revision_key ON outreach_people_lookups(workspace_id,candidate_id,candidate_revision) WHERE provider='millionverifier';
