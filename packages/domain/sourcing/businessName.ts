@@ -21,16 +21,18 @@ const MARKER='§';
 // A state is a place only in a title (marked above); a place record's "… Of Texas" is part of the business's own name.
 const STATE_WORDS=new Set(Object.values(US_BUSINESS_STATE_NAMES).flatMap(words));
 const placeWords=(text:string)=>words(text).filter(word=>!GENERIC.has(word)&&!STATE_WORDS.has(word));
+// In a title a whole state name ("Rhode Island", "New York", "District of Columbia") or the word "State" is a place, wherever it stands; it never makes a brand ("Rhode Island Property Management" names no business). Only whole phrases count, so "Island Realty" keeps its brand.
+const STATE_PHRASE=new RegExp(`(?<![\\p{L}\\p{N}])(?:${STATE_NAME}|state)(?![\\p{L}\\p{N}])`,'giu');
 const catalogue=new Set(DISCOVERY_QUERIES.flatMap(entry=>[...placeWords(entry.locality),...placeWords(entry.query)]));
 const clean=(text:string)=>text.replace(/\s+/gu,' ').replace(/^[\s,.;:|–—•·-]+|[\s,;:|–—•·-]+$/gu,'').trim();
 const trimTail=(text:string)=>text.replace(/[\s,;:|–—•·-]+$/u,'');
 interface Token {raw:string;at:number;kind:'brand'|'place'|'glue'}
 /** One segment of a name classified token by token. Returns the segment without a trailing "in|for|serving <place>" tail, or null when no distinctive word is left. */
 function brandSegment(segment:string,place:ReadonlySet<string>,source:'title'|'place'):string|null{
- const marked=source==='title'?segment.replace(STATE,` ${MARKER}`):segment,tokens:Token[]=[];
+ const marked=source==='title'?segment.replace(STATE,` ${MARKER}`):segment,tokens:Token[]=[],states=source==='title'?[...marked.matchAll(STATE_PHRASE)].map(found=>[found.index,found.index+found[0].length] as const):[];
  for(const match of marked.matchAll(/[^\s,]+/gu)){
   const raw=match[0],low=raw.replace(/[.]+$/u,'').toLowerCase(),parts=low.split('-').flatMap(words);
-  tokens.push({raw,at:match.index,kind:raw===MARKER||parts.length>0&&parts.every(part=>place.has(part))?'place':!/\p{L}/u.test(raw)||parts.every(part=>GENERIC.has(part))?'glue':'brand'});
+  tokens.push({raw,at:match.index,kind:raw===MARKER||states.some(([from,to])=>match.index>=from&&match.index<to)||parts.length>0&&parts.every(part=>place.has(part))?'place':!/\p{L}/u.test(raw)||parts.every(part=>GENERIC.has(part))?'glue':'brand'});
  }
  // A state marker makes the capitalised, non-generic words before it a place (an unlisted city), and a preposition makes the capitalised words after it one.
  const capital=(token:Token|undefined)=>token!==undefined&&token.kind==='brand'&&/^\p{Lu}/u.test(token.raw);
@@ -46,6 +48,12 @@ function brandSegment(segment:string,place:ReadonlySet<string>,source:'title'|'p
  const end=lead>=0?tail[lead]!.at:marked.length;
  return clean(marked.slice(0,end).replace(new RegExp(`\\s*${MARKER}`,'gu'),''))||null;
 }
+// A host or a bare domain ("peakpm.com", "www.PeakPM.com") is no business name: a search result with no title is stored as its host.
+const DOMAIN_LIKE=/^(?:[a-z0-9-]+\.)+(?:com|net|org|biz|info|us|co|io|app|online|site|pro)$/u;
+export function isHostPlaceholder(text:string,host:string):boolean{
+ const bare=(value:string)=>value.trim().toLowerCase().replace(/^[a-z]+:\/\//u,'').replace(/^www\./u,'').replace(/[/.]+$/u,''),name=bare(text);
+ return name.length>0&&(name===bare(host)||DOMAIN_LIKE.test(name));
+}
 // The host's name without its last label (the suffix), so "com" or "net" in a vendor's name never matches.
 const matchesHost=(name:string,host:string)=>words(name).some(word=>word.length>=3&&!GENERIC.has(word)&&host.toLowerCase().replace(/\.[^.]+$/u,'').replace(/[^a-z0-9]/gu,'').includes(word));
 function brandOf(name:string,place:ReadonlySet<string>,source:'title'|'place',host:string):string|null{
@@ -56,6 +64,7 @@ function brandOf(name:string,place:ReadonlySet<string>,source:'title'|'place',ho
  const truncated=/(?:\.\.\.|…)$/u.test(original);
  let segments=original.split(/\s+[|–—•·-]\s+|\s*[|–—•·]\s*/u).map(clean).filter(Boolean);
  if(truncated)segments=segments.slice(0,-1);
+ segments=segments.filter(segment=>!isHostPlaceholder(segment,host));
  const brands=segments.flatMap(segment=>brandSegment(segment,place,source)??[]).filter((brand,index,all)=>all.findIndex(other=>other.toLowerCase()===brand.toLowerCase())===index);
  // Several different brand-looking parts are ambiguous ("Brand | Other Co"): only the one that shares a word with the company's host stands.
  const chosen=brands.length===1?brands:brands.filter(brand=>matchesHost(brand,host));
@@ -75,11 +84,13 @@ function footerBrand(blocks:readonly string[],place:ReadonlySet<string>,host:str
 }
 // The name shown is the business without its trailing legal form ("Tlj Rentals, Llc" is "Tlj Rentals"). The legal form was already used above as acceptance evidence, so it is only dropped here.
 const TRAILING_LEGAL=/[\s,]+(?:L\.L\.C|LLC|Incorporated|Inc|Corporation|Corp|Co|Ltd|PLLC|LP|LLP)[.,]*$/iu;
-function withoutLegalForm(name:string):string{
+export function withoutLegalForm(name:string):string{
  let kept=name;
  for(let next=kept.replace(TRAILING_LEGAL,'');next!==kept&&next.length>0;next=kept.replace(TRAILING_LEGAL,''))kept=next;
  return kept.replace(/[\s,;:|–—•·-]+$/u,'')||name;
 }
+/** The key two business names share when they differ only by case, spacing and a trailing legal form ("Acme Realty LLC" and "Acme Realty"): how an existing Firm is recognised as the prepared company. */
+export const businessIdentityKey=(name:string):string=>withoutLegalForm(name.trim().replace(/\s+/gu,' ')).toLowerCase();
 // A short first word the host also begins with, "Tlj Rentals" on tljrentals.com, is an initialism: "TLJ Rentals". A real word that merely prefixes the host ("Rose" on roseresidentials.com, "Acme" on acmerealty.com) stays. Evidence: the word has no vowel, or the rest of the host is the initials of three or more following words ("Iroc Asset Management Company", irocamc.com).
 const NOT_ACRONYM=new Set(['the','new','old','red','rose','blue','oak','sun','bay','big','top','all','one','two','pro','rio','mid','inc','co','mr','mrs','ms','dr','st']);
 const registrableLabel=(host:string):string=>{const labels=host.toLowerCase().replace(/:\d+$/u,'').split('.').filter(Boolean);return(labels.length>=3&&labels.at(-1)!.length===2&&/^(?:co|com|org|net)$/u.test(labels.at(-2)!)?labels.at(-3):labels.at(-2)??labels[0]??'')!.replace(/[^a-z0-9]/gu,'');};

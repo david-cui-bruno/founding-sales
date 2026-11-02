@@ -1,5 +1,5 @@
 import {expect,it} from 'vitest';
-import {resolveBusinessName,type BusinessNameInput} from '../../sourcing/businessName.ts';
+import {businessIdentityKey,isHostPlaceholder,resolveBusinessName,type BusinessNameInput} from '../../sourcing/businessName.ts';
 const resolve=(name:string,host:string,locality:string,source:BusinessNameInput['source']='title',blocks?:string[],query?:string)=>resolveBusinessName({name,host,locality,source,...(blocks?{blocks}:{}),...(query?{query}:{})});
 // The production prepared-email preview of 2026-11-02 (names as stored, host and locality as listed there).
 it.each([
@@ -61,4 +61,38 @@ it('reads the company\'s own ©-line only when it names the host, and only when 
 it('treats several different brand-looking parts as ambiguous unless exactly one names the host',()=>{
  expect(resolve('Foo Realty | Bar Homes','foorealty.com','Dallas')).toBe('Foo Realty');
  expect(resolve('Foo Realty | Bar Homes','example.com','Dallas')).toBeNull();
+});
+// A state's full name is a place in a title, so a title of only state and service words names no business; a place record keeps the state (it is part of the registered name).
+it.each([
+ ['Rhode Island Property Management','rhodeislandpm.com','Cranston',null],['New York Property Management Company','nypm.com','Albany',null],['North Carolina Property Management','ncpm.com','Raleigh',null],['West Virginia Property Management Services','wvpm.com','Charleston',null],
+ ['District of Columbia Property Management','dcpm.com','Washington',null],['State Property Management Company','statepm.com','Dallas',null],['Texas Rental Group','texasrentalgroup.com','Dallas',null],
+ ['Rhode Island Property Management - Thayer Associates','thayerassociates.com','Cranston','Thayer Associates'],['Property Management | New York Capital Realty','nycapital.com','Albany','New York Capital Realty'],
+ ['Island Realty','islandrealty.com','Cranston','Island Realty'],['Texas Capital Realty','texascapital.com','Dallas','Texas Capital Realty'],
+])('title %s (%s) is %s',(name,host,locality,expected)=>expect(resolve(name,host,locality)).toBe(expected));
+it('keeps a state in a place record name',()=>{
+ expect(resolve('Texas Rental Group','texasrentalgroup.com','Dallas','place')).toBe('Texas Rental Group');
+ expect(resolve('Rhode Island Property Management LLC','rhodeislandpm.com','Cranston','place')).toBe('Rhode Island Property Management');
+ expect(resolve('Rhode Island Property Management','rhodeislandpm.com','Cranston','place')).toBe('Rhode Island Property Management');
+ expect(resolve('Rhode Island Property Management','thayerassociates.com','Cranston','title',['© 2024 Thayer Associates. All rights reserved.'])).toBe('Thayer Associates');
+});
+it('treats a stored name that is the host, or a bare domain, as absent',()=>{
+ const footer=['© 2024 Peak Property Management. All rights reserved.'];
+ for(const name of ['peakpm.com','www.peakpm.com','PeakPM.COM','WWW.PEAKPM.COM','https://www.peakpm.com/','other-site.net']){
+  expect(resolve(name,'peakpm.com','Dallas')).toBeNull();
+  expect(resolve(name,'peakpm.com','Dallas','place')).toBeNull();
+  expect(resolve(name,'peakpm.com','Dallas','title',footer)).toBe('Peak Property Management');
+  expect(resolve(name,'peakpm.com','Dallas','place',footer)).toBe('Peak Property Management');
+ }
+ expect(resolve('Peak PM | www.peakpm.com','peakpm.com','Dallas')).toBe('Peak PM');
+ expect(resolve('Peak PM','peakpm.com','Dallas')).toBe('Peak PM');
+ expect(isHostPlaceholder('Www.Peakpm.com','peakpm.com')).toBe(true);
+ expect(isHostPlaceholder('portal.peakpm.co.uk','portal.peakpm.co.uk')).toBe(true);
+ expect(isHostPlaceholder('Peak PM','peakpm.com')).toBe(false);
+ expect(isHostPlaceholder('','peakpm.com')).toBe(false);
+});
+it('keys business names by case, spacing and trailing legal form only',()=>{
+ expect(businessIdentityKey(' Acme  Realty, LLC. ')).toBe('acme realty');
+ expect(businessIdentityKey('Acme Realty')).toBe('acme realty');
+ expect(businessIdentityKey('ACME REALTY INC')).toBe('acme realty');
+ expect(businessIdentityKey('Acme Realty Partners LLC')).not.toBe(businessIdentityKey('Acme Realty'));
 });

@@ -1,7 +1,8 @@
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {decideAdminOnly} from '../crm/authorization.ts';
 import {preparedEmailTimeZone} from '../sourcing/admission.ts';
-import {firmNameKey,websiteDomain} from '../crm/import.ts';
+import {websiteDomain} from '../crm/import.ts';
+import {businessIdentityKey} from '../sourcing/businessName.ts';
 import {firstSuppressed} from '../suppression/effective.ts';
 import {retainedCandidateOnly} from '../sourcing/retainedAcquisition.ts';
 import {preparedCandidatePayload} from '../sourcing/discoveryIntake.ts';
@@ -10,10 +11,11 @@ import {campaignCandidateProvenance} from './emailCampaignAuthority.ts';
 import type {PreparedEmailTarget} from './emailCampaignSource.ts';
 import type {EmailAssessment} from './selection.ts';
 
-/** Firms (any status) already carrying the company's resolved business name (the name admission gives the Firm) or website host, other than the Firm admission created from this candidate. */
+/** Firms (any status) already carrying the company's resolved business name (the name admission gives the Firm) or website host, other than the Firm admission created from this candidate. Names compare by `businessIdentityKey` on both sides, so an existing "Acme Realty LLC" is the company "Acme Realty"; SQL narrows by name prefix, the key decides. */
 async function conflictingFirmIds(ctx:RepositoryContext,company:{businessName:string;website:string},admittedFirmId:string|null):Promise<string[]>{
- const matches=(await ctx.db.query<{id:string}>(`SELECT id FROM firms WHERE workspace_id=$1 AND (lower(regexp_replace(trim(name),'\\s+',' ','g'))=$2 OR regexp_replace(lower(split_part(website,'/',3)),'^www\\.','')=$3)`,[ctx.scope.workspaceId,firmNameKey(company.businessName),websiteDomain(company.website)])).rows;
- return matches.flatMap(firm=>firm.id===admittedFirmId?[]:[firm.id]);
+ const key=businessIdentityKey(company.businessName);
+ const matches=(await ctx.db.query<{id:string;name:string;domain_match:boolean}>(`SELECT id,name,regexp_replace(lower(split_part(website,'/',3)),'^www\\.','')=$3 AS domain_match FROM firms WHERE workspace_id=$1 AND (lower(regexp_replace(trim(name),'\\s+',' ','g')) LIKE $2 ESCAPE '\\' OR regexp_replace(lower(split_part(website,'/',3)),'^www\\.','')=$3)`,[ctx.scope.workspaceId,`${key.replaceAll(/[\\%_]/gu,'\\$&')}%`,websiteDomain(company.website)])).rows;
+ return matches.flatMap(firm=>firm.id!==admittedFirmId&&(firm.domain_match||businessIdentityKey(firm.name)===key)?[firm.id]:[]);
 }
 const admittedFirm=async(ctx:RepositoryContext,candidateId:string,runId:string,campaignId:string):Promise<string|null>=>(await ctx.db.query<{firm_id:string}>('SELECT firm_id FROM outreach_email_sources WHERE workspace_id=$1 AND candidate_id=$2 AND run_id=$3 AND campaign_id=$4 AND NOT association_review_required',[ctx.scope.workspaceId,candidateId,runId,campaignId])).rows[0]?.firm_id??null;
 /** Selection-time form of the deterministic refusals `assessPreparedEmail` and the Firm admission would make (an existing Firm, an
