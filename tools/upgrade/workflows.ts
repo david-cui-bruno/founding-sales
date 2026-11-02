@@ -3,6 +3,7 @@ import {BUSINESS_GMAIL_UPGRADE_WORKFLOW,runBusinessGmailUpgradeWorkflow} from '.
 import {PHONE_DISCOVERY_UPGRADE_WORKFLOW,runPhoneDiscoveryUpgradeWorkflow} from './phoneDiscoveryWorkflow.ts';
 import {PREPARED_CAPTURE_UPGRADE_WORKFLOW,runPreparedCaptureUpgradeWorkflow} from './preparedCaptureWorkflow.ts';
 import {PREPARED_PHONE_PREPARATION_UPGRADE_WORKFLOW,runPreparedPhonePreparationUpgradeWorkflow} from './preparedPhonePreparationWorkflow.ts';
+import {CAMPAIGN_FOOTER_UPGRADE_WORKFLOW,runCampaignFooterUpgradeWorkflow} from './campaignFooterWorkflow.ts';
 import {createPerson} from '@fss/domain/crm/people.ts';
 import {previewSelectedAttachment,commitSelectedAttachment,readSelectedAttachment} from '@fss/domain/crm/selectedAttachments.ts';
 import {withTransaction} from '@fss/domain/db/queryable.ts';
@@ -295,6 +296,7 @@ export async function runWorkflows(
     { name: PHONE_DISCOVERY_UPGRADE_WORKFLOW, run: async () => await runPhoneDiscoveryUpgradeWorkflow(admin) },
     { name: PREPARED_CAPTURE_UPGRADE_WORKFLOW, run: async () => await runPreparedCaptureUpgradeWorkflow(admin) },
     { name: PREPARED_PHONE_PREPARATION_UPGRADE_WORKFLOW, run: async () => await runPreparedPhonePreparationUpgradeWorkflow(admin) },
+    { name: CAMPAIGN_FOOTER_UPGRADE_WORKFLOW, run: async () => await runCampaignFooterUpgradeWorkflow(session, handles) },
     {
       name: 'crm.selectedFile (explicit import)',
       run: async () => {
