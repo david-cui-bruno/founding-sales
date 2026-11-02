@@ -6,6 +6,8 @@ import { repositoryContext, workspaceScope, type RepositoryContext } from '../..
 import { consumeCallSession, createCallSession, readCallCadence, recordCallStatus } from '../../calls/sessions.ts';
 import { logCallOutcome } from '../../dial/calls.ts';
 import { readCallsPlacedToday } from '../../today/callsPlaced.ts';
+import { databaseNow } from '../../policy/clock.ts';
+import { addCalendarDays, localDate, localInstant, weekdayOfDate } from '../../src/rules/localClock.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 import { seedCrm, type SeededCrm } from '../db/support/crmFixtures.ts';
 import { seedPolicy, type SeededPolicy } from '../db/support/policyFixtures.ts';
@@ -20,6 +22,21 @@ import { seedPolicy, type SeededPolicy } from '../db/support/policyFixtures.ts';
  * counts placed sessions, so three unanswered attempts and an incoming call are three,
  * not the four that would park the firm, and the day's "calls placed" does not move.
  */
+const FIRM_ZONE = 'America/New_York';
+
+/**
+ * Monday 10:00 in the firm's zone, at least a week after `now`, as a function from a day
+ * offset and a local hour to the instant. A reached call logged "just now" resets the
+ * cadence for everything consumed before it, so scripted attempts have to be after the
+ * database's clock, whatever day the suite runs on; a fixed date goes stale and the
+ * count quietly drops.
+ */
+function mondayAttempts(now: string): (days: number, hour?: number) => string {
+  let monday = addCalendarDays(localDate(now, FIRM_ZONE), 7);
+  while (weekdayOfDate(monday) !== 1) monday = addCalendarDays(monday, 1);
+  return (days, hour = 10) => localInstant(addCalendarDays(monday, days), { hour, minute: 0 }, FIRM_ZONE);
+}
+
 describe('an incoming call', () => {
   let database: TestDatabase;
   let seeded: TwoWorkspaces;
@@ -142,9 +159,11 @@ describe('an incoming call', () => {
   });
 
   it('is not an attempt: three unanswered calls and an incoming one do not park the firm', async () => {
-    // Monday 10:00 New York, a week from the seed; each attempt a day and three hours apart.
-    const base = Date.parse('2026-11-02T15:00:00.000Z');
-    const day = (days: number, hours = 0): string => new Date(base + days * 86_400_000 + hours * 3_600_000).toISOString();
+    // Monday 10:00 New York, at least a week after the database's clock (earlier tests log
+    // reached calls at that clock, and those reset the count); the second attempt is
+    // Tuesday three hours later.
+    const at = mondayAttempts(await databaseNow({ db: database.session }));
+    const day = (days: number, hours = 0): string => at(days, 10 + hours);
     await unansweredAttempt(day(0));
     await unansweredAttempt(day(1, 3));
     await unansweredAttempt(day(2));
