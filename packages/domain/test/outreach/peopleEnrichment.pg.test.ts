@@ -184,3 +184,17 @@ it('reads the prepared evidence deadline with the company: finite, in the future
  expect(read?.evidenceDeadline).toBeGreaterThan(Date.now());
  expect(read!.evidenceDeadline).toBeLessThanOrEqual(Date.now()+7*86_400_000+60_000);
 });
+it('skips a candidate deleted between selection and reservation: nothing is reserved, no paid call is made, and the pass goes on',async()=>{
+ await flush();
+ const companies=[await world.prepared('OH',()=>'x'),await world.prepared('OH',()=>'x')],people=fakePeople();
+ const deleting={...people.provider,findDecisionMaker:async(input:{domain:string;companyName:string})=>{
+  const answer=await people.provider.findDecisionMaker(input);
+  const other=companies.find(company=>company.domain!==input.domain)!;
+  expect(await withTransaction(world.runtime,()=>deleteCandidate(world.ctx(),{id:other.candidateId,expectedRevision:1}))).toMatchObject({ok:true});
+  return answer;
+ }};
+ const pass=await world.enrich({provider:deleting});
+ expect(pass).toMatchObject({looked:1,halted:null});expect(people.calls).toHaveLength(1);
+ const gone=companies.find(company=>company.domain!==people.calls[0])!;
+ expect((await rows()).some(row=>row['host']===gone.domain)).toBe(false);
+});

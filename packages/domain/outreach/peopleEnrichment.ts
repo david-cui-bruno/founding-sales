@@ -19,7 +19,7 @@ async function creditsOnDate(ctx:RepositoryContext,date:string):Promise<number>{
  return Number((await ctx.db.query<{used:string}>('SELECT coalesce(sum(credits),0)::text AS used FROM outreach_people_lookups WHERE workspace_id=$1 AND business_date=$2::date',[ctx.scope.workspaceId,date])).rows[0]!.used);
 }
 const businessDateNow=async(ctx:RepositoryContext):Promise<{zone:string;date:string}>=>{const zone=await workspaceBusinessZone(ctx);return {zone,date:localDate((await ctx.db.query<{at:Date}>('SELECT clock_timestamp() AS at')).rows[0]!.at.toISOString(),zone)};};
-export type PeopleReservation={kind:'reserved';id:string;credits:number}|{kind:'taken'}|{kind:'cap'}|{kind:'disabled'};
+export type PeopleReservation={kind:'reserved';id:string;credits:number}|{kind:'taken'}|{kind:'cap'}|{kind:'disabled'}|{kind:'gone'};
 /** Commits (its own transaction) one reservation row BEFORE the paid call. Under the `people_enrichment` setting's read lock (so an admin's
  * disable or cap change is ordered against it) and the workspace advisory lock it re-reads the switch and the cap, then requires the day's
  * reserved and spent credits plus this lookup's maximum to fit the cap, and the company's HOST to have no custody row (a refused uncharged
@@ -32,6 +32,8 @@ export async function reservePeopleLookup(ctx:RepositoryContext,input:{provider:
   if(!setting.enabled||setting.dailyCredits<input.credits)return {kind:'disabled'};
   await ctx.db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`people-enrichment:${w}`]);
   if(await creditsOnDate(ctx,date)+input.credits>setting.dailyCredits)return {kind:'cap'};
+  // Custody has no foreign key to the candidate, so the candidate is checked and share-locked here: one deleted since the list was read is neither reserved nor called.
+  if(!(await ctx.db.query('SELECT 1 FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2 FOR SHARE',[w,input.company.candidateId])).rows.length)return {kind:'gone'};
   const reused=(await ctx.db.query<{id:string}>(`UPDATE outreach_people_lookups SET state='reserved',reason=NULL,candidate_id=$2,candidate_revision=$4,credits=$5,business_date=$6::date,business_time_zone=$7,reserved_at=clock_timestamp(),observed_at=NULL,expires_at=clock_timestamp()+make_interval(days=>$8)
    WHERE workspace_id=$1 AND host=$9 AND provider=$3 AND state='failed' AND expires_at<=clock_timestamp() RETURNING id`,[w,input.company.candidateId,input.provider,input.company.candidateRevision,input.credits,date,zone,PEOPLE_CONTACT_VALID_DAYS,input.company.host])).rows[0];
   if(reused)return {kind:'reserved',id:reused.id,credits:input.credits};
@@ -86,7 +88,7 @@ export async function runPeopleEnrichment(ctx:RepositoryContext,deps:{provider:P
  for(const company of batch){
   const reservation=await reservePeopleLookup(ctx,{provider:provider.providerKey,company,credits:provider.maxCreditsPerLookup});
   if(reservation.kind==='cap'||reservation.kind==='disabled'){pass.stopped=reservation.kind==='cap'?'cap':'disabled';break;}
-  if(reservation.kind==='taken')continue;
+  if(reservation.kind==='taken'||reservation.kind==='gone')continue;
   pass.looked++;
   let lookup;
   try{lookup=await provider.findDecisionMaker({domain:company.host,companyName:company.businessName});}
