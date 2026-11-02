@@ -4,7 +4,7 @@ import {qualificationEvidenceSchema,type CandidateInput,type SourceObservation} 
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {lockSendGateForStopFact} from '../policy/sendGate.ts';
 import {lockPreparationCleanup} from '../calling/preparationLifecycle.ts';
-import {isLegacyCandidatePayload} from './discoveryIntake.ts';
+import {isLegacyCandidatePayload} from './candidatePayload.ts';
 import type {QualificationRunRow,SourcingResult} from './qualificationStore.ts';
 import {QUALIFICATION_POLICY_VERSION,QUALIFICATION_PROMPT_VERSION} from './qualificationVersions.ts';
 import {candidateAcquisitionOutstanding,lockRetainedAdmin,retainedWallNow} from './retainedAcquisition.ts';

@@ -2,13 +2,13 @@ import assert from 'node:assert/strict';
 import {repositoryContext,workspaceScope} from '@fss/domain/db/workspaceScope.ts';
 import {withTransaction} from '@fss/domain/db/queryable.ts';
 import {saveCandidate} from '@fss/domain/sourcing/candidates.ts';
-import {saveDiscoveryCandidate} from '@fss/domain/sourcing/discoveryIntake.ts';
+import {seedDiscoveryCandidate} from '@fss/domain/test/sourcing/support/discoverySeed.ts';
 import {manualDiscoveryFixture,manualOrdinaryFixture} from '../../../../packages/domain/test/sourcing/support/manualProspectFixture.ts';
 import {manualPhoneFixture,seedManualPhoneRun} from '../../../../packages/domain/test/sourcing/support/manualPhoneFixture.ts';
 import type {ManualProspectApp} from './manualProspectApp.ts';
 export async function seedCompactManualProspects(app:ManualProspectApp){
  const f=app.fixture,w=f.alpha.workspaceId,runtime=await f.database.appRuntimeSession(),ctx=repositoryContext(workspaceScope(w,{kind:'user',userId:f.alpha.admin.userId,role:'admin'}),runtime);
- async function discovery(key:string,name=`Unresolved retained ${key}`){const input=manualDiscoveryFixture(`compact-${key}`);input.row.firmName=name;const saved=await withTransaction(runtime,()=>saveDiscoveryCandidate(ctx,input));assert(saved.ok);return {id:saved.value.id,input};}
+ async function discovery(key:string,name=`Unresolved retained ${key}`){const input=manualDiscoveryFixture(`compact-${key}`);input.row.firmName=name;const saved=await withTransaction(runtime,()=>seedDiscoveryCandidate(ctx,input));return {id:saved.id,input};}
  for(let i=0;i<47;i++)await discovery(`page-${i}`);
  const memberA=await discovery('member-a','Home | Boston Property Management - Contact'),memberB=await discovery('member-b','Boston Property Management | Services');
  for(const member of [memberA,memberB])await f.db.query(`UPDATE sourcing_candidates SET payload=jsonb_set(jsonb_set(jsonb_set(payload,'{row,website}','"https://boston.example.test/"'),'{row,locality}','"Boston"'),'{row,region}','"MA"') WHERE id=$1`,[member.id]);

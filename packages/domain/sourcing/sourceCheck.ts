@@ -14,7 +14,7 @@ import {workspaceBusinessZone} from '../research/ledger.ts';
 import {isPublicResearchUrl,withoutFragment} from '../research/sourcePolicy.ts';
 import {parsePageText} from '../research/pageText.ts';
 import type {PageFetchProvider} from '../research/providers.ts';
-import {isCurrentPreparedCandidatePayload} from './discoveryIntake.ts';
+import {isCurrentPreparedCandidatePayload} from './candidatePayload.ts';
 import {eraseDiscoveryReviewsForSources,lockDiscoveryReviewSources} from './discoveryReviewVisibility.ts';
 import {retainedCandidateOnly} from './retainedAcquisition.ts';
 import {lockLivePreparationCleanup} from '../calling/preparationLifecycle.ts';

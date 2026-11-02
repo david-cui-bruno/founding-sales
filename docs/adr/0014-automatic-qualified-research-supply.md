@@ -4,6 +4,8 @@
 
 Accepted October22 2026 for the already-approved reversible LOCAL continuation, after issues738–741 closed locally. No new source acquisition, provider/inference, real business data, infrastructure, hosting, activation, contact, enrollment or sending authority. Production/main/client881/schema129/OFF stays a dated retained checkpoint. Existing desktop and wire versions1–3 remain intact.
 
+**Superseded intake (roadmap1.6.6, November 2026):** the API-only raw `discovery-v1` write intake (`/sourcing/candidates/discovery/save-v1` and `/list-v1`) is removed; [ADR0034](0034-company-first-callable-supply.md) company-first discovery is the only candidate intake. Stored `discovery-v1` rows and their review, promotion and manual-worklist readers are unchanged.
+
 ## Decision
 
 Reuse the existing ordinary-candidate discovery/qualification scheduler and registered worker, not a second pipeline or a per-candidate browser creation command. Only exact retained provenance from a completed existing search hit or completed Apollo organization attempt may enter this automatic publication seam. A preparedBy string alone is not authority. Keep discovery-v1 excluded from existing qualification/scheduler/calling owners. Raw retained Overture/Places/NARPM observations, manual discovery preparation and issue740 promotions are not this source path. No source/geography expansion or invented human attestation.

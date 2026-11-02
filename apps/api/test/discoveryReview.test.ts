@@ -5,11 +5,14 @@ import {localNoopSuppressionJournal} from '../src/journal/index.ts';
 import {createAuthFixture,CURRENT_CLIENT_VERSION,type AuthFixture} from './support/authFixture.ts';
 import {issueSessionFor} from './support/sessionFixture.ts';
 import {discoveryReviewCandidate,discoveryHumanReview} from '../../../packages/domain/test/sourcing/support/discoveryReviewFixtures.ts';
+import {seedDiscoveryCandidate} from '@fss/domain/test/sourcing/support/discoverySeed.ts';
+import {repositoryContext,workspaceScope} from '@fss/domain/db/workspaceScope.ts';
+import {withTransaction} from '@fss/domain/db/queryable.ts';
 let f:AuthFixture,admin:string,sales:string,beta:string;
 const reviewPath='/sourcing/candidates/discovery/review-v1',listPath='/sourcing/candidates/discovery/useful-list-v1';
 const envelope=<T extends object>(body:T)=>({...body,commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION});
 async function request(path:string,token:string|null,body:unknown,method='POST'){return dispatch({method,path,query:new URLSearchParams(),headers:token===null?{}:{authorization:`Bearer ${token}`},body} as ApiRequest,{session:f.db,auth:f.deps,supportedClientVersions:f.deps.config.supportedClientVersions,sendingEnabled:false,upgradeUrl:'https://example.test/update',suppressionJournal:localNoopSuppressionJournal()});}
-async function candidate(){const answer=await request('/sourcing/candidates/discovery/save-v1',admin,envelope(discoveryReviewCandidate()));expect(answer.status).toBe(200);return (answer.body as {result:{id:string}}).result.id;}
+async function candidate(){return (await withTransaction(f.db,()=>seedDiscoveryCandidate(repositoryContext(workspaceScope(f.alpha.workspaceId,{kind:'user',userId:f.alpha.admin.userId,role:'admin'}),f.db),discoveryReviewCandidate()))).id;}
 beforeAll(async()=>{f=await createAuthFixture();admin=(await issueSessionFor(f,f.alpha,f.alpha.admin)).accessToken;sales=(await issueSessionFor(f,f.alpha,f.alpha.salesperson)).accessToken;beta=(await issueSessionFor(f,f.beta,f.beta.admin)).accessToken;});
 beforeEach(async()=>{await f.db.query('DELETE FROM sourcing_candidates');});
 afterAll(async()=>{await f.stop();});

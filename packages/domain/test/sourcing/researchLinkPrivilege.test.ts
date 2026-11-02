@@ -7,7 +7,7 @@ import {withTransaction,type QueryResultRowLike,type SessionQueryable} from '../
 import {repositoryContext,workspaceScope} from '../../db/workspaceScope.ts';
 import {seedTwoWorkspaces,type TwoWorkspaces} from '../db/support/fixtures.ts';
 import {createFirm} from '../../crm/firms.ts';
-import {saveDiscoveryCandidate} from '../../sourcing/discoveryIntake.ts';
+import {seedDiscoveryCandidate} from './support/discoverySeed.ts';
 import {prepareDiscoveryCandidate,readDiscoveryPreparation} from '../../sourcing/discoveryPromotion.ts';
 import {linkDiscoveryResearchFirm,readDiscoveryResearchFirm} from '../../sourcing/discoveryResearchFirm.ts';
 import {createQualifiedResearchFirm,readQualifiedResearchFirm} from '../../sourcing/qualifiedResearch.ts';
@@ -31,9 +31,8 @@ async function fixture(qualified=false){
  const suffix=randomUUID(),name=`FICTIONAL research link privilege ${suffix}`,website=`https://research-link-${suffix}.example.test/`;
  const source={provider:'overture_places' as const,release:'fictional-research-link-privilege',recordId:suffix,retrievedAt:null,sourceUrl:'https://source.example.test/retained'};
  const ctx=context(db.session),tx=<T>(work:()=>Promise<T>)=>withTransaction(db.session,work);
- const raw=await tx(()=>saveDiscoveryCandidate(ctx,{row:{source,observations:[source],firmName:name,website,locality:'Dallas',region:'TX',sourceConfidence:null,residentialFit:'unknown',websiteAssociation:'unknown',officePhoneEvidence:'unknown',probableGroupKey:null},origins:[{source,sourceMetadata:{sourcesJson:'[]'},licenses:['fictional-fixture'],notices:[{label:'Fictional fixture',url:'https://source.example.test/license',sha256:'a'.repeat(64)}]}]}));
- assert(raw.ok);
- const prepared=await tx(()=>prepareDiscoveryCandidate(ctx,{discoveryCandidateId:raw.value.id,expectedRevision:1,source:{provider:source.provider,release:source.release,recordId:source.recordId},candidate:{firmName:name,website,locality:'Dallas',region:'TX',signal:'fit_only',evidence:'Fictional human preparation, not native evidence.',sourceUrl:website,observedOn:new Date().toISOString().slice(0,10),preparedBy:'Fictional privilege regression'}}));
+ const raw=await tx(()=>seedDiscoveryCandidate(ctx,{row:{source,observations:[source],firmName:name,website,locality:'Dallas',region:'TX',sourceConfidence:null,residentialFit:'unknown',websiteAssociation:'unknown',officePhoneEvidence:'unknown',probableGroupKey:null},origins:[{source,sourceMetadata:{sourcesJson:'[]'},licenses:['fictional-fixture'],notices:[{label:'Fictional fixture',url:'https://source.example.test/license',sha256:'a'.repeat(64)}]}]}));
+ const prepared=await tx(()=>prepareDiscoveryCandidate(ctx,{discoveryCandidateId:raw.id,expectedRevision:1,source:{provider:source.provider,release:source.release,recordId:source.recordId},candidate:{firmName:name,website,locality:'Dallas',region:'TX',signal:'fit_only',evidence:'Fictional human preparation, not native evidence.',sourceUrl:website,observedOn:new Date().toISOString().slice(0,10),preparedBy:'Fictional privilege regression'}}));
  assert(prepared.ok);
  const preparation=await readDiscoveryPreparation(ctx,prepared.value.promotionId);assert(preparation);
  let selection:QualifiedResearchSelection|null=null;
@@ -45,10 +44,10 @@ async function fixture(qualified=false){
   facts.push({kind:'business_email',value:email,observationId,blockId:'email'});
   const finished=await tx(()=>finishQualification(ctx,{runId:requested.value.runId,reason:null,observations:[{id:observationId,url:website,contentHash:'a'.repeat(64),relevantTextHash:'b'.repeat(64),retrievedAt:new Date().toISOString(),publishedAt:null,publishedAtBlockId:null,firstParty:true,truncated:false,blocks:[{id:'native',text},{id:'email',text:email}]}],facts}));assert(finished.ok);
   const evaluated=await tx(()=>evaluateQualification(ctx,{runId:requested.value.runId}));assert(evaluated.ok);
-  selection={discoveryCandidateId:raw.value.id,discoveryRevision:1,candidateId:preparation.qualificationCandidateId,candidateRevision:1,runId:requested.value.runId};
+  selection={discoveryCandidateId:raw.id,discoveryRevision:1,candidateId:preparation.qualificationCandidateId,candidateRevision:1,runId:requested.value.runId};
  }
  await db.session.query('INSERT INTO research_settings(workspace_id,enabled) VALUES($1,false) ON CONFLICT(workspace_id) DO UPDATE SET enabled=false',[seeded.alpha.workspaceId]);
- return {name,website,rawId:raw.value.id,legacyId:preparation.qualificationCandidateId,promotionId:prepared.value.promotionId,selection};
+ return {name,website,rawId:raw.id,legacyId:preparation.qualificationCandidateId,promotionId:prepared.value.promotionId,selection};
 }
 type Fixture=Awaited<ReturnType<typeof fixture>>;
 async function ordinaryFirm(f:Fixture){
