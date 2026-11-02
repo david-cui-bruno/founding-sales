@@ -18,7 +18,7 @@ import {runSchedulerPass} from '../src/scheduler/schedulerPass.ts';
 import {runOnce} from '../src/runner/jobRunner.ts';
 
 /** ADR0034: a raw Overture place with its own website is scheduled and researched through the ordinary own-site path. */
-type Row={name:string;website:string|null;locality:string|null;region:string|null};
+type Row={name:string;website:string|null;locality:string|null;region:string|null;provider?:'public_directory'|'apollo_free'|'first_party'};
 const good=(name:string,website:string|null=`http://${name}.example.test`):Row=>({name,website,locality:'Dallas',region:'TX'});
 const business='<p>Our property management company manages residential homes for owners and coordinates tenant maintenance requests.</p>';
 
@@ -28,7 +28,7 @@ async function fixture(ceiling=100){
  await database.session.query('INSERT INTO research_settings(workspace_id,enabled,daily_firm_ceiling) VALUES($1,true,$2)',[alpha.workspaceId,ceiling]);
  const ctx=(actor:'scheduler'|'admin')=>repositoryContext(workspaceScope(alpha.workspaceId,actor==='admin'?{kind:'user',role:'admin',userId:alpha.admin.userId}:{kind:'system',component:'scheduler'}),session);
  const save=async(row:Row)=>{
-  const base=manualDiscoveryFixture(row.name),source={...base.row.source,release:'2026-10-22.0',retrievedAt:'2026-10-23T00:00:00.000Z'};
+  const base=manualDiscoveryFixture(row.name),source={...base.row.source,...(row.provider?{provider:row.provider}:{}),release:'2026-10-22.0',retrievedAt:'2026-10-23T00:00:00.000Z'};
   const input:DiscoveryIntakeSaveInput={origins:base.origins.map(origin=>({...origin,source})),row:{...base.row,source,observations:[source],firmName:row.name,website:row.website,locality:row.locality,region:row.region}};
   const saved=await withTransaction(session,()=>saveDiscoveryCandidate(ctx('scheduler'),input));
   if(!saved.ok)throw new Error(saved.reason);
@@ -172,5 +172,34 @@ it('researches one of two Overture places on one host, the earliest, and the nex
   expect(await f.pass()).toMatchObject({inserted:1});
   expect(await researched(f)).toEqual([first,fourth].sort());
   expect(await researched(f)).not.toContain(second);
+ }finally{await f.database.drop();}
+});
+
+/** One landing page that carries both the business context and the phone, served only at the canonical URL the seed fetches. */
+async function landingBrief(f:Awaited<ReturnType<typeof fixture>>,id:string,landing:string){
+ const pageFetch=researchPageFetch({lookup:async()=>['93.184.216.34'],request:async input=>{
+  if(input.url.endsWith('/robots.txt'))return {statusCode:200,headers:{'content-type':'text/plain'},body:new TextEncoder().encode('User-agent: *\nDisallow:\n'),abortedOverCap:false};
+  if(input.url===landing)return {statusCode:200,headers:{'content-type':'text/html'},body:new TextEncoder().encode(`<main>${business}<p>Office phone: (214) 555-0147</p></main>`),abortedOverCap:false};
+  return {statusCode:404,headers:{},body:null,abortedOverCap:false};
+ }});
+ const registry=new HandlerRegistry().register(sourcingQualificationHandler({pageFetch,extraction:{providerKey:'aws_bedrock.sourcing_qualification',countInputTokens:async()=>100,extract:async()=>({ok:false,failureCode:'invalid_evidence',costCents:1})}}));
+ expect(await runOnce(f.session,{registry,owner:'overture-landing-test',limit:5})).toMatchObject({failed:0});
+ const runId=(await f.session.query<{id:string}>('SELECT id FROM sourcing_qualification_runs WHERE candidate_id=$1',[id])).rows[0]!.id;
+ return withTransaction(f.session,()=>readPreparedProspect(f.ctx('admin'),{candidateId:id,candidateRevision:1,runId}));
+}
+
+it.each([['a fragment','https://firm.example/#contact','https://firm.example/'],['dot segments','http://dots.example/a/../team/#top','https://dots.example/team/']])('grants the landing page the seed fetches when the stored website has %s',async(_name,website,landing)=>{
+ const f=await fixture();try{
+  const id=await f.save(good('landing',website));
+  expect(await f.pass()).toMatchObject({inserted:1});
+  expect(await landingBrief(f,id,landing)).toMatchObject({ok:true,value:{callable:{state:'callable',phone:'(214) 555-0147'}}});
+ }finally{await f.database.drop();}
+});
+
+it.each(['public_directory','apollo_free','first_party'] as const)('schedules a %s discovery place with a website too',async provider=>{
+ const f=await fixture();try{
+  const id=await f.save({...good('other-provider'),provider});
+  expect(await f.pass()).toMatchObject({inserted:1});
+  expect((await f.session.query('SELECT candidate_id FROM sourcing_qualification_runs')).rows).toEqual([{candidate_id:id}]);
  }finally{await f.database.drop();}
 });

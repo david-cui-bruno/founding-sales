@@ -7,6 +7,7 @@ import {safeManualReference,type ManualProspectRow} from './manualProspectProjec
 import {MANUAL_LITERAL_PHONE_PARSER,scanManualLiteralPhones} from './manualProspectLiteralPhone.ts';
 import {originalAuthorities,originalLineage,type ManualOriginalSnapshot} from './manualProspectOriginalAuthority.ts';
 import {preparedPhoneSource} from './preparedPhoneSource.ts';
+import {discoveryResearchSeed} from './discoveryIntake.ts';
 
 type PhoneEvidence=NonNullable<ManualProspect['phoneEvidence']>;
 export interface ManualPhoneSnapshot extends Record<string,unknown>,ManualOriginalSnapshot{
@@ -71,7 +72,7 @@ async function readPhoneSnapshots(ctx:RepositoryContext,rows:readonly ManualPros
  ARRAY(SELECT DISTINCT page->>'url' FROM jsonb_array_elements(CASE WHEN jsonb_typeof(r.observations)='array' THEN r.observations ELSE '[]'::jsonb END) page WHERE
   (EXISTS(SELECT 1 FROM sourcing_candidates retained WHERE retained.workspace_id=r.workspace_id AND retained.id=r.candidate_id
     AND (rtrim(retained.payload->>'sourceUrl','/')=rtrim(page->>'url','/')
-     OR retained.payload->>'kind'='discovery-v1' AND lower(rtrim(regexp_replace(btrim(retained.payload->'row'->>'website'),'^http:','https:','i'),'/'))=lower(rtrim(page->>'url','/'))))
+     OR EXISTS(SELECT 1 FROM jsonb_each_text($4::jsonb) landing WHERE landing.key=r.candidate_id::text AND rtrim(landing.value,'/')=rtrim(page->>'url','/'))))
    OR EXISTS(SELECT 1 FROM sourcing_candidate_discovery_origins o WHERE o.workspace_id=r.workspace_id AND o.candidate_id=r.candidate_id
     AND rtrim(o.source->>'sourceUrl','/')=rtrim(page->>'url','/'))
    OR EXISTS(SELECT 1 FROM page_evidence e WHERE ($3::uuid[] IS NULL OR e.id=ANY($3::uuid[])) AND e.source_reference=page->>'url'
@@ -86,7 +87,9 @@ async function readPhoneSnapshots(ctx:RepositoryContext,rows:readonly ManualPros
  LEFT JOIN sourcing_retained_identity_decisions d ON d.workspace_id=r.workspace_id AND d.candidate_id=r.candidate_id AND d.id=r.retained_identity_decision_id
  LEFT JOIN sourcing_qualification_runs original ON original.workspace_id=d.workspace_id AND original.candidate_id=d.candidate_id AND original.id=d.original_run_id
  WHERE c.workspace_id=$1 AND c.id=ANY($2::uuid[]) AND c.status<>'dismissed'
- AND COALESCE(r.reason,'') NOT IN ('source_unavailable','source_not_permitted','no_readable_text') ORDER BY c.id`,[ctx.scope.workspaceId,rows.map(row=>row.id),evidenceIds])).rows;
+ AND COALESCE(r.reason,'') NOT IN ('source_unavailable','source_not_permitted','no_readable_text') ORDER BY c.id`,[ctx.scope.workspaceId,rows.map(row=>row.id),evidenceIds,
+  // ADR0034: a raw place's landing page is the canonical URL its research seed fetches, never its stored website text.
+  JSON.stringify(Object.fromEntries(rows.flatMap(row=>{const landing=discoveryResearchSeed(row.payload)?.sourceUrl;return landing?[[row.id,landing]]:[];})))])).rows;
 }
 
 /** Only whole structured business_phone fact values are normalized. No mining
