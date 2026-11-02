@@ -39,12 +39,17 @@ export function projectPreparedProspect(row:ManualProspectRow,snapshot:ManualPho
   // other page's lineage step is linked, whatever its path and whether the landing has citable text.
   const pages=preparedCaptureManifest(snapshot)?.pages??[],steps=new Set(pages.flatMap(page=>page.redirectUrls.slice(0,-1)));
   for(const page of pages)if(admitted.capturedIds.has(page.observationId)&&!steps.has(page.url))linked.add(page.observationId);
-  for(const {source,captured,expires} of admitted.pages){
+  for(const {source,captured,selectionOnly,expires} of admitted.pages){
+   // A selection-only page contributes only the judgment run's selected blocks, as business (or contrary) passages.
+   const selected=(block:{id:string;text:string})=>judged?.get(selection(source.id,block.id))===block.text;
+   if(selectionOnly&&!source.blocks.some(selected))continue;
    usablePages++;if(source.truncated)partialPages++;
    if(captured&&admitted.captureDeadline!==null)usedSourceDeadlines.push(admitted.captureDeadline);
    if(expires!==undefined)usedSourceDeadlines.push(expires);
    for(const block of source.blocks){
-    const classification=classifyPreparedPassage(block.text,observed.locality??'',judged===null?undefined:judged.get(selection(source.id,block.id))===block.text);
+    if(selectionOnly&&!selected(block))continue;
+    const found=classifyPreparedPassage(block.text,observed.locality??'',judged===null?undefined:selected(block));
+    const classification=selectionOnly?{...found,kinds:found.kinds.filter(kind=>kind==='business'||kind==='contrary'),usefulOperations:false}:found;
     if(block.text.length>2000){unshown=true;if(classification.contrary)contraryBeyondBound=true;continue;}
     if(!classification.kinds.length)continue;
     // Callable needs a supported US literal under the reviewed same-block phone grammar, as published.

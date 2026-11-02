@@ -21,7 +21,9 @@ export function preparedPhoneSource(snapshot:ManualPhoneSnapshot,now:number):Pre
  const admitted=admitPreparedPages(snapshot,now,deadlines);
  const observations:SourceObservation[]=[],authorities:Record<string,LiteralAuthority>={},moved=new Set<string>();
  let partial=admitted.unshown;
- for(const {source,moved:onMovedSite,expires} of admitted.pages){
+ for(const {source,moved:onMovedSite,selectionOnly,expires} of admitted.pages){
+  // A selection-only page is cited for business judgment alone, never for a phone.
+  if(selectionOnly)continue;
   const expiresAt=Math.min(Date.parse(source.retrievedAt)+PREPARED_PHONE_HORIZON_MS,admitted.captureDeadline??Infinity,expires??Infinity);
   if(!Number.isFinite(expiresAt)||expiresAt<=now){partial=true;continue;}
   observations.push(source);

@@ -10,12 +10,12 @@ const fold=(value:string)=>value.normalize('NFKC').replace(/\s+/gu,' ').trim().t
 const literal=(text:string,value:string)=>` ${fold(text).replace(/[^\p{L}\p{N}]+/gu,' ')} `.includes(` ${fold(value).replace(/[^\p{L}\p{N}]+/gu,' ')} `);
 const legacyStates:Readonly<Record<string,string>>={MA:'Massachusetts',RI:'Rhode Island',TX:'Texas'};
 const host=(url:string|null)=>{try{return new URL(url??'').hostname.toLowerCase().replace(/^www\./u,'');}catch{return null;}};
-/** A model selection on a complete first-party page of a moved company site (ADR0034, another host than the
- * candidate website). Only a residential_management selection there is kept, as prepared-brief business context;
- * it is never a native/publication citation, so every citation reader leaves it out. */
-export function preparedOffSiteSelection(candidate:Pick<QualificationCandidateContext,'website'>,fact:QualificationFact,observations:readonly SourceObservation[]):boolean {
+/** A model selection on a first-party page that is no citation source: a truncated page, or a page of a moved company
+ * site (ADR0034, another host than the candidate website). Only a residential_management selection there is kept, as
+ * prepared-brief business judgment; it is never a native/publication citation, so every citation reader leaves it out. */
+export function preparedOnlySelection(candidate:Pick<QualificationCandidateContext,'website'>,fact:QualificationFact,observations:readonly SourceObservation[]):boolean {
  const source=observations.find(s=>s.id===fact.observationId);
- return source!==undefined&&source.firstParty&&!source.truncated&&host(source.url)!==null&&host(source.url)!==host(candidate.website);
+ return source!==undefined&&source.firstParty&&host(source.url)!==null&&(source.truncated||host(source.url)!==host(candidate.website));
 }
 type CitationRolesResult={ok:true;facts:QualificationFact[]}|{ok:false;reason:'invalid_evidence';diagnostic?:QualificationExtractionDiagnostic};
 /** Retained readers keep the original supplementation and ceiling behavior. */
@@ -34,7 +34,7 @@ function citationRoles(candidate:QualificationCandidateContext,selected:readonly
  };
  if(!candidate.firmName.trim()||!candidate.locality.trim()||!host(candidate.website))return fail('candidate_invalid');
  if(selected.length>30)return fail('selections_over_bound');
- selected=selected.filter(fact=>!(fact.kind==='residential_management'&&preparedOffSiteSelection(candidate,fact,observations)));
+ selected=selected.filter(fact=>!(fact.kind==='residential_management'&&preparedOnlySelection(candidate,fact,observations)));
  const sources=observations.filter(s=>s.firstParty&&!s.truncated&&host(s.url)===host(candidate.website));
  for(const [index,fact] of selected.entries()){
   const source=sources.find(s=>s.id===fact.observationId),block=source?.blocks.find(b=>b.id===fact.blockId);

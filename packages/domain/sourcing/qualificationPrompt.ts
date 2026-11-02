@@ -16,8 +16,10 @@ export interface QualificationExtractionProvider {
  countInputTokens(input:QualificationExtractionRequest):Promise<number>;
  extract(input:QualificationExtractionRequest):Promise<QualificationExtractionOutcome>;
 }
+/** Selections per answer and facts per stored run (`qualificationEvidenceSchema`). */
+export const QUALIFICATION_FACT_LIMIT=30;
 export const qualificationSelectionSchema=z.strictObject({
- selections:z.array(z.strictObject({kind:qualificationFactSchema.shape.kind,observationId:z.uuid(),blockId:z.string().min(1).max(80)})).max(30),
+ selections:z.array(z.strictObject({kind:qualificationFactSchema.shape.kind,observationId:z.uuid(),blockId:z.string().min(1).max(80)})).max(QUALIFICATION_FACT_LIMIT),
  openingQuestion:z.string().max(240).nullable(),
 });
 const STRICT_RESIDENTIAL_MANAGEMENT=`For residential_management, select a descriptive statement that explicitly establishes that the firm manages residential properties, homes or apartments; a navigation label such as "Property Management" is insufficient. Prefer the firm's descriptive services/about paragraph over headings or menus.`;
