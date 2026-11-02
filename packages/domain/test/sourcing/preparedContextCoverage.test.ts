@@ -25,7 +25,7 @@ it('prepares substantive maintenance context with residential context while comp
  const brief=f.read();expect(brief).toMatchObject({state:'prepared',contactAuthority:'not_granted'});
  expect(brief.passages).toContainEqual(expect.objectContaining({kind:'workflow',quote:maintenance,observationId,url:f.source.url}));
  expect(brief.unknowns.join(' ')).not.toMatch(/residential.*(?:unknown|not established|unverified)/iu);
- expect(brief.policyVersion==='prepared-prospect-v2'&&brief.callable).toMatchObject({state:'not_callable',residential:true,missing:['no_business_context','no_published_phone']});
+ expect(brief.policyVersion==='prepared-prospect-v2'&&brief.callable).toMatchObject({state:'not_callable',residential:true,missing:['no_published_phone']});
  expect(brief.unknowns.join(' ')).toMatch(/publisher.*identity.*(?:not|unverified)/iu);
 });
 
@@ -48,7 +48,7 @@ it.each([
  expect(brief.passages).toContainEqual(expect.objectContaining({kind:'workflow',quote:text}));
  // Step1.6/ADR0034: tenant or resident operations are residential property-management context.
  expect(brief.unknowns.join(' ')).not.toMatch(/residential.*unknown/iu);
- expect(brief.policyVersion==='prepared-prospect-v2'&&brief.callable).toMatchObject({state:'not_callable',residential:true,missing:expect.arrayContaining(['no_business_context','no_published_phone'])});
+ expect(brief.policyVersion==='prepared-prospect-v2'&&brief.callable).toMatchObject({state:'not_callable',residential:true,missing:expect.arrayContaining(['no_published_phone'])});
 });
 
 it.each([

@@ -11,6 +11,7 @@ import {ownSitePageKind,type OwnSitePageKind} from '../research/sourcePolicy.ts'
 
 export interface PreparedRunIdentity {id:string;candidate_revision:number}
 type Passage=PreparedProspectCurrentBrief['passages'][number];
+const propertySoftware=/\b(?:AppFolio|Buildium)\b/iu;
 const OWN_SITE_SECTION:Partial<Record<Passage['kind'],OwnSitePageKind>>={contact:'contact',business:'about',person:'team'};
 /** Dated original passages only. A preparation assessment never changes a stored
  * qualification, resolves a canonical identity, or grants a channel/endpoint. */
@@ -63,15 +64,16 @@ export function projectPreparedProspect(row:ManualProspectRow,snapshot:ManualPho
  const hasOperations=all.some(item=>item.classification.usefulOperations);
  const hasResidential=all.some(item=>item.classification.residentialContext);
  const prepared=(has('business')||hasOperations)&&!hasContrary;
- // ADR0034: research readiness only. Only a company page is callable; phone and person
- // come from blocks included in this brief.
+ // ADR0034: research readiness only. Only a company page with a published US phone and no contrary
+ // context is callable; business wording and residential fit are shown signals, not gates. Phone and
+ // person come from blocks included in this brief.
  // In brief order, so the phone is the first one the brief shows.
  const included=passages.flatMap(p=>all.filter(item=>p.observationId===item.passage.observationId&&p.blockId===item.passage.blockId).slice(0,1));
  const phone=included.find(item=>item.phone!==null)?.phone??null,person=included.find(item=>item.classification.kinds.includes('person')&&item.passage.quote.length<=200)?.passage.quote??null;
  const page=observed.website===null?null:classifyDiscoveryPage({url:observed.website,title:observed.observedName});
- const missing:PreparedProspectCallable['missing']=[...(!prepared?['needs_research' as const]:[]),...(hasContrary?['contrary_context' as const]:[]),
-  ...(!has('business')?['no_business_context' as const]:[]),...(phone===null?['no_published_phone' as const]:[]),...(page==='list'?['list_page' as const]:page!=='company'?['not_company_page' as const]:[])];
- const callable:PreparedProspectCallable={state:missing.length?'not_callable':'callable',missing,phone,person,residential:hasResidential};
+ const missing:PreparedProspectCallable['missing']=[...(hasContrary?['contrary_context' as const]:[]),
+  ...(phone===null?['no_published_phone' as const]:[]),...(page==='list'?['list_page' as const]:page!=='company'?['not_company_page' as const]:[])];
+ const callable:PreparedProspectCallable={state:missing.length?'not_callable':'callable',missing,phone,person,residential:hasResidential,businessContext:has('business'),software:passages.some(p=>propertySoftware.test(p.quote))};
  // Hidden/oversized contrary context still contributes to the assessment.
  const deadlines=usedSourceDeadlines;
  const unknowns=[
