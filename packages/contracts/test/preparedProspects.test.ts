@@ -1,19 +1,26 @@
 import {expect,it} from 'vitest';
-import {preparedProspectBriefSchema,preparedProspectCallableSchema,preparedProspectListInputSchema,preparedProspectSummarySchema} from '../src/preparedProspects.ts';
+import {preparedCallableRank,preparedProspectBriefSchema,preparedProspectCallableSchema,preparedProspectListInputSchema,preparedProspectSummarySchema} from '../src/preparedProspects.ts';
 
 const at='2026-10-31T12:00:00.000Z',id='10000000-0000-4000-8000-000000000001';
-const callable={state:'callable',missing:[],phone:'(804) 555-0142',person:'Jordan Reyes, Owner',residential:true} as const;
+const callable={state:'callable',missing:[],phone:'(804) 555-0142',person:'Jordan Reyes, Owner',residential:true,businessContext:true,software:false} as const;
 const summary={target:{candidateId:id,candidateRevision:1,runId:id},displayName:'Peak Property Management',discoveryLabel:'Peak Property Management',website:'https://peak.example.test/',
  targetingLocality:'Richmond',targetingRegion:'VA',state:'prepared',summary:'Retained own-site context.',unknowns:[],validUntil:null,callable,companyHost:'peak.example.test'};
 const detail={checkedAt:at,nextAction:'Research the appropriate Person.',contactAuthority:'not_granted',passages:[],coverage:'complete_retained_pages'};
 
 it('parses a closed callable assessment and refuses inconsistent or open states',()=>{
  expect(preparedProspectCallableSchema.parse(callable)).toEqual(callable);
- expect(preparedProspectCallableSchema.parse({state:'not_callable',missing:['needs_research','list_page'],phone:null,person:null,residential:false}).missing).toEqual(['needs_research','list_page']);
+ expect(preparedProspectCallableSchema.parse({state:'not_callable',missing:['contrary_context','list_page'],phone:null,person:null,residential:false}).missing).toEqual(['contrary_context','list_page']);
  expect(preparedProspectCallableSchema.parse({state:'not_callable',missing:['not_company_page'],phone:'(804) 555-0142',person:null,residential:false}).missing).toEqual(['not_company_page']);
- for(const value of [{...callable,phone:null},{...callable,missing:['list_page']},{...callable,state:'not_callable'},{...callable,missing:['list_page','list_page'],state:'not_callable'},
+ for(const value of [{...callable,missing:['needs_research'],state:'not_callable'},{...callable,phone:null},{...callable,missing:['list_page']},{...callable,state:'not_callable'},{...callable,missing:['list_page','list_page'],state:'not_callable'},
   {...callable,missing:['permission_granted'],state:'not_callable'},{...callable,contactAuthority:'granted'},{...callable,person:'x'.repeat(201)}])
   expect(preparedProspectCallableSchema.safeParse(value).success).toBe(false);
+});
+
+it('ranks callable companies residential fit, then a named person, then AppFolio/Buildium, then business wording',()=>{
+ const bare={residential:false,person:null,software:false,businessContext:false};
+ const order=[{...bare,residential:true,person:'Jordan Reyes, Owner'},{...bare,residential:true},{...bare,person:'Jordan Reyes, Owner',software:true,businessContext:true},{...bare,software:true},{...bare,businessContext:true},bare].map(preparedCallableRank);
+ expect(order).toEqual([...order].sort((a,b)=>b-a));expect(new Set(order).size).toBe(order.length);
+ expect(preparedCallableRank({...bare,residential:true})).toBeGreaterThan(preparedCallableRank({...bare,person:'Jordan Reyes, Owner',software:true,businessContext:true}));
 });
 
 it('requires callable and companyHost on summaries and current briefs while V1 briefs stay readable without them',()=>{

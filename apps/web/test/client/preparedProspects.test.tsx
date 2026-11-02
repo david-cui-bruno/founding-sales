@@ -8,7 +8,7 @@ import {PreparedProspects} from '../../src/client/PreparedProspects.tsx';
 import {BrowserProspectsWorkspace} from '../../src/client/BrowserProspectsWorkspace.tsx';
 const at='2026-10-30T12:00:00.000Z',id='10000000-0000-4000-8000-000000000001',run='10000000-0000-4000-8000-000000000002';
 const revision='a'.repeat(64),expiry='2026-10-31T12:00:00.000Z';
-const notCallable:PreparedProspectCallable={state:'not_callable',missing:['no_published_phone'],phone:null,person:null,residential:true};
+const notCallable:PreparedProspectCallable={state:'not_callable',missing:['no_published_phone'],phone:null,person:null,residential:true,businessContext:true,software:false};
 const row=(index=1,callable:PreparedProspectCallable=notCallable):PreparedProspectSummary=>preparedProspectSummarySchema.parse({target:{candidateId:`10000000-0000-4000-8000-${String(index).padStart(12,'0')}`,candidateRevision:2,runId:run},displayName:`Harbor Residential ${index}`,discoveryLabel:`Home | HRM ${index}`,website:'https://harbor.example.test/',targetingLocality:'Boston',targetingRegion:'MA',state:'prepared',summary:'Retained first-party residential management and maintenance workflow context.',unknowns:['Business email is unknown','Buying intent is unknown'],validUntil:expiry,callable,companyHost:'harbor.example.test'});
 // V1 briefs predate callable assessment; rolling clients still read them.
 const legacy=({callable:_callable,companyHost:_companyHost,...summary}:PreparedProspectSummary)=>summary;
@@ -215,7 +215,7 @@ it('does not group records without a website or across distinct directory paths,
  f.client.dispose();
 });
 
-const callable:PreparedProspectCallable={state:'callable',missing:[],phone:'(804) 555-0142',person:'Jordan Reyes, Owner',residential:true};
+const callable:PreparedProspectCallable={state:'callable',missing:[],phone:'(804) 555-0142',person:'Jordan Reyes, Owner',residential:true,businessContext:true,software:false};
 const listUrl='/browser/api/sourcing/prepared-prospects/list';
 it('badges callable rows and Callable today reads newest order, showing only callable rows of this page honestly',async()=>{
  const f=await mounted();await screen.findByRole('heading',{name:row().displayName});
@@ -273,6 +273,17 @@ it('Callable today shows and counts one callable company per host while the norm
  expect(screen.getByText(/^2 callable companies \(one per website host, not repeating earlier pages\) among 3 newest records on this page\./u)).toBeTruthy();
  fireEvent.click(screen.getByRole('button',{name:'Callable today'}));await screen.findByRole('heading',{name:row(2).displayName});
  expect(screen.getAllByRole('button',{name:/Open company brief for/iu})).toHaveLength(3);f.client.dispose();
+});
+
+it('Callable today orders callable companies by fit signals above a bare phone-only company, newest first among equals, and says why',async()=>{
+ const f=await mounted();await screen.findByRole('heading',{name:row().displayName});
+ const at=(index:number,facts:Partial<PreparedProspectCallable>)=>({...row(index,{...callable,...facts}),companyHost:`h${index}.example.test`});
+ const bare={residential:false,person:null,businessContext:false};
+ f.rows([at(1,bare),at(2,{...bare,businessContext:true}),at(3,{}),at(4,{...bare,software:true}),at(5,bare)]);
+ fireEvent.click(screen.getByRole('button',{name:'Callable today'}));await screen.findByRole('heading',{name:row(3).displayName});
+ expect(screen.getAllByRole('heading',{level:3}).map(h=>h.textContent)).toEqual([3,4,2,1,5].map(index=>row(index).displayName));
+ expect(screen.getAllByText(/No property-management wording found/u)).toHaveLength(3);expect(screen.getAllByText(/AppFolio or Buildium named in sources/u)).toHaveLength(1);
+ expect(screen.getByText(/ordered by residential context, a named person, AppFolio or Buildium named, then property-management wording, then newest/iu)).toBeTruthy();f.client.dispose();
 });
 
 it('Callable today does not repeat a host across pages of one continuation and Previous reproduces the same result',async()=>{
