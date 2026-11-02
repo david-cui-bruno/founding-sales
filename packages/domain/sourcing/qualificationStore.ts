@@ -17,7 +17,7 @@ import { workspaceBusinessZone } from '../research/ledger.ts';
 import { enqueueJob } from '../jobs/jobStore.ts';
 import { jobIdempotencyKey } from '../jobs/jobKinds.ts';
 import { normalizeQualificationDiagnostic } from './qualificationDiagnostics.ts';
-import {isCurrentPreparedCandidatePayload} from './discoveryIntake.ts';
+import {isCurrentPreparedCandidatePayload,preparedCandidatePayload} from './discoveryIntake.ts';
 import {retainedCandidateOnly,retainedWallNow} from './retainedAcquisition.ts';
 import {LEGACY_QUALIFICATION_PRODUCER,PREPARED_IDENTITY_PRODUCER,effectivePreparedCandidate,type PreparedIdentityProof} from './preparedIdentity.ts';
 import {preparedIdentityProducerAuthority} from './preparedIdentityAuthority.ts';
@@ -45,7 +45,7 @@ export async function requestQualification(context:RepositoryContext,input:{cand
   const workspaceId=context.scope.workspaceId;
   const candidate=(await context.db.query<CandidateRow>(`${candidateRead} FOR UPDATE`,[workspaceId,input.candidateId])).rows[0];
   if(!candidate)return refused('not_found');
-  if(!isCurrentPreparedCandidatePayload(candidate.payload))return refused('candidate_format_not_supported');
+  const prepared=preparedCandidatePayload(candidate.payload);if(!prepared)return refused('candidate_format_not_supported');
   if(candidate.revision!==input.expectedRevision)return refused('candidate_changed');
   if(candidate.status==='dismissed')return refused('candidate_dismissed');
   if(candidate.qualification_blocked)return refused('identity_review_required');
@@ -61,7 +61,7 @@ export async function requestQualification(context:RepositoryContext,input:{cand
   const count=await incrementDailyCounter(context,{subjectKind:'workspace',subjectKey:workspaceId,counterKind:RESEARCH_FIRM_RUN_COUNTER,
     businessTimeZone:await workspaceBusinessZone(context),at:now},settings.dailyFirmCeiling);
   if(!count.allowed)return refused('daily_firm_ceiling');
-  const producerVersion=await preparedIdentityProducerAuthority(context,candidate.id,candidate.revision,candidate.payload)?PREPARED_IDENTITY_PRODUCER:LEGACY_QUALIFICATION_PRODUCER;
+  const producerVersion=await preparedIdentityProducerAuthority(context,candidate.id,candidate.revision,prepared)?PREPARED_IDENTITY_PRODUCER:LEGACY_QUALIFICATION_PRODUCER;
   const runId=randomUUID();
   await context.db.query(`INSERT INTO sourcing_qualification_runs
     (workspace_id,id,candidate_id,candidate_revision,fingerprint,prompt_version,policy_version,model_name,producer_version,capture_policy_version)
@@ -106,7 +106,7 @@ export async function finishQualification(context:RepositoryContext,input:{runId
   if(identity.capture_policy_version===PREPARED_CAPTURE_POLICY)await lockDiscoveryReviewSources(context);
   const candidate=(await context.db.query<CandidateRow>(`${candidateRead} FOR UPDATE`,[workspaceId,identity.candidate_id])).rows[0];
   if(!candidate)return refused('not_found');
-  if(!isCurrentPreparedCandidatePayload(candidate.payload))return refused('candidate_format_not_supported');
+  const prepared=preparedCandidatePayload(candidate.payload);if(!prepared)return refused('candidate_format_not_supported');
   const run=(await context.db.query<QualificationRunRow>('SELECT * FROM sourcing_qualification_runs WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[workspaceId,input.runId])).rows[0];
   if(!run)return refused('not_found');
   if(run.candidate_id!==candidate.id)return refused('candidate_changed');
@@ -125,9 +125,9 @@ export async function finishQualification(context:RepositoryContext,input:{runId
   if(evidence.data.observations.some(source=>Date.parse(source.retrievedAt)>Date.parse(now)+1000))return refused('invalid_evidence');
   const producer=run['producer_version']===undefined?LEGACY_QUALIFICATION_PRODUCER:run['producer_version'];
   if(producer!==LEGACY_QUALIFICATION_PRODUCER&&producer!==PREPARED_IDENTITY_PRODUCER)return refused('invalid_evidence');
-  if(producer===PREPARED_IDENTITY_PRODUCER&&!emptyWorkerDrain&&!await preparedIdentityProducerAuthority(context,candidate.id,candidate.revision,candidate.payload))return refused('source_authority_changed');
-  if(input.preparedIdentity!==undefined&&(input.reason!==null||producer!==PREPARED_IDENTITY_PRODUCER||!effectivePreparedCandidate(candidate.payload,evidence.data.facts,evidence.data.observations,producer,input.preparedIdentity,now)))return refused('invalid_evidence');
-  const capture=input.preparedCapture===undefined?null:validatePreparedCapture(input.preparedCapture,{candidateId:candidate.id,candidateRevision:candidate.revision,sourceUrl:candidate.payload.sourceUrl,observations:evidence.data.observations});
+  if(producer===PREPARED_IDENTITY_PRODUCER&&!emptyWorkerDrain&&!await preparedIdentityProducerAuthority(context,candidate.id,candidate.revision,prepared))return refused('source_authority_changed');
+  if(input.preparedIdentity!==undefined&&(input.reason!==null||producer!==PREPARED_IDENTITY_PRODUCER||!effectivePreparedCandidate(prepared,evidence.data.facts,evidence.data.observations,producer,input.preparedIdentity,now)))return refused('invalid_evidence');
+  const capture=input.preparedCapture===undefined?null:validatePreparedCapture(input.preparedCapture,{candidateId:candidate.id,candidateRevision:candidate.revision,sourceUrl:prepared.sourceUrl,observations:evidence.data.observations});
   if(input.preparedCapture!==undefined&&(run['capture_policy_version']!==capture?.version||run['retained_identity_decision_id']||!capture))return refused('invalid_evidence');
   if(capture&&!await preparedCaptureSourcesAvailable(context,capture.pages.flatMap(page=>page.redirectUrls)))return refused('source_authority_changed');
   if(capture?.version===PREPARED_CAPTURE_POLICY&&!await preparedCaptureWitnessesCurrent(context,capture.pages.flatMap(page=>page.redirectUrls),input.preparedCaptureSourceWitness))return refused('source_authority_changed');
