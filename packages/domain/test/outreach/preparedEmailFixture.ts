@@ -14,12 +14,20 @@ import {createTemplateVersion} from '../../templates/templates.ts';
 import {createSequence,createDraftVersion,publishVersion} from '../../sequences/definitions.ts';
 import {dnsEmailVerifier,type EmailVerifier} from '../../outreach/emailVerification.ts';
 import {runPreparedEmailAdmission} from '../../outreach/preparedEmailAdmission.ts';
+import {runPeopleEnrichment} from '../../outreach/peopleEnrichment.ts';
+import type {PeopleLookup,PeopleProvider,ProviderPerson} from '../../outreach/peopleProvider.ts';
+import {updateSetting} from '../../settings/store.ts';
 import type {MailDomainResolver} from '../../crm/routeValidation.ts';
 import {researchPageFetch,type RawResponse} from '../../../../apps/worker/src/research/companyPageFetch.ts';
 
-/** ADR0035 fixture: a real approved email campaign (mailbox, booking link, postal address, five approved touches) and real own-site
+/** A verified decision-maker answer for `host`; `patch` changes any person field. Never a real provider. */
+export const ownerAt=(host:string,patch:Partial<ProviderPerson>={},creditsUsed=1):PeopleLookup=>({ok:true,creditsUsed,person:{providerPersonId:`p-${host}`,firstName:'Jordan',lastName:'Blake',title:'Owner',email:`jordan.blake@${host}`,emailStatus:'verified',matchConfidence:'high',...patch}});
+/** A fake people provider that records every host it was asked about and answers `answer(host)` (default: the verified owner above). */
+export function fakePeople(answer:(host:string)=>PeopleLookup=ownerAt){const calls:string[]=[];const provider:PeopleProvider={providerKey:'fake_people',maxCreditsPerLookup:1,findDecisionMaker:async({domain})=>{calls.push(domain);return answer(domain);}};return {provider,calls};}
+/** ADR0035/0036 fixture: a real approved email campaign (mailbox, booking link, postal address, five approved touches) and real own-site
  * prepared captures. `prepared` runs the real fetch and qualification; `invalid` makes the extractor answer invalid_evidence, which is
- * what most real prepared candidates carry (run.reason NOT NULL). `opening` also approves a campaign opening policy. */
+ * what most real prepared candidates carry (run.reason NOT NULL). `opening` also approves a campaign opening policy. `enrich` runs the real
+ * enrichment pass with a fake provider (people enrichment is switched on with `dailyCredits`, default 100); `pass` is the admission pass. */
 const response=(body:string):RawResponse=>({statusCode:200,headers:{'content-type':'text/html'},body:new TextEncoder().encode(body),abortedOverCap:false});
 const business='<p>Our property management company manages residential homes for owners and coordinates tenant maintenance requests.</p>';
 const page=(website:string,contact:string)=>researchPageFetch({lookup:async()=>['93.184.216.34'],request:async input=>{
@@ -31,7 +39,7 @@ export const goodMx:MailDomainResolver={resolveMx:async()=>[{exchange:'mx.mail-h
 export const verifier=dnsEmailVerifier(goodMx,50);
 export const BOOKING_LINK='https://cal.com/david-cui-yrp9dm/demo',POSTAL_ADDRESS='339 Thayer Street, Providence, RI 02906';
 /** `manyCaptures` lifts the workspace's daily research ceilings so a test can make more than the default number of real captures. */
-export async function preparedEmailWorld(options:{opening?:boolean;regions?:string[];manyCaptures?:boolean}={}){
+export async function preparedEmailWorld(options:{opening?:boolean;regions?:string[];manyCaptures?:boolean;dailyCredits?:number}={}){
  const db=await createTestDatabase(),seed=await seedTwoWorkspaces(db.session),runtime:SessionQueryable=await db.appRuntimeSession(),ws=seed.alpha.workspaceId;
  const ctx=(worker=false)=>repositoryContext(workspaceScope(ws,worker?{kind:'system',component:'worker'}:{kind:'user',role:'admin',userId:seed.alpha.admin.userId}),runtime);
  const tx=<T>(fn:()=>Promise<T>)=>withTransaction(runtime,fn);
@@ -48,15 +56,18 @@ export async function preparedEmailWorld(options:{opening?:boolean;regions?:stri
  }
  const admissions=async()=>(await runtime.query<{address:string;source_kind:string;region:string}>("SELECT r.address,a.source_kind,c.payload->>'region' AS region FROM outreach_email_campaign_admissions a JOIN email_addresses r ON r.workspace_id=a.workspace_id AND r.id=a.route_id JOIN sourcing_candidates c ON c.workspace_id=a.workspace_id AND c.id=a.candidate_id WHERE a.workspace_id=$1 ORDER BY r.address",[ws])).rows;
  const pass=(v:EmailVerifier=verifier)=>runPreparedEmailAdmission(ctx(true),{verifier:v});
+ const setPeople=(value:{enabled:boolean;dailyCredits:number})=>tx(()=>updateSetting(ctx(),{settingKey:'people_enrichment',value}));
+ const enrich=(people:{provider:PeopleProvider}=fakePeople())=>runPeopleEnrichment(ctx(true),people);
  if(options.manyCaptures)await runtime.query('INSERT INTO research_settings(workspace_id,enabled,max_pages_per_firm,daily_firm_ceiling,daily_cost_ceiling_cents,monthly_cost_ceiling_cents) VALUES($1,true,1,10000,1000000,10000000)',[ws]);
  else await runtime.query('INSERT INTO research_settings(workspace_id,enabled,max_pages_per_firm) VALUES($1,true,1)',[ws]);
  const mailbox=(await runtime.query<{id:string}>("INSERT INTO mailboxes(workspace_id,owner_user_id,email_address,provider_account_id,status,sync_state,history_id,history_id_updated_at,baseline_from_at,baseline_completed_at,coverage_watermark_at) VALUES($1,$2,$3,$4,'connected','ready','1000',now(),now()-interval '30 days',now(),now()) RETURNING id",[ws,seed.alpha.admin.userId,`campaign-${randomUUID()}@example.test`,`local-${randomUUID()}`])).rows[0]!.id;
  await runtime.query("INSERT INTO workspace_settings(workspace_id,setting_key,version,value,change_note,changed_by_user_id) VALUES($1,'postal_address',1,$2::jsonb,'fixture',$3)",[ws,JSON.stringify({address:POSTAL_ADDRESS}),seed.alpha.admin.userId]);
  await runtime.query("INSERT INTO workspace_settings(workspace_id,setting_key,version,value,change_note,changed_by_user_id) VALUES($1,'booking_link',1,$2::jsonb,'fixture',$3)",[ws,JSON.stringify({url:BOOKING_LINK}),seed.alpha.admin.userId]);
  const authorization=await tx(()=>setProspectingAuthorization(ctx(),{mailboxId:mailbox,expectedRevision:0,enabled:true,basis:'owner_reported_google_permission'}));if(!authorization.ok)throw Error(authorization.reason);
+ const people=await setPeople({enabled:true,dailyCredits:options.dailyCredits??100});if(!people.ok)throw Error(people.reason);
  const ids:string[]=[];
  for(let index=0;index<5;index++){
-  const template=await tx(()=>createTemplateVersion(ctx(),{name:`Touch ${String(index+1)}`,subject:'maintenance calls at {firm_name}',body:'Hi {firm_name} team,\n\nSo I built Callie. Grab a time: {booking_link}\n\nBest,\nDavid',footer:{signOff:'David Cui · Brown University'},requiredVariables:['firm_name','booking_link'],approve:true}));
+  const template=await tx(()=>createTemplateVersion(ctx(),{name:`Touch ${String(index+1)}`,subject:'maintenance calls at {firm_name}',body:index===0?'Hi {first_name},\n\nSo I built Callie. Grab a time: {booking_link}\n\nBest,\nDavid':'Hi {firm_name} team,\n\nSo I built Callie. Grab a time: {booking_link}\n\nBest,\nDavid',footer:{signOff:'David Cui · Brown University'},requiredVariables:index===0?['first_name','firm_name','booking_link']:['firm_name','booking_link'],approve:true}));
   if(!template.ok)throw Error(template.reason);ids.push(template.value.id);
  }
  const sequence=await tx(()=>createSequence(ctx(),{name:`Campaign ${randomUUID()}`}));if(!sequence.ok)throw Error(sequence.reason);
@@ -68,5 +79,5 @@ export async function preparedEmailWorld(options:{opening?:boolean;regions?:stri
  const openingInput=async()=>{const baseline=(await readCampaignOpeningControl(ctx(),{campaignId},allow))!.baseline!;return {campaignId,expectedCampaignRevision:1,templateVersionId:baseline.templateVersionId,templateContentHash:baseline.templateContentHash,variants:[{id:'local',text:'I noticed {{firm_name}} serves {{firm_locality}}, {{firm_region}}.'}],expiresAt:policy.expiresAt};};
  const approveOpening=async()=>tx(async()=>approveCampaignOpening(ctx(),await openingInput(),allow));
  if(options.opening){const opened=await approveOpening();if(!opened.ok)throw Error(opened.reason);}
- return {db,seed,runtime,ws,ctx,tx,prepared,admissions,pass,campaignId,approveOpening,stop:()=>db.drop()};
+ return {db,seed,runtime,ws,ctx,tx,prepared,admissions,pass,enrich,setPeople,campaignId,approveOpening,stop:()=>db.drop()};
 }

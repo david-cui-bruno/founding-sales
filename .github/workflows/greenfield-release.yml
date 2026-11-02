@@ -594,6 +594,7 @@ jobs:
               session-signing-key|device-credential-pepper)
                 value="$(openssl rand -base64 48 | tr -d '\n')" ;;
               sourcing-search) value='rehearsal-not-injected' ;;
+              apollo-api-key) value='rehearsal-not-injected' ;;
               llm-classifier-api-key)
                 value="rehearsal-$(openssl rand -hex 24)" ;;
               # Call-to-booking (0028): "unconfigured", production's flags-off state; the API reads {} as not configured. Not a credential.

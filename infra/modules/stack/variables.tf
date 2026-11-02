@@ -227,6 +227,17 @@ variable "create_registry" {
   default     = true
 }
 
+variable "worker_reads_apollo_api_key" {
+  description = <<-EOT
+    Stage two of named-person email enrichment (ADR0036): hand the worker the
+    `apollo-api-key` secret as FSS_APOLLO_API_KEY. The secret container is always
+    created, empty; ECS refuses a task whose secret has no value, so this stays false
+    until the real key has been put in, and is then flipped in a separate change.
+  EOT
+  type        = bool
+  default     = false
+}
+
 variable "sending_enabled" {
   description = <<-EOT
     `FSS_SENDING_ENABLED` on both task definitions. One of the two switches

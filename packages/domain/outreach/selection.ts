@@ -17,7 +17,8 @@ import {qualificationEvidenceSchema,type CandidateInput,type QualificationFact,t
 import type {InternalCampaignTarget} from './emailCampaignSource.ts';
 import {assessPreparedEmail} from './preparedEmailAssessment.ts';
 import type {SourcingIdentity} from '../sourcing/qualificationPolicy.ts';
-export interface EmailEvidenceRoute {address:string;sourceObservationId:string;blockId:string;identityKind:'named'|'role';displayName:string}
+/** `person`: a provider-supplied decision-maker (ADR0036): the contact carries their title and the route is a `research_provider` route at this confidence, not a page-published one. */
+export interface EmailEvidenceRoute {address:string;sourceObservationId:string;blockId:string;identityKind:'named'|'role';displayName:string;person?:{title:string;associationConfidence:number}}
 const fold=(s:string)=>s.normalize('NFKC').replace(/\s+/gu,' ').trim().toLowerCase();
 const host=(s:string)=>{try{return new URL(s).hostname.toLowerCase().replace(/^www\./u,'');}catch{return '';}};
 /** An explicit first-party address, associated with this office; never an inferred naming pattern. */

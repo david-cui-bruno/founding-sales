@@ -29,6 +29,9 @@ import {outreachReplySource} from '../handlers/outreach.ts';
 import {sourcingQualificationHandler,sourcingQualificationSource} from '../handlers/sourcingQualification.ts';
 import {prospectPhoneDiscoveryHandler,prospectPhoneDiscoverySource} from '../handlers/prospectPhoneDiscovery.ts';
 import {preparedEmailAdmitHandler,preparedEmailAdmitSource} from '../handlers/preparedEmailAdmit.ts';
+import {personEnrichHandler,personEnrichSource} from '../handlers/personEnrich.ts';
+import {apolloPeopleFromEnvironment} from '../providers/apolloPeople.ts';
+import type {PeopleProvider} from '@fss/domain/outreach/peopleProvider.ts';
 import {dnsEmailVerifier} from '@fss/domain/outreach/emailVerification.ts';
 import {qualificationExtraction} from '../sourcing/qualificationExtraction.ts';
 import {sourcingDiscoveryHandler,sourcingDiscoverySource,apolloDiscoverySource} from '../handlers/sourcingDiscovery.ts';
@@ -144,6 +147,8 @@ export interface HandlerComposition extends CaptureReadComposition {
   readonly crmMailCapture?: Parameters<typeof businessMailCaptureHandler>[0] | undefined;
   readonly socialAssets?:SocialDeletionPort|null;
   readonly apolloDiscovery?: ApolloDiscoveryDependencies;
+  /** The people-data provider (ADR0036), composed only where its key is installed. */
+  readonly peopleProvider?: PeopleProvider;
   readonly discovery?: DiscoverySearchProvider;
   readonly meetingAutoRecording?: Parameters<typeof meetingAutoRecordingJobHandler>[0] | undefined;
   readonly meetingAnalysis?: MeetingAnalyzeOptions | undefined;
@@ -295,6 +300,7 @@ export function registerHandlers(
   const search=composition.discovery&&composition.research?{provider:composition.discovery,pageFetch:composition.research.pageFetch}:undefined;
   if(search||composition.apolloDiscovery)registry.register(sourcingDiscoveryHandler(search,composition.apolloDiscovery));
   registry.register(preparedEmailAdmitHandler({verifier:dnsEmailVerifier(systemMailDomainResolver()),...log?{log}:{}}));
+  if(composition.peopleProvider)registry.register(personEnrichHandler({provider:composition.peopleProvider,...log?{log}:{}}));
   if(composition.research){
     registry.register(sourcingQualificationHandler({pageFetch:composition.research.pageFetch,extraction:composition.classifier?.processEnabled?qualificationExtraction(composition.classifier.transport):null}));
     registry.register(prospectPhoneDiscoveryHandler({pageFetch:composition.research.pageFetch,...log?{log}:{}}));
@@ -483,12 +489,13 @@ export function readTranscriptionComposition(
 }
 
 /** Which optional sources materialize work, from what this worker composed. */
-export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom' | 'transcription' | 'summary' | 'analysis' | 'meetingTranscription' | 'meetingAnalysis' | 'meetingAutoRecording'> & Partial<Pick<HandlerComposition,'research'|'discovery'|'apolloDiscovery'|'classifier'|'crmExtraction'|'crmCaptureRead'>>): {
+export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom' | 'transcription' | 'summary' | 'analysis' | 'meetingTranscription' | 'meetingAnalysis' | 'meetingAutoRecording'> & Partial<Pick<HandlerComposition,'research'|'discovery'|'apolloDiscovery'|'peopleProvider'|'classifier'|'crmExtraction'|'crmCaptureRead'>>): {
   readonly crmMailProcessing?:CrmMailEvidencePort; readonly crmCaptureRead?:boolean;
   readonly socialDraft: boolean;
   readonly qualification: boolean;
   readonly discovery: boolean;
   readonly apolloDiscovery?: ApolloBinding;
+  readonly peopleEnrichment: boolean;
   readonly sourcing: boolean;
   readonly meetingAutoRecording: boolean;
   readonly meetingAnalysis: boolean;
@@ -505,6 +512,7 @@ export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom'
     qualification: composition.research !== undefined && composition.classifier?.processEnabled===true,
     discovery: composition.discovery !== undefined && composition.research !== undefined,
     ...composition.apolloDiscovery?{apolloDiscovery:{accountRef:composition.apolloDiscovery.accountRef,keyRef:composition.apolloDiscovery.keyRef}}:{},
+    peopleEnrichment: composition.peopleProvider !== undefined,
     sourcing: composition.research !== undefined,
     meetingAutoRecording: composition.meetingAutoRecording !== undefined,
     meetingAnalysis: composition.meetingAnalysis !== undefined,
@@ -538,6 +546,7 @@ export function workerDueWorkSources(
     readonly qualification?: boolean;
     readonly discovery?: boolean;
     readonly apolloDiscovery?: ApolloBinding;
+    readonly peopleEnrichment?: boolean;
     readonly sourcing?: boolean;
     readonly meetingAutoRecording?: boolean;
     readonly meetingAnalysis?: boolean;
@@ -576,6 +585,7 @@ export function workerDueWorkSources(
     sourcingDiscoverySource(options.discovery === true),
     apolloDiscoverySource(options.apolloDiscovery),
     preparedEmailAdmitSource(),
+    personEnrichSource(options.peopleEnrichment === true),
     telephonySweepSource(),
     // Slice M1. Registered always, so the list is the documented one; it materializes a
     // job only in a worker that has a Cal.com API key to run it with — a job no handler
@@ -683,13 +693,14 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
   if(diagnosticRuntime&&!diagnostic)throw new Error('diagnostic_gmail_unavailable');
   const crmRuntime=createCrmCapabilityRuntime(crmConfiguration,{implementationCommit:buildCommit(environment),imageDigest:identity.digest,side:'worker',schemaVersion:REQUIRED_SCHEMA,gmailAvailable:deployment.gmail!==undefined});
   const crm=await composeCrmCapabilities({configuration:crmConfiguration,runtime:crmRuntime,openSession:async()=>{const client=new pg.Client({connectionString:config.database.connectionString,application_name:'fss-crm-authority'});await client.connect();return {session:asSession(client),close:()=>client.end()};},...deployment.gmail?{gmail:{...deployment.gmail,openSession:async()=>{const client=new pg.Client({connectionString:config.database.connectionString,application_name:'fss-crm-oauth'});await client.connect();return {session:asSession(client),close:()=>client.end()};}}}:{}});
-  const apolloDiscovery=apolloFromEnvironment(environment);
+  const apolloDiscovery=apolloFromEnvironment(environment),peopleProvider=apolloPeopleFromEnvironment(environment);
   const composition: HandlerComposition = {
     ...composed,
     ...crm.handlers,
     ...composed.mail&&crmConfiguration.capture?{mail:{...composed.mail,businessMailObserver:crm.observer}}:{},
     socialAssets:await socialDeletionPort(environment),
     ...apolloDiscovery?{apolloDiscovery}:{},
+    ...peopleProvider?{peopleProvider}:{},
     ...(environment['FSS_TAVILY_API_KEY']?{discovery:tavilySearch(environment['FSS_TAVILY_API_KEY'])}:{}),
     ...(zoomRecording.client!==null&&calRecording.ok&&calRecording.apiKey!==null?{meetingAutoRecording:{zoom:zoomRecording.client,calcom:calcomDemoClient({apiKey:calRecording.apiKey})}}:{}),
     ...(meetingAnalysis.options === null ? {} : { meetingAnalysis: meetingAnalysis.options }),

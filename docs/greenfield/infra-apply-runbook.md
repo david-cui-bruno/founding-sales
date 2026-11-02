@@ -217,7 +217,20 @@ Terraform creates seven **empty** Secrets Manager application entries, and two m
 | `fss-prod/llm-classifier-api-key` | reply-classifier provider key |
 | `fss-prod/twilio-voice` | Twilio Voice, as in [calling.md](calling.md); `{}` until calling is set up |
 | `fss-prod/calcom` | Cal.com webhook secret, as in [meetings.md](meetings.md); `{}` until bookings are set up |
+| `fss-prod/apollo-api-key` | Apollo API key for named-person email enrichment ([ADR0036](../adr/0036-named-person-email-enrichment.md)), as a bare string (not JSON). **Two stages, never one apply:** ECS refuses a task whose secret has no value, and production runs the worker at minimum healthy zero, so a normal apply that both created the empty entry and injected it would stop the worker and fail its replacement. Stage one is the ordinary apply with `worker_reads_apollo_api_key = false` (the committed literal in `infra/roots/production/main.tf`): it creates the empty container and does not hand it to the worker. Stage two is below the table. The API never receives the key |
 | `fss-prod/transcription` | Call transcription, `{"provider": "deepgram", "api_key": "..."}`, as in [calling.md](calling.md); `{}` until a key exists. It must hold `{}` before the apply that adds it to the worker task |
+
+**The Apollo key, in order (no targeted applies, no `-target`):**
+
+1. **Stage one, apply with injection off.** The change that adds `fss-prod/apollo-api-key` merges with `worker_reads_apollo_api_key = false` and is applied like any other (3.0 to 3.2). The empty container now exists; the worker task is unchanged and keeps running; enrichment does nothing because no key means no job.
+2. **Root installs the value**, once, with the value never on a command line:
+   ```bash
+   aws secretsmanager put-secret-value --secret-id fss-prod/apollo-api-key --secret-string file:///dev/stdin
+   ```
+   Paste the key, Ctrl-D. Read back only the version id (`aws secretsmanager describe-secret --secret-id fss-prod/apollo-api-key --query 'VersionIdsToStages'`), never the value.
+3. **Stage two, a separate change.** A one-line pull request flips `worker_reads_apollo_api_key = true` in `infra/roots/production/main.tf`; it is planned, read and applied as its own release, which deploys the worker with `FSS_APOLLO_API_KEY`. Only then, and only if an admin has set `people_enrichment`, does the worker enrich.
+
+If stage two is applied before step 2, ECS cannot start the replacement worker task (`ResourceInitializationError` naming the secret). Revert the literal to `false` and apply, or install the value and force a worker deployment.
 
 Nothing else goes in either Google entry. The Pub/Sub topic and the Workspace domain are public identifiers and travel in the task environment (`FSS_GMAIL_PUSH_TOPIC`, `FSS_GOOGLE_HOSTED_DOMAIN`). Neither is an input any more: the topic is the `gmail_push_topic` literal in `infra/roots/production`, which `infra/roots/production-google` owns and outputs, and the domain is the `google_hosted_domain` literal `usecallie.com` in `infra/modules/stack`. See [`docs/archive/release-first.md`](../archive/release-first.md) 1.6.
 

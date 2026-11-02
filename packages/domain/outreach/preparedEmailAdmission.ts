@@ -3,19 +3,18 @@ import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {withTransaction} from '../db/queryable.ts';
 import {firstSuppressed} from '../suppression/effective.ts';
 import {lockDiscoveryReviewSources} from '../sourcing/discoveryReviewVisibility.ts';
-import {listPreparedEmailCandidates} from '../sourcing/preparedEmailRead.ts';
 import {enrollContact} from '../sequences/enrollments.ts';
 import {admitEmailCandidate} from './emailAdmission.ts';
 import {createOutreachPlan} from './plans.ts';
 import {assessEmailCandidate} from './selection.ts';
-import {admittedCandidateIds,preparedEmailAccept} from './preparedEmailSelection.ts';
+import {admittedCandidateIds,listPreparedEmailChoices} from './preparedEmailSelection.ts';
 import type {PreparedEmailTarget} from './emailCampaignSource.ts';
 import {admissionStop,campaignAdmissionCounts,campaignCapacityAvailable,lockEmailCampaignAdmissionGates} from './emailCampaignAdmission.ts';
 import {campaignAuthorityCurrent,campaignCandidateProvenance,campaignDatabaseNow,type EmailCampaignRow} from './emailCampaignAuthority.ts';
 import {emailVerificationDecides,emailVerificationOutcome,latestEmailVerification,recordEmailVerification,type EmailVerifier} from './emailVerification.ts';
 type Result={ok:true;value:EmailCampaignAdmission}|{ok:false;reason:string};
 
-/** ADR0035. One own-site prepared company into one approved campaign, composed from the same owners as a research Firm: campaign,
+/** ADR0035/0036. One own-site prepared company, with its provider-found named decision-maker, into one approved campaign, composed from the same owners as a research Firm: campaign,
  * email assessment/contact/route, outreach plan, enrollment and the cap history row. The Firm is created here and is always new.
  * Lock order: source lifecycle, send gate, Today, sourcing identity, campaign, then candidate and run. A confirmed refusal rolls back
  * only this admission; an unknown failure propagates. The caller owns the transaction (the locks are transaction-level). */
@@ -61,11 +60,12 @@ async function admit(ctx:RepositoryContext,campaign:EmailCampaignRow,target:Prep
 export interface PreparedEmailPass {admitted:number;checked:number;failed:number}
 /** At most this many lists of room+10 per campaign per pass; each list skips everything already tried this pass. */
 const ROUNDS=8;
-/** The worker's pass for a workspace: for each unrevoked, unexpired campaign without an opening policy and with room, take prepared
- * companies in the prepared list's order (one per host), check each published address once (syntax, real MX, no consumer/disposable
- * domain; no SMTP, no third party) and admit the valid ones. A resolver error records nothing and the address is asked again next
- * pass. A recorded invalid answer, an existing Firm with the company's name or website host and an unresolvable time zone (the refusals
- * admission would repeat on every pass) are excluded before the list's limit, within the bounded 400-record scan, and what was tried this pass is skipped by the next list, so
+/** The worker's pass for a workspace (ADR0036): for each unrevoked, unexpired campaign without an opening policy and with room, take prepared
+ * companies that have a current found provider person (a named decision-maker with a verified own-domain personal address) in the prepared
+ * list's order (one per host), check the person's address once (syntax, real MX, no consumer/disposable domain; no SMTP, no third party) and
+ * admit the valid ones. A resolver error records nothing and the address is asked again next pass. A recorded invalid answer, an existing
+ * Firm with the company's name or website host, an unresolvable time zone and a stopped address (the refusals admission would repeat on every
+ * pass) are excluded before the list's limit, within the bounded 400-record scan, and what was tried this pass is skipped by the next list, so
  * refused or invalid companies never starve later valid ones. The check and reads run in autocommit before any admission lock; each
  * admission is its own transaction (the caller must not already hold one), so a check commits whatever an admission does. */
 export async function runPreparedEmailAdmission(ctx:RepositoryContext,deps:{verifier:EmailVerifier}):Promise<PreparedEmailPass>{
@@ -74,26 +74,26 @@ export async function runPreparedEmailAdmission(ctx:RepositoryContext,deps:{veri
  for(const campaign of campaigns){
   const counts=await campaignAdmissionCounts(ctx,campaign),room=Math.min(campaign.max_enrollments-counts.total,campaign.daily_admission_limit-counts.daily);
   if(room<=0)continue;
-  const tried=await admittedCandidateIds(ctx),accept=await preparedEmailAccept(ctx,campaign.id);
+  const tried=await admittedCandidateIds(ctx);
   let admitted=0;
   for(let round=0;round<ROUNDS&&admitted<room;round++){
-   const batch=await listPreparedEmailCandidates(ctx,{limit:room+10,regions:campaign.regions,skip:tried,accept});
+   const batch=await listPreparedEmailChoices(ctx,{limit:room+10,regions:campaign.regions,skip:tried,campaignId:campaign.id});
    if(!batch.length)break;
-   for(const company of batch){
+   for(const {read:company,person} of batch){
     if(admitted>=room)break;
     tried.add(company.candidateId);
     const now=Date.parse(await campaignDatabaseNow(ctx));
-    let recorded=await latestEmailVerification(ctx,company.route.address);
+    let recorded=await latestEmailVerification(ctx,person.email);
     if(recorded&&!emailVerificationDecides(recorded,now))recorded=null;
     if(!recorded){
-     const result=await deps.verifier.verify(company.route.address);
+     const result=await deps.verifier.verify(person.email);
      if(!result)continue;
-     await recordEmailVerification(ctx,company.route.address,result);pass.checked++;
+     await recordEmailVerification(ctx,person.email,result);pass.checked++;
      recorded={result,outcome:emailVerificationOutcome(result),checkedAt:new Date(now)};
     }
     if(recorded.outcome!=='ok')continue;
     try{
-     const result=await withTransaction(ctx.db,()=>admitPreparedCompanyToCampaign(ctx,campaign.id,{kind:'prepared_capture',candidateId:company.candidateId,candidateRevision:company.candidateRevision,runId:company.runId,address:company.route.address}));
+     const result=await withTransaction(ctx.db,()=>admitPreparedCompanyToCampaign(ctx,campaign.id,{kind:'prepared_capture',candidateId:company.candidateId,candidateRevision:company.candidateRevision,runId:company.runId,address:person.email}));
      if(result.ok){admitted++;pass.admitted++;}
     }catch{pass.failed++;}
    }

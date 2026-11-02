@@ -20,8 +20,9 @@ async function conflictingFirmIds(ctx:RepositoryContext,company:{businessName:st
 const admittedFirm=async(ctx:RepositoryContext,candidateId:string,runId:string,campaignId:string):Promise<string|null>=>(await ctx.db.query<{firm_id:string}>('SELECT firm_id FROM outreach_email_sources WHERE workspace_id=$1 AND candidate_id=$2 AND run_id=$3 AND campaign_id=$4 AND NOT association_review_required',[ctx.scope.workspaceId,candidateId,runId,campaignId])).rows[0]?.firm_id??null;
 /** Selection-time form of the deterministic refusals `assessPreparedEmail` and the Firm admission would make (an existing Firm, an
  * unresolvable time zone, an effective email stop): a company refused this way is left out before the work limit, within the bounded
- * scan of the prepared order (the first 400 records), so it cannot starve later companies inside that window. Advisory and unlocked; admission still decides. */
-export async function preparedAdmissionRefusedInAdvance(ctx:RepositoryContext,campaignId:string|null,read:{candidateId:string;runId:string;region:string;locality:string;businessName:string;route:{address:string}}):Promise<boolean>{
+ * scan of the prepared order (the first 400 records), so it cannot starve later companies inside that window. `email` is the provider
+ * person's address once there is one (enrichment runs before any, so it is then not checked). Advisory and unlocked; admission still decides. */
+export async function preparedAdmissionRefusedInAdvance(ctx:RepositoryContext,campaignId:string|null,read:{candidateId:string;runId:string;region:string;locality:string;businessName:string},email?:string):Promise<boolean>{
  if(preparedEmailTimeZone(read.region,read.locality)===null)return true;
  const w=ctx.scope.workspaceId;
  const candidate=(await ctx.db.query<{payload:unknown}>('SELECT payload FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2',[w,read.candidateId])).rows[0];
@@ -29,10 +30,11 @@ export async function preparedAdmissionRefusedInAdvance(ctx:RepositoryContext,ca
  const admittedFirmId=campaignId?await admittedFirm(ctx,read.candidateId,read.runId,campaignId):null;
  if((await conflictingFirmIds(ctx,{businessName:read.businessName,website:payload.website},admittedFirmId)).length>0)return true;
  // The same effective email-handle stop admission checks under its locks, so a stopped address cannot fill the scan either.
- return Boolean(await firstSuppressed(ctx,[{scope:'handle',canonicalKey:read.route.address},...(admittedFirmId?[{scope:'firm' as const,canonicalKey:admittedFirmId}]:[])],'email'));
+ const keys=[...(email?[{scope:'handle' as const,canonicalKey:email}]:[]),...(admittedFirmId?[{scope:'firm' as const,canonicalKey:admittedFirmId}]:[])];
+ return keys.length>0&&Boolean(await firstSuppressed(ctx,keys,'email'));
 }
 /** `assessEmailCandidate` for an own-site prepared company (ADR0035). The brief's business, no-contrary and company-page tests and the
- * published address are read by the campaign provenance; this adds the Firm and address identity rules. The company is always a NEW
+ * provider person's verified address are read by the campaign provenance; this adds the Firm and address identity rules. The company is always a NEW
  * Firm: any Firm already carrying its name or website host (a customer, a Calling preparation, a stopped or replied company) refuses,
  * except the Firm admission itself created from this very candidate. */
 export async function assessPreparedEmail(ctx:RepositoryContext,input:{candidateId:string;qualificationRunId:string;campaignId?:string},target:PreparedEmailTarget):Promise<{ok:true;value:EmailAssessment}|{ok:false;reason:string}>{

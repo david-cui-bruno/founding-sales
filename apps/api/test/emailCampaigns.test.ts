@@ -61,11 +61,11 @@ it('accepts a nationwide region set and refuses codes outside the states and DC'
  expect(await routeEmailCampaigns(request('/outreach/email-campaigns/approve',{...command,regions:['PR']}),options)).toMatchObject({status:400});
  expect(mocks.command).not.toHaveBeenCalled();
 });
-const PREVIEW='/outreach/email-campaigns/prepared-preview',candidate={candidateId:id,host:'peak.org',companyName:'Peak PM',website:'https://peak.org/',locality:'Columbus',region:'OH',address:'info@peak.org',verification:null};
+const PREVIEW='/outreach/email-campaigns/prepared-preview',candidate={candidateId:id,host:'peak.org',companyName:'Peak PM',website:'https://peak.org/',locality:'Columbus',region:'OH',person:{firstName:'Jordan',lastName:'Blake',title:'Owner',email:'jordan.blake@peak.org',emailStatus:'verified',matchConfidence:'high',provider:'apollo',observedAt:'2026-11-02T12:00:00.000Z',creditsSpent:1},verification:null};
 it('prepared preview is admin-only, read-only and strict, and defaults its limit and regions',async()=>{
- mocks.preview.mockResolvedValue({candidates:[candidate]});
+ mocks.preview.mockResolvedValue({candidates:[candidate],awaitingEnrichment:3});
  expect(await routeEmailCampaigns({...request(PREVIEW),method:'GET'},options)).toEqual({status:405,body:{error:'method_not_allowed'}});
- expect(await routeEmailCampaigns(request(PREVIEW),options)).toEqual({status:200,body:{candidates:[candidate]}});
+ expect(await routeEmailCampaigns(request(PREVIEW),options)).toEqual({status:200,body:{candidates:[candidate],awaitingEnrichment:3}});
  expect(mocks.preview).toHaveBeenCalledWith(expect.anything(),{limit:25,regions:expect.arrayContaining(['OH','WY','DC'])});
  expect(mocks.preview.mock.calls[0]![1].regions).toHaveLength(51);
  await routeEmailCampaigns(request(PREVIEW,{limit:50,regions:['TX']}),options);

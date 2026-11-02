@@ -2,6 +2,8 @@
 
 ## Status and scope
 
+**Amended by [ADR0036](0036-named-person-email-enrichment.md):** the admitted address is a provider-found named decision-maker's verified address, not a published role address; the published-address sections below (email-ready, whole mailbox, the role-mailbox preference) are superseded, and the check, caps, lock order, openings, business name, no-starvation and preview rules stand.
+
 Accepted November 2 2026 by David for the Step 3 campaign. It amends [ADR0013](0013-approved-email-campaign-admission.md) and [ADR0016](0016-automatic-research-campaign-composition.md): the campaign still admits only through its approval, caps, holds, expiry and the shared send gate, and it grants no sending, Gmail capture, LinkedIn action or contact. Owner sending stays OFF; production enrollment still needs an approved campaign.
 
 Why: the strict-publication Firms of ADR0013/0016 are empty, so no company was campaign-eligible, while the prepared own-site capture ([ADR0034](0034-company-first-callable-supply.md)) already retains contact, about and team pages that often publish a business address.

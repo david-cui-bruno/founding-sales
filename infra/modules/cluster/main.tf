@@ -165,8 +165,14 @@ locals {
   #     in its detail), so the Deepgram key reaches the worker's process and no other.
   #     `transcription` must hold a value (`{}`) before the apply that adds it, as above;
   #     `twilio-voice` already does.
+  #   * named-person email enrichment (ADR0036): the worker reads `apollo-api-key` — the Apollo
+  #     key (`apps/worker/src/providers/apolloPeople.ts`) — as `FSS_APOLLO_API_KEY`, and the API
+  #     is NOT given it. Two stages: the entry is always created (empty), but the worker is
+  #     handed it only when `worker_reads_apollo_api_key` is true, which is a separate change
+  #     made after the real key (a bare string) has been put in; ECS refuses a task whose secret
+  #     has no value.
   api_secret_names        = ["calcom", "device-credential-pepper", "google-gmail-oauth-client", "google-oidc-client", "session-signing-key", "twilio-voice"]
-  worker_secret_names     = ["sourcing-search", "zoom-meetings", "calcom", "google-gmail-oauth-client", "llm-classifier-api-key", "transcription", "twilio-voice"]
+  worker_secret_names     = ["sourcing-search", "zoom-meetings", "apollo-api-key", "calcom", "google-gmail-oauth-client", "llm-classifier-api-key", "transcription", "twilio-voice"]
   operations_secret_names = ["google-gmail-oauth-client"]
 
   # The environment variable a process reads a secret under, where that is not the
@@ -176,6 +182,7 @@ locals {
   # `packages/domain/classification/anthropicClient.ts` reads
   # `FSS_LLM_CLASSIFIER_API_KEY`, so the deployed worker never had a classifier.
   secret_environment_names = {
+    "apollo-api-key"         = "FSS_APOLLO_API_KEY"
     "llm-classifier-api-key" = "FSS_LLM_CLASSIFIER_API_KEY"
     "sourcing-search"        = "FSS_TAVILY_API_KEY"
   }
@@ -183,10 +190,13 @@ locals {
   # The classifier has no recorded seam: handed a key, the worker calls the
   # provider. A rehearsal fills the entry with a fixture, so only an environment that
   # says so is handed it (`worker_reads_classifier_key`); elsewhere `classify.reply`
-  # stays unclaimed, which is what a worker with no key does by design.
+  # stays unclaimed, which is what a worker with no key does by design. The Apollo key
+  # has its own switch (`worker_reads_apollo_api_key`): it is injected only once it holds
+  # a value, whatever the classifier flag says.
   worker_injected_secret_names = [
     for name in local.worker_secret_names : name
-    if !contains(["llm-classifier-api-key", "sourcing-search"], name) || var.worker_reads_classifier_key
+    if(name != "apollo-api-key" || var.worker_reads_apollo_api_key)
+    && (!contains(["llm-classifier-api-key", "sourcing-search"], name) || var.worker_reads_classifier_key)
   ]
 
   runtime_database_secret = { DATABASE_SECRET_ARN = var.app_runtime_database_secret_arn }

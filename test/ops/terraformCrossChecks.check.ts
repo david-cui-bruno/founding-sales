@@ -157,8 +157,21 @@ describe('g81: every task gets the secrets its process reads', () => {
     expect(WORKER_VARIABLES.classifierApiKey).toBe(reads);
     // Held back from the worker unless the root says it reads it, and the stack says
     // so for production alone.
-    expect(CLUSTER).toContain('if !contains(["llm-classifier-api-key", "sourcing-search"], name) || var.worker_reads_classifier_key');
+    expect(CLUSTER).toContain('if(name != "apollo-api-key" || var.worker_reads_apollo_api_key)');
+    expect(CLUSTER).toContain('(!contains(["llm-classifier-api-key", "sourcing-search"], name) || var.worker_reads_classifier_key)');
     expect(STACK).toContain('  worker_reads_classifier_key = local.is_production\n');
+  });
+
+  // ADR0036, two stages. ECS refuses a task whose secret has no value, so the empty `apollo-api-key` container is always created but the worker is handed it
+  // only when the committed production literal is true, a separate change made after Root has installed the value.
+  it('creates the apollo key container always and injects it into the worker only behind the committed second-stage flag', () => {
+    expect(readRepositoryFile('infra/modules/cluster/variables.tf')).toMatch(/variable "worker_reads_apollo_api_key" \{[\s\S]*?default\s+= false/u);
+    expect(readRepositoryFile('infra/modules/stack/variables.tf')).toMatch(/variable "worker_reads_apollo_api_key" \{[\s\S]*?default\s+= false/u);
+    expect(STACK).toContain('worker_reads_apollo_api_key = var.worker_reads_apollo_api_key');
+    const production = readRepositoryFile('infra/roots/production/main.tf');
+    expect(production).toMatch(/^ {2}worker_reads_apollo_api_key = (?:false|true)$/mu);
+    expect(production).toContain('worker_reads_apollo_api_key = local.worker_reads_apollo_api_key');
+    expect(DEFAULT_SECRET_NAMES).toContain('apollo-api-key');
   });
 
   it('names only secrets the secrets module creates, and leaves none unassigned', () => {
@@ -345,6 +358,14 @@ it('keeps Zoom meeting credentials on the worker alone', () => {
   expect(API).not.toContain('zoom-meetings');
   expect(OPERATIONS).not.toContain('zoom-meetings');
   expect(DEFAULT_SECRET_NAMES).toContain('zoom-meetings');
+});
+
+it('keeps the Apollo key on the worker alone, under the name the people provider reads',()=>{
+  expect(WORKER).toContain('apollo-api-key');
+  expect(API).not.toContain('apollo-api-key');
+  expect(OPERATIONS).not.toContain('apollo-api-key');
+  expect(DEFAULT_SECRET_NAMES).toContain('apollo-api-key');
+  expect(CLUSTER).toContain('    "apollo-api-key"         = "FSS_APOLLO_API_KEY"\n');
 });
 
 it('keeps CRM adapter presence absent by default and uses one optional non-secret configuration on both processes',()=>{

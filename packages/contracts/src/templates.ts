@@ -140,6 +140,7 @@ export const TEMPLATE_VARIABLE_NAMES = [
   'firm_locality',
   'firm_region',
   'firm_website',
+  'first_name',
   'contact_first_name',
   'contact_full_name',
   'contact_title',

@@ -229,6 +229,16 @@ export const DEFAULT_MEETING_ANALYSIS: MeetingAnalysisSetting = { enabled: false
 export const meetingFollowThroughSettingSchema = z.strictObject({ sequenceVersionId: z.string().uuid().nullable() });
 export const DEFAULT_MEETING_FOLLOW_THROUGH = { sequenceVersionId: null };
 
+/**
+ * Named-person email enrichment (migration 0160, ADR0036): whether the worker may ask the people-data provider for a company's
+ * decision-maker, and the most provider credits it may spend per business day (one enrichment costs at most one credit). Off, and 30,
+ * until an admin changes it; the provider key must also be installed. 0 spends nothing.
+ */
+export const PEOPLE_ENRICHMENT_DAILY_CREDITS_MAX = 200;
+export const peopleEnrichmentSettingSchema = z.strictObject({ enabled: z.boolean(), dailyCredits: z.number().int().min(0).max(PEOPLE_ENRICHMENT_DAILY_CREDITS_MAX) });
+export type PeopleEnrichmentSetting = z.infer<typeof peopleEnrichmentSettingSchema>;
+export const DEFAULT_PEOPLE_ENRICHMENT: PeopleEnrichmentSetting = { enabled: false, dailyCredits: 30 };
+
 export const INTEGRATION_SETTING_KEYS = [
   'calling_provider',
   'calendar_integration',
@@ -241,6 +251,7 @@ export const INTEGRATION_SETTING_KEYS = [
   'meeting_follow_through',
   'meeting_auto_recording',
   'booking_policy',
+  'people_enrichment',
 ] as const;
 export type IntegrationSettingKey = (typeof INTEGRATION_SETTING_KEYS)[number];
 
@@ -311,6 +322,7 @@ export const INTEGRATION_SETTING_VALUE_SCHEMAS = {
   meeting_follow_through: meetingFollowThroughSettingSchema,
   meeting_auto_recording: meetingAutoRecordingSettingSchema,
   booking_policy: bookingPolicySettingSchema,
+  people_enrichment: peopleEnrichmentSettingSchema,
 } as const satisfies Record<IntegrationSettingKey, z.ZodType>;
 
 export const DEFAULT_INTEGRATION_SETTING_VALUES: Readonly<Record<IntegrationSettingKey, unknown>> = Object.freeze({
@@ -325,6 +337,7 @@ export const DEFAULT_INTEGRATION_SETTING_VALUES: Readonly<Record<IntegrationSett
   meeting_follow_through: DEFAULT_MEETING_FOLLOW_THROUGH,
   meeting_auto_recording: DEFAULT_MEETING_AUTO_RECORDING,
   booking_policy: DEFAULT_BOOKING_POLICY,
+  people_enrichment: DEFAULT_PEOPLE_ENRICHMENT,
 });
 
 /** The schema and default for any stored key. */
