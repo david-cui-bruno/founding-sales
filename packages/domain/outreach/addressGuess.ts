@@ -3,8 +3,9 @@ import {withTransaction} from '../db/queryable.ts';
 import {readPeopleEnrichmentSetting} from '../settings/peopleEnrichment.ts';
 import {listPreparedEmailCandidates} from '../sourcing/preparedEmailRead.ts';
 import type {EmailVerifier} from './emailVerification.ts';
-import {addressRefusedByCheck,currentPeopleContacts} from './peopleContacts.ts';
-import {businessDateNow,creditsOnDate,enrichedCustody,enrichmentRegions,markStaleReservations,reservePeopleLookup,settlePeopleLookup,type PeopleCompany} from './peopleEnrichment.ts';
+import {addressRefusedByCheck,currentPeopleContacts,type PeopleContact} from './peopleContacts.ts';
+import {markStalePaidChecks,paidCheckCustody,reservePaidCheck,settlePaidCheck,type PaidCheckKind} from './paidChecks.ts';
+import {businessDateNow,creditsOnDate,enrichmentRegions,reservePeopleLookup,settlePeopleLookup,type PeopleCompany} from './peopleEnrichment.ts';
 import {MILLIONVERIFIER_PROVIDER,OWN_SITE_PROVIDER,personalAddressAtHost,type AddressRefusal} from './peopleProvider.ts';
 import {preparedAdmissionRefusedInAdvance} from './preparedEmailAssessment.ts';
 import {admittedCandidateIds} from './preparedEmailSelection.ts';
@@ -32,22 +33,22 @@ export function guessAddress(firstName:string,host:string):string|null{
 
 type Paid={kind:'checked';id:string;verdict:AddressVerdict;credits:0|1}|{kind:'failed';code:string;credits:0|1}|{kind:'skipped';why:'cap'|'disabled'|'taken'|'gone'};
 /** The reservation protocol of ADR0036 around ONE paid check: reserve one credit (re-reading the switch and the daily cap under lock) BEFORE the request, call once, and leave the settlement to the caller for an answer. A failure settles itself: an unusable answer after the request went out keeps the credit (`unknown`, never retried); a refusal charged nothing and is tried again after the cool-down. */
-async function paidCheck(ctx:RepositoryContext,verifier:AddressVerifier,company:PeopleCompany,address:string):Promise<Paid>{
- const reservation=await reservePeopleLookup(ctx,{provider:MILLIONVERIFIER_PROVIDER,company,credits:1});
+async function paidCheck(ctx:RepositoryContext,verifier:AddressVerifier,kind:PaidCheckKind,company:PeopleCompany,address:string):Promise<Paid>{
+ const reservation=await reservePaidCheck(ctx,{kind,company,credits:1});
  if(reservation.kind!=='reserved')return {kind:'skipped',why:reservation.kind};
  let check:AddressCheck;
  try{check=await verifier.check(address);}catch{check={ok:false,code:'unavailable',mayHaveCharged:true};}
- if(!check.ok){await settlePeopleLookup(ctx,reservation.id,check.mayHaveCharged?{state:'unknown',reason:check.code}:{state:'failed',reason:check.code});return {kind:'failed',code:check.code,credits:check.mayHaveCharged?1:0};}
+ if(!check.ok){await settlePaidCheck(ctx,reservation.id,check.mayHaveCharged?{state:'unknown',reason:check.code}:{state:'failed',reason:check.code});return {kind:'failed',code:check.code,credits:check.mayHaveCharged?1:0};}
  return {kind:'checked',id:reservation.id,verdict:check.verdict,credits:verdictCredits(check.verdict)};
 }
 
 /** A PUBLISHED address's one paid check before admission (ADR0038): a custody row of its own (provider `millionverifier`, one per candidate REVISION, never renewed), counted against the daily cap like a guess, so the company is never paid for twice. The verdict is returned for the admission pass to decide on (`invalid` and `disposable` refuse; the rest admit). `held`: another attempt owns the check and it is unresolved (`reserved`, `unknown`) or negative: refuse now and retry when its fence ends, never fall back to the free check; the same rows refuse in selection and the admission proof (`addressRefusedByCheck`). Null: this call did not check (no verifier answer in THIS call because the switch or the cap is off, or the verifier failed; or an answer already settled) and the free DNS check decides alone. */
 export async function checkPublishedAddress(ctx:RepositoryContext,verifier:AddressVerifier,company:PeopleCompany,address:string,negative:(verdict:'invalid'|'disposable')=>Promise<void>):Promise<AddressVerdict|'held'|null>{
- const paid=await paidCheck(ctx,verifier,company,address);
+ const paid=await paidCheck(ctx,verifier,'published',company,address);
  if(paid.kind==='skipped'&&paid.why==='taken')return await addressRefusedByCheck(ctx,company.candidateId)?'held':null;// an unresolved or negative row holds the company; a settled ok/catch_all/unknown answer or a cooling-down refusal leaves the free check
  if(paid.kind!=='checked')return null;
  // A negative answer and its address-bound refusal record commit together (and the settled row is a refusal on its own, `addressRefusedByCheck`): a completed negative check is never an unavailable-verifier fallback.
- await withTransaction(ctx.db,async()=>{await settlePeopleLookup(ctx,paid.id,{state:'none',reason:REFUSALS[paid.verdict],credits:paid.credits});if(paid.verdict==='invalid'||paid.verdict==='disposable')await negative(paid.verdict);});
+ await withTransaction(ctx.db,async()=>{await settlePaidCheck(ctx,paid.id,{state:'none',reason:REFUSALS[paid.verdict],credits:paid.credits});if(paid.verdict==='invalid'||paid.verdict==='disposable')await negative(paid.verdict);});
  return paid.verdict;
 }
 
@@ -58,9 +59,9 @@ export async function runAddressGuessing(ctx:RepositoryContext,deps:{verifier:Ad
  const pass:AddressGuessPass={looked:0,verified:0,refused:0,credits:0,halted:null,stopped:null},startedAt=Date.now();
  const setting=await readPeopleEnrichmentSetting(ctx);
  if(!setting.enabled||setting.dailyCredits<1){pass.stopped='disabled';return pass;}// Only a pre-check: every reservation re-reads and locks the switch and the cap.
- await markStaleReservations(ctx);
+ await markStalePaidChecks(ctx);
  if(await creditsOnDate(ctx,(await businessDateNow(ctx)).date)+1>setting.dailyCredits){pass.stopped='cap';return pass;}
- const [custody,people]=await Promise.all([enrichedCustody(ctx,MILLIONVERIFIER_PROVIDER),currentPeopleContacts(ctx)]),skip=custody.candidates,guesses=new Map<string,string>();
+ const [custody,people]=await Promise.all([paidCheckCustody(ctx),currentPeopleContacts(ctx)]),skip=custody.candidates,guesses=new Map<string,string>();
  for(const id of await admittedCandidateIds(ctx))skip.add(id);
  const batch=await listPreparedEmailCandidates(ctx,{limit:GUESS_PASS_LOOKUPS,regions:await enrichmentRegions(ctx),skip,accept:async read=>{
   const person=people.get(read.candidateId),address=person?guessAddress(person.firstName,read.host):null;
@@ -74,19 +75,23 @@ export async function runAddressGuessing(ctx:RepositoryContext,deps:{verifier:Ad
   const mail=await deps.mailDomain.verify(address);
   if(mail===null)continue;
   if(mail==='invalid'){
-   const free=await reservePeopleLookup(ctx,{provider:MILLIONVERIFIER_PROVIDER,company,credits:0});
-   if(free.kind==='reserved'){await settlePeopleLookup(ctx,free.id,{state:'none',reason:'no_mail_domain',credits:0});pass.refused++;}
+   const free=await reservePaidCheck(ctx,{kind:'guess',company,credits:0});
+   if(free.kind==='reserved'){await settlePaidCheck(ctx,free.id,{state:'none',reason:'no_mail_domain',credits:0});pass.refused++;}
    continue;
   }
-  const paid=await paidCheck(ctx,deps.verifier,company,address);
+  const paid=await paidCheck(ctx,deps.verifier,'guess',company,address);
   if(paid.kind==='skipped'){if(paid.why==='cap'||paid.why==='disabled'){pass.stopped=paid.why;break;}continue;}
   pass.looked++;pass.credits+=paid.credits;
   if(paid.kind==='failed'){pass.halted=paid.code;break;}
-  if(paid.verdict==='ok'){
-   // The person is the own-site person (name, title, citation); the address is the guess. Medium confidence: the company did not publish it for them.
-   await settlePeopleLookup(ctx,paid.id,{state:'found',credits:paid.credits,citedDeadline:person.expiresAt.getTime(),person:{providerPersonId:person.providerPersonId,firstName:person.firstName,lastName:person.lastName,title:person.title,email:address,emailStatus:'verified_guess',confidence:'medium',source:person.source!}});
-   pass.verified++;
-  }else{await settlePeopleLookup(ctx,paid.id,{state:'none',reason:REFUSALS[paid.verdict],credits:paid.credits});pass.refused++;}
+  if(paid.verdict==='ok'&&await keepVerifiedGuess(ctx,company,paid.id,paid.credits,person,address))pass.verified++;
+  else{await settlePaidCheck(ctx,paid.id,{state:'none',reason:REFUSALS[paid.verdict],credits:paid.credits});pass.refused++;}
  }
  return pass;
+}
+/** `ok`: the person is the own-site person (name, title, citation); the address is the guess, medium confidence (the company did not publish it for them). The paid row settles `verdict_ok` in the SAME transaction that stores the person copy under a free lookup row (provider `millionverifier`, 0 credits, read again in place), so a charged `ok` is never left without its person. False when no row could be reserved for the person (the switch went off, or another candidate on the host holds one): the answer is recorded, nothing is kept. */
+async function keepVerifiedGuess(ctx:RepositoryContext,company:PeopleCompany,paidId:string,credits:0|1,person:PeopleContact,address:string):Promise<boolean>{
+ const free=await reservePeopleLookup(ctx,{provider:MILLIONVERIFIER_PROVIDER,company,credits:0});
+ if(free.kind!=='reserved')return false;
+ await settlePeopleLookup(ctx,free.id,{state:'found',credits:0,citedDeadline:person.expiresAt.getTime(),person:{providerPersonId:person.providerPersonId,firstName:person.firstName,lastName:person.lastName,title:person.title,email:address,emailStatus:'verified_guess',confidence:'medium',source:person.source!},alongside:()=>settlePaidCheck(ctx,paidId,{state:'none',reason:'verdict_ok',credits})});
+ return true;
 }

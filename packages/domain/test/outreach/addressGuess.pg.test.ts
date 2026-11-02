@@ -9,7 +9,7 @@ import {previewPreparedEmailAdmission} from '../../outreach/preparedEmailPreview
 import {currentPeopleContacts} from '../../outreach/peopleContacts.ts';
 import type {EmailVerifier} from '../../outreach/emailVerification.ts';
 import type {AddressCheck,AddressVerdict} from '../../outreach/addressGuess.ts';
-import {reservePeopleLookup,settlePeopleLookup} from '../../outreach/peopleEnrichment.ts';
+import {reservePaidCheck,settlePaidCheck} from '../../outreach/paidChecks.ts';
 import {BOOKING_LINK,POSTAL_ADDRESS,fakeAddressVerifier,goodMx,preparedEmailWorld} from './preparedEmailFixture.ts';
 
 // ADR0038: the guess-and-verify step and the published-address check, through the real own-site read and the real admission pass, with a fake paid verifier (no network, no key).
@@ -19,8 +19,11 @@ afterAll(async()=>world?.stop());
 const named=(first:string)=>()=>`TX License #597044-B ${first} Stetson, Broker</p><p>Email info@stetson.example`;
 // Admission is exercised once, for the first test's guess; published addresses are in publishedAddressCheck.pg.test.ts (the campaign admits at most five a day).
 const verdict=(value:AddressVerdict):AddressCheck=>({ok:true,verdict:value});
-const custody=async(candidateId:string,provider='millionverifier')=>(await world.runtime.query<Record<string,unknown>>('SELECT l.state,l.credits,l.reason,c.email,c.email_status,c.match_confidence,c.source_url,c.first_name FROM outreach_people_lookups l LEFT JOIN outreach_people_contacts c ON c.workspace_id=l.workspace_id AND c.lookup_id=l.id WHERE l.workspace_id=$1 AND l.candidate_id=$2 AND l.provider=$3',[world.ws,candidateId,provider])).rows[0];
-const spent=async()=>Number((await world.runtime.query<{n:string}>('SELECT coalesce(sum(credits),0)::text AS n FROM outreach_people_lookups WHERE workspace_id=$1 AND provider=$2',[world.ws,'millionverifier'])).rows[0]!.n);
+// The paid ledger row of the candidate's newest revision, with the verified-guess person copy (a free millionverifier lookup row) when there is one.
+const custody=async(candidateId:string,provider='millionverifier')=>(provider==='millionverifier'
+ ?(await world.runtime.query<Record<string,unknown>>("SELECT p.state,p.credits,p.reason,c.email,c.email_status,c.match_confidence,c.source_url,c.first_name FROM outreach_people_paid_checks p LEFT JOIN outreach_people_lookups l ON l.workspace_id=p.workspace_id AND l.candidate_id=p.candidate_id AND l.provider='millionverifier' AND l.state='found' LEFT JOIN outreach_people_contacts c ON c.workspace_id=l.workspace_id AND c.lookup_id=l.id WHERE p.workspace_id=$1 AND p.candidate_id=$2 ORDER BY p.candidate_revision DESC LIMIT 1",[world.ws,candidateId])).rows[0]
+ :(await world.runtime.query<Record<string,unknown>>('SELECT l.state,l.credits,l.reason,c.email,c.email_status FROM outreach_people_lookups l LEFT JOIN outreach_people_contacts c ON c.workspace_id=l.workspace_id AND c.lookup_id=l.id WHERE l.workspace_id=$1 AND l.candidate_id=$2 AND l.provider=$3',[world.ws,candidateId,provider])).rows[0]);
+const spent=async()=>Number((await world.runtime.query<{n:string}>('SELECT coalesce(sum(credits),0)::text AS n FROM outreach_people_paid_checks WHERE workspace_id=$1',[world.ws])).rows[0]!.n);
 const preview=()=>withReadOnlyTransaction(world.runtime,()=>previewPreparedEmailAdmission(world.ctx(),{limit:25,regions:['OH']}));
 
 it('keeps a verified guess as `verified_guess` for one credit, previews it as guessed, admits it after the free check, and greets "Hi Ryan," without ever asking the verifier again',async()=>{
@@ -29,7 +32,7 @@ it('keeps a verified guess as `verified_guess` for one credit, previews it as gu
  const paid=fakeAddressVerifier();
  expect(await world.guess(paid.verifier)).toEqual({looked:1,verified:1,refused:0,credits:1,halted:null,stopped:null});
  expect(paid.calls).toEqual([`ryan@${company.domain}`]);
- expect(await custody(company.candidateId)).toEqual({state:'found',credits:1,reason:null,email:`ryan@${company.domain}`,email_status:'verified_guess',match_confidence:'medium',source_url:`https://${company.domain}/`,first_name:'Ryan'});
+ expect(await custody(company.candidateId)).toEqual({state:'none',credits:1,reason:'verdict_ok',email:`ryan@${company.domain}`,email_status:'verified_guess',match_confidence:'medium',source_url:`https://${company.domain}/`,first_name:'Ryan'});
  // The own-site row is untouched: the company still published no address for the person.
  expect(await custody(company.candidateId,'own_site')).toMatchObject({state:'found',credits:0,email:null,email_status:'unavailable'});
  expect(await spent()).toBe(1);
@@ -37,7 +40,7 @@ it('keeps a verified guess as `verified_guess` for one credit, previews it as gu
  expect(await world.guess(paid.verifier)).toMatchObject({looked:0,verified:0,credits:0});expect(paid.calls).toHaveLength(1);
  expect((await currentPeopleContacts(world.ctx(),[company.candidateId])).get(company.candidateId)).toMatchObject({firstName:'Ryan',email:`ryan@${company.domain}`,emailStatus:'verified_guess',provider:'millionverifier'});
  const shown=(await preview())!;
- expect(shown.candidates.filter(row=>row.candidateId===company.candidateId).map(row=>({status:row.person.emailStatus,provider:row.person.provider,credits:row.person.creditsSpent,email:row.person.email}))).toEqual([{status:'verified_guess',provider:'millionverifier',credits:1,email:`ryan@${company.domain}`}]);
+ expect(shown.candidates.filter(row=>row.candidateId===company.candidateId).map(row=>({status:row.person.emailStatus,provider:row.person.provider,credits:row.person.creditsSpent,email:row.person.email}))).toEqual([{status:'verified_guess',provider:'millionverifier',credits:0,email:`ryan@${company.domain}`}]);// the charge is the paid ledger's, not the person row's
  // Admission asks only the free DNS check about a guess: the paid check already answered ok.
  const asked=fakeAddressVerifier(()=>verdict('invalid'));
  expect(await world.pass(undefined,asked.verifier)).toEqual({admitted:1,checked:1,failed:0});
@@ -90,10 +93,10 @@ it('treats a transport failure as unknown (the credit is kept, no retry) and an 
  expect(await world.guess(refused.verifier)).toEqual({looked:1,verified:0,refused:0,credits:0,halted:'rate_limited',stopped:null});
  expect(await custody(limited.candidateId)).toMatchObject({state:'failed',credits:0,reason:'rate_limited'});
  expect(await world.guess(refused.verifier)).toMatchObject({looked:0});expect(refused.calls).toHaveLength(1);
- await world.runtime.query("UPDATE outreach_people_lookups SET expires_at=clock_timestamp()-interval '1 second',reserved_at=clock_timestamp()-interval '2 hours' WHERE workspace_id=$1 AND provider='millionverifier' AND candidate_id=$2",[world.ws,limited.candidateId]);
+ await world.runtime.query("UPDATE outreach_people_paid_checks SET expires_at=clock_timestamp()-interval '1 second',reserved_at=clock_timestamp()-interval '2 hours' WHERE workspace_id=$1 AND candidate_id=$2",[world.ws,limited.candidateId]);
  const retry=fakeAddressVerifier();
  expect(await world.guess(retry.verifier)).toMatchObject({looked:1,verified:1,credits:1});expect(retry.calls).toEqual([`kim@${limited.domain}`]);
- expect((await world.runtime.query('SELECT count(*)::int AS n FROM outreach_people_lookups WHERE workspace_id=$1 AND candidate_id=$2 AND provider=$3',[world.ws,limited.candidateId,'millionverifier'])).rows).toEqual([{n:1}]);
+ expect((await world.runtime.query('SELECT count(*)::int AS n FROM outreach_people_paid_checks WHERE workspace_id=$1 AND candidate_id=$2',[world.ws,limited.candidateId])).rows).toEqual([{n:1}]);
 });
 
 it('stops at the daily credit cap, re-reads the cap under lock before each paid call, and never guesses with the switch or the cap at zero',async()=>{
@@ -142,14 +145,14 @@ it('never renews a paid row: a candidate-revision change gets a new row, both ch
  const [a,b]=[await world.prepared('OH',named('Ava'),'Columbus',true),await world.prepared('OH',named('Bo'),'Columbus',true)];
  const revision=async(id:string)=>Number((await world.runtime.query<{revision:number}>('SELECT revision FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2',[world.ws,id])).rows[0]!.revision);
  const company=async(c:typeof a)=>({candidateId:c.candidateId,candidateRevision:await revision(c.candidateId),host:c.domain});
- const charge=async(c:typeof a)=>{const r=await reservePeopleLookup(world.ctx(),{provider:'millionverifier',company:await company(c),credits:1});if(r.kind==='reserved')await settlePeopleLookup(world.ctx(),r.id,{state:'none',reason:'verdict_ok',credits:1});return r.kind;};
+ const charge=async(c:typeof a)=>{const r=await reservePaidCheck(world.ctx(),{kind:'guess',company:await company(c),credits:1});if(r.kind==='reserved')await settlePaidCheck(world.ctx(),r.id,{state:'none',reason:'verdict_ok',credits:1});return r.kind;};
  const before=await spent();
  await world.setPeople({enabled:true,dailyCredits:before+2});
  expect(await charge(a)).toBe('reserved');
  expect(await charge(a)).toBe('taken');// the same revision is paid for once
  await world.runtime.query('UPDATE sourcing_candidates SET revision=revision+1 WHERE workspace_id=$1 AND id=$2',[world.ws,a.candidateId]);
  expect(await charge(a)).toBe('reserved');// the new revision is a new row beside the old one
- expect((await world.runtime.query<{credits:number}>("SELECT credits FROM outreach_people_lookups WHERE workspace_id=$1 AND candidate_id=$2 AND provider='millionverifier'",[world.ws,a.candidateId])).rows).toHaveLength(2);
+ expect((await world.runtime.query<{credits:number}>('SELECT credits FROM outreach_people_paid_checks WHERE workspace_id=$1 AND candidate_id=$2',[world.ws,a.candidateId])).rows).toHaveLength(2);
  expect(await spent()).toBe(before+2);
  expect(await charge(b)).toBe('cap');// both of A's charges are counted
  await world.setPeople({enabled:true,dailyCredits:100});
@@ -159,14 +162,14 @@ it('keeps an uncertain (possibly charged) paid attempt fenced across a candidate
  const c=await world.prepared('OH',named('Uri'),'Columbus',true);
  await world.enrichOwnSite();
  const revision=async()=>Number((await world.runtime.query<{revision:number}>('SELECT revision FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2',[world.ws,c.candidateId])).rows[0]!.revision);
- const first=await reservePeopleLookup(world.ctx(),{provider:'millionverifier',company:{candidateId:c.candidateId,candidateRevision:await revision(),host:c.domain},credits:1});
+ const first=await reservePaidCheck(world.ctx(),{kind:'guess',company:{candidateId:c.candidateId,candidateRevision:await revision(),host:c.domain},credits:1});
  expect(first.kind).toBe('reserved');
- if(first.kind==='reserved')await settlePeopleLookup(world.ctx(),first.id,{state:'unknown',reason:'unavailable'});
+ if(first.kind==='reserved')await settlePaidCheck(world.ctx(),first.id,{state:'unknown',reason:'unavailable'});
  await world.runtime.query('UPDATE sourcing_candidates SET revision=revision+1 WHERE workspace_id=$1 AND id=$2',[world.ws,c.candidateId]);
- expect((await reservePeopleLookup(world.ctx(),{provider:'millionverifier',company:{candidateId:c.candidateId,candidateRevision:await revision(),host:c.domain},credits:1})).kind).toBe('taken');
+ expect((await reservePaidCheck(world.ctx(),{kind:'guess',company:{candidateId:c.candidateId,candidateRevision:await revision(),host:c.domain},credits:1})).kind).toBe('taken');
  await world.enrichOwnSite();
  const paid=fakeAddressVerifier(()=>verdict('ok'));
  await world.guess(paid.verifier);
  expect(paid.calls.filter(address=>address.endsWith(`@${c.domain}`))).toEqual([]);
- expect((await world.runtime.query("SELECT state FROM outreach_people_lookups WHERE workspace_id=$1 AND candidate_id=$2 AND provider='millionverifier'",[world.ws,c.candidateId])).rows).toEqual([{state:'unknown'}]);
+ expect((await world.runtime.query('SELECT state FROM outreach_people_paid_checks WHERE workspace_id=$1 AND candidate_id=$2',[world.ws,c.candidateId])).rows).toEqual([{state:'unknown'}]);
 });
