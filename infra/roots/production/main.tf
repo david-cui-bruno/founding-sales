@@ -42,8 +42,8 @@ locals {
   # ADR0038 guess-and-verify of named-person addresses, two stages (docs/greenfield/infra-apply-runbook.md 1.4).
   # The `fss-prod/millionverifier-api-key` container is always created, empty. ECS refuses a task whose
   # secret has no value, so the worker is handed it only after Root has put the key in: the
-  # first apply keeps this false, a separate one-line pull request then flips it to true.
-  worker_reads_millionverifier_api_key = false
+  # first apply keeps this false; this stage-two change must not deploy before AWSCURRENT exists.
+  worker_reads_millionverifier_api_key = true
 
   # Adapter construction is separate from owner-controlled database activation.
   # David confirmed model credit coverage on 2026-10-19 at 01:35:53 UTC.
