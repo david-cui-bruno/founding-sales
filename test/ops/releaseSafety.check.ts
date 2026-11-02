@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { repositoryPath } from './support/repository.ts';
 const safety = await import(repositoryPath('infra/scripts/release-safety.mjs')) as {
   validateOff(read: unknown, expected: number, now: number, previous?: number[]): unknown;
+  requireOutsideReleaseWindows(db: unknown, nowMs: number, marginMinutes?: number): void;
   createReleaseSafety(options: unknown): { quiescent(): Promise<void>; pinRecovery(database: unknown, after: number): Promise<void> };
 };
 const NOW = Date.parse('2026-10-21T09:30:00Z');
@@ -132,5 +133,47 @@ describe('shared migration quiescence and exact pinned recovery', () => {
     const h = harness();
     await expect(h.guard.pinRecovery(database, NOW + 1)).rejects.toThrow('quiescence_time_invalid');
     expect(h.calls).toHaveLength(0);
+  });
+});
+
+describe('backup and maintenance window guard', () => {
+  // 2026-11-02 is a Monday. Backup 07:30-08:00 is the production window from the incident.
+  const at = (time: string, day = '2026-11-02') => Date.parse(`${day}T${time}:00Z`);
+  const instance = (backup: string, maintenance = 'wed:03:00-wed:04:00', status = 'available') => ({ DBInstanceStatus: status, PreferredBackupWindow: backup, PreferredMaintenanceWindow: maintenance });
+  it.each([
+    ['07:30-08:00', '07:45', 'backup_window_near'], ['07:30-08:00', '07:30', 'backup_window_near'], ['07:30-08:00', '06:30', 'backup_window_near'],
+    ['07:30-08:00', '06:29', ''], ['07:30-08:00', '08:00', ''], ['07:30-08:00', '12:00', ''],
+    ['23:30-00:30', '23:45', 'backup_window_near'], ['23:30-00:30', '00:15', 'backup_window_near'], ['23:30-00:30', '22:30', 'backup_window_near'],
+    ['23:30-00:30', '22:29', ''], ['23:30-00:30', '00:30', ''],
+    ['00:15-00:45', '23:30', 'backup_window_near'], ['00:15-00:45', '23:14', ''],
+  ])('backup window %s at %s -> %s', (window, time, reason) => {
+    const check = () => safety.requireOutsideReleaseWindows(instance(window), at(time));
+    if (reason) expect(check).toThrow(reason); else expect(check).not.toThrow();
+  });
+  it.each([
+    ['mon:08:00-mon:09:00', '2026-11-02', '07:30', 'maintenance_window_near'], ['mon:08:00-mon:09:00', '2026-11-02', '08:30', 'maintenance_window_near'],
+    ['mon:08:00-mon:09:00', '2026-11-02', '06:59', ''], ['mon:08:00-mon:09:00', '2026-11-03', '07:30', ''],
+    ['sun:23:30-mon:00:30', '2026-11-01', '23:45', 'maintenance_window_near'], ['sun:23:30-mon:00:30', '2026-11-02', '00:10', 'maintenance_window_near'],
+    ['sun:00:30-sun:01:30', '2026-11-07', '23:45', 'maintenance_window_near'], ['sat:23:00-sun:00:30', '2026-11-01', '00:10', 'maintenance_window_near'],
+    ['sun:00:30-sun:01:30', '2026-11-07', '22:00', ''],
+  ])('maintenance window %s on %s at %s -> %s', (window, day, time, reason) => {
+    const check = () => safety.requireOutsideReleaseWindows(instance('03:00-03:30', window), at(time, day));
+    if (reason) expect(check).toThrow(reason); else expect(check).not.toThrow();
+  });
+  it('honours the margin parameter and refuses an in-progress backup regardless of the clock', () => {
+    expect(() => safety.requireOutsideReleaseWindows(instance('07:30-08:00'), at('06:45'), 30)).not.toThrow();
+    expect(() => safety.requireOutsideReleaseWindows(instance('07:30-08:00'), at('12:00'), 30)).not.toThrow();
+    expect(() => safety.requireOutsideReleaseWindows(instance('07:30-08:00', undefined, 'backing-up'), at('12:00'))).toThrow('backup_window_near');
+  });
+  it.each(['', '7:30-8:00', '25:00-26:00', '07:30', '07:30-07:30', 'mon:07:30-08:00', '07:30-mon:08:00', 'xxx:07:30-xxx:08:00'])('refuses unreadable window %j', window => {
+    expect(() => safety.requireOutsideReleaseWindows(instance(window), at('12:00'))).toThrow('backup_window_unreadable');
+    expect(() => safety.requireOutsideReleaseWindows(instance('03:00-03:30', window), at('12:00'))).toThrow('maintenance_window_unreadable');
+  });
+  it('requires the weekly format for maintenance and the daily format for backup', () => {
+    expect(() => safety.requireOutsideReleaseWindows(instance('03:00-03:30', '03:00-03:30'), at('12:00'))).toThrow('maintenance_window_unreadable');
+    expect(() => safety.requireOutsideReleaseWindows(instance('mon:03:00-mon:03:30'), at('12:00'))).toThrow('backup_window_unreadable');
+  });
+  it('refuses an instance that reports no windows', () => {
+    expect(() => safety.requireOutsideReleaseWindows({ DBInstanceStatus: 'available' }, at('12:00'))).toThrow('backup_window_unreadable');
   });
 });

@@ -26,6 +26,36 @@ export function validateOff(read, expected, now, previous) {
   return read;
 }
 
+// RDS reports both recurring windows in UTC: backup `hh:mm-hh:mm`, maintenance `ddd:hh:mm-ddd:hh:mm`
+// (either may wrap midnight or the week). An automated backup makes the instance `backing-up`, which
+// the later recovery pin refuses, so a release that starts inside or within `marginMinutes` before a
+// window is refused before any write rather than after services are drained and stopped.
+const DAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+function windowNear(text, nowMs, marginMinutes, weekly) {
+  const match = /^(?:([a-z]{3}):)?(\d{2}):(\d{2})-(?:([a-z]{3}):)?(\d{2}):(\d{2})$/iu.exec(typeof text === 'string' ? text : '');
+  if (!match || Boolean(match[1]) !== weekly || Boolean(match[4]) !== weekly) return undefined;
+  const period = weekly ? 7 * 1440 : 1440;
+  const at = (day, hour, minute) => {
+    const d = weekly ? DAYS.indexOf(day.toLowerCase()) : 0;
+    return d < 0 || Number(hour) > 23 || Number(minute) > 59 ? undefined : d * 1440 + Number(hour) * 60 + Number(minute);
+  };
+  const start = at(match[1] ?? '', match[2], match[3]), end = at(match[4] ?? '', match[5], match[6]);
+  if (start === undefined || end === undefined || start === end) return undefined;
+  const date = new Date(nowMs), minutes = date.getUTCHours() * 60 + date.getUTCMinutes() + date.getUTCSeconds() / 60;
+  const position = weekly ? date.getUTCDay() * 1440 + minutes : minutes;
+  const sinceStart = (position - start + period) % period;
+  return sinceStart < (end - start + period) % period || (period - sinceStart) % period <= marginMinutes;
+}
+
+export function requireOutsideReleaseWindows(db, nowMs, marginMinutes = 60) {
+  requireThat(db?.DBInstanceStatus !== 'backing-up', 'backup_window_near');
+  for (const [name, text, weekly] of [['backup', db?.PreferredBackupWindow, false], ['maintenance', db?.PreferredMaintenanceWindow, true]]) {
+    const near = windowNear(text, nowMs, marginMinutes, weekly);
+    requireThat(near !== undefined, `${name}_window_unreadable`);
+    requireThat(!near, `${name}_window_near`);
+  }
+}
+
 export function normalizeTaskDefinition(definition) {
   const copy = structuredClone(definition);
   for (const key of ['taskDefinitionArn', 'revision', 'status', 'requiresAttributes', 'compatibilities', 'registeredAt', 'registeredBy', 'deregisteredAt', 'tags']) delete copy[key];

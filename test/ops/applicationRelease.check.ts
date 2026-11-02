@@ -232,6 +232,21 @@ describe('independent service network contracts', () => {
   });
 });
 
+describe('RDS backup and maintenance window guard', () => {
+  it.each([
+    ['backup-window-near', 'backup_window_near'], ['backing-up', 'backup_window_near'], ['maintenance-window-near', 'maintenance_window_near'],
+  ])('refuses %s before the first write', async (fault, reason) => {
+    const h = harness({ fault });
+    const result = await h.run();
+    expect(result).toMatchObject({ outcome: 'refused', reason, writesStarted: false, migrationStarted: false, phase: 'preflight' });
+    expect(h.calls.some(call => ['register-task-definition', 'run-task', 'update-service', 'describe-task-definition'].includes(call.args[1] ?? ''))).toBe(false);
+    expect(h.states.every(state => state.writesStarted === false)).toBe(true);
+  });
+  it('proceeds when clear of both windows', async () => {
+    expect((await harness().run()).outcome).toBe('completed');
+  });
+});
+
 function applicationSummaryScript(): string {
   const step = readRepositoryFile('.github/workflows/greenfield-deploy.yml').split('      - name: Actual application phase and recovery boundary\n')[1]?.split('\n  smoke:\n')[0];
   const script = step?.split('        run: |\n')[1];
