@@ -216,6 +216,24 @@ describe('the administration surface', () => {
     expect(cleared.status, JSON.stringify(cleared.body)).toBe(200);
   });
 
+  it('lets an admin set and clear the booking link, refusing anything but a public https URL', async () => {
+    const url = 'https://cal.example.test/demo';
+    const saved = await call('POST', '/settings/update', adminToken, command({ settingKey: 'booking_link', value: { url }, changeNote: 'the demo calendar' }));
+    expect(saved.status, JSON.stringify(saved.body)).toBe(200);
+    const snapshot = await call('GET', '/settings', adminToken);
+    expect((snapshot.body['settings'] as readonly { settingKey: string; value: unknown; version: number }[]).find(row => row.settingKey === 'booking_link'))
+      .toMatchObject({ value: { url }, version: 1 });
+    for (const value of [{ url: 'http://cal.example.test/demo' }, { url: 'https://user@cal.example.test/demo' }, { url: 'https://cal.example.test:444/demo' }]) {
+      const refused = await call('POST', '/settings/update', adminToken, command({ settingKey: 'booking_link', value }));
+      expect(refused.status).toBe(409);
+      expect(refused.body).toMatchObject({ status: 'refused', reason: 'invalid_value' });
+    }
+    const cleared = await call('POST', '/settings/update', adminToken, command({ settingKey: 'booking_link', value: { url: null } }));
+    expect(cleared.status, JSON.stringify(cleared.body)).toBe(200);
+    const history = await call('POST', '/settings/history', adminToken, { settingKey: 'booking_link' });
+    expect(history.body['current']).toEqual({ value: { url: null }, version: 2 });
+  });
+
   it('shows both halves of the production sending switch', async () => {
     // 16.2 is two switches ANDed. With the deployment flag off, an admin enabling
     // sending changes the admin half and not the effective answer.

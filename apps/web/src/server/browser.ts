@@ -14,6 +14,7 @@ import { privateDraftBrowserResult } from './privateDraftBoundary.ts';
 import { socialFactsBrowserResult, socialFactsBrowserSchemas, isSocialFactsBrowserPath } from './socialFactsBoundary.ts';
 import { socialGenerationBrowserResult } from './socialGenerationBoundary.ts';
 import { campaignOpeningBrowserResult } from './campaignOpeningBoundary.ts';
+import { bookingLinkApiRequest, bookingLinkBrowserResult, bookingLinkBrowserSchemas } from './settingsBoundary.ts';
 import { manualProspectBrowserResult } from './manualProspectBoundary.ts';
 import { callingBrowserResult } from './callingBoundary.ts';
 import {callingSetupBrowserResult} from './callingSetupBoundary.ts';
@@ -178,6 +179,7 @@ export function createBrowserHandler(runtime: BrowserRuntime): BrowserHandler {
         if (apiPath !== null && isSocialFactsBrowserPath(apiPath) && principal.role !== 'admin') throw new Refusal(403);
         if ((apiPath === '/social/drafts/request' || apiPath === '/social/drafts/request/receipt') && principal.role !== 'admin') throw new Refusal(403);
         if (apiPath !== null && Object.hasOwn(openingBrowserSchemas, apiPath) && principal.role !== 'admin') throw new Refusal(403);
+        if (apiPath !== null && Object.hasOwn(bookingLinkBrowserSchemas, apiPath) && principal.role !== 'admin') throw new Refusal(403);
         if (request.path === BROWSER_PATHS.signOut) {
           // Clear local custody on uncertainty, but never claim remote revocation succeeded.
           outgoing.push(...Object.values(COOKIE_NAMES).map(clearCookie));
@@ -197,6 +199,7 @@ async function product(request: ApiRequest, path: string, context: BrowserReques
   if (path === '/dial/check' && !dialCheckRequestSchema.safeParse(body).success) throw new Refusal(400);
   if (path === '/social/drafts/request' && !guidedSocialCommandSchema.safeParse(body).success) throw new Refusal(400);
   if (openingBrowserSchemas[path] && !openingBrowserSchemas[path].safeParse(body).success) throw new Refusal(400);
+  if (bookingLinkBrowserSchemas[path] && !bookingLinkBrowserSchemas[path].safeParse(body).success) throw new Refusal(400);
   if (body !== null && typeof body === 'object' && !Array.isArray(body)) {
     for (const name of Object.keys(body)) {
       if (['authorization', 'cookie', 'headers', 'origin'].includes(name.toLowerCase())
@@ -211,10 +214,11 @@ async function product(request: ApiRequest, path: string, context: BrowserReques
   }
   if (isSocialFactsBrowserPath(path) && !socialFactsBrowserSchemas[path]!.safeParse(body).success) throw new Refusal(400);
   // Construct a closed transport envelope. Neither body nor browser headers set API credentials.
-  const result = await route(request.method, path, { ...context.api, auth: context.auth }, {
+  const bookingLinkRoute = bookingLinkApiRequest(path, body);
+  const result = await route(request.method, bookingLinkRoute?.path ?? path, { ...context.api, auth: context.auth }, {
     query: request.query,
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-    body,
+    body: bookingLinkRoute === null ? body : bookingLinkRoute.body,
   });
   if (path === '/dial/check') {
     const input = dialCheckRequestSchema.parse(body);
@@ -247,6 +251,8 @@ async function product(request: ApiRequest, path: string, context: BrowserReques
   if (socialGeneration !== null) return response(socialGeneration.status, socialGeneration.body, cookies);
   const opening = campaignOpeningBrowserResult(path, result.status, result.body);
   if (opening !== null) return response(opening.status, opening.body, cookies);
+  const bookingLink = bookingLinkBrowserResult(path, result.status, result.body);
+  if (bookingLink !== null) return response(bookingLink.status, bookingLink.body, cookies);
   const manual = manualProspectBrowserResult(path, result.status, result.body);
   if (manual !== null) return response(manual.status, manual.body, cookies);
   const calling = callingBrowserResult(path, result.status, result.body);

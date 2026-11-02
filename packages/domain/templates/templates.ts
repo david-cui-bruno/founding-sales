@@ -37,8 +37,9 @@ import { underImmutabilityGuard } from '../sequences/immutability.ts';
  * allowed — the blanket ban on "unsubscribe" went with migration 0024, because it banned
  * "reply unsubscribe", which is the very thing Callie wants to offer.
  *
- * Every body must be one Callie can give exactly one footer to — the sign-off, and the
- * workspace's postal address when it has one (`template_footer_missing`) — at every
+ * Every body must be one Callie can give exactly one footer to — the sign-off, the
+ * company line with the workspace's postal address, and the stop sentence
+ * (`template_footer_missing`) — at every
  * approval and on every save that keeps or grants one. Migration 0019 dropped the CHECK
  * that repeated this rule and 0024 dropped the stop line from the block itself, so the
  * rule is the guard and nothing waives it.

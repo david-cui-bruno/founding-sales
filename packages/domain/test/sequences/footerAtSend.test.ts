@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { SENDING_STOP_LINE } from '@fss/contracts';
+import { LEGACY_SENDING_STOP_LINE, SENDING_STOP_LINE } from '@fss/contracts';
 import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
 import { allowAllEligibility } from '../../sequences/eligibility.ts';
@@ -20,9 +20,9 @@ import { FIXTURE_SIGN_OFF, fixtureBody, seedSequences } from './support/sequence
  *
  * `runEmailStep` renders, composes and only then calls `prepare`, so the bytes that
  * cross the hand-off are the bytes the fence freezes. A body that cannot be given exactly
- * one final stop line inside the fence's 4,000 characters holds the step **with no fence
- * created at all** — the review's "check the final rendered body before fence insertion
- * and return a handled hold".
+ * one final footer block inside the fence's 4,000 characters — or a workspace with no
+ * postal address to put in it — holds the step **with no fence created at all**: the
+ * review's "check the final rendered body before fence insertion and return a handled hold".
  *
  * ## The vacuous-pass trap
  *
@@ -37,6 +37,7 @@ let seeded: TwoWorkspaces;
 let crm: SeededCrm;
 
 const ADDRESS = '1 Example Way, Suite 2\nProvidence, RI 02903';
+const SHORT_ADDRESS = '1 Way, Providence, RI 02903';
 const DUE = '2026-09-21T13:00:00Z';
 
 const contextFor = (who: 'admin' | 'salesperson'): RepositoryContext =>
@@ -144,7 +145,7 @@ beforeEach(async () => {
 });
 
 describe('the step hands over composed bytes', () => {
-  it('appends the sign-off and the configured address, and no stop line', async () => {
+  it('appends the sign-off, the company line with the address, and the stop sentence', async () => {
     await setPostalAddress(ADDRESS);
     const enrollmentId = await enrolledAndDue();
     const handoff = recordingSendHandoff();
@@ -162,22 +163,43 @@ describe('the step hands over composed bytes', () => {
         postalAddress: ADDRESS,
       })}`,
     );
-    expect(request?.body).not.toContain(SENDING_STOP_LINE);
+    expect(request?.body).not.toContain(LEGACY_SENDING_STOP_LINE);
+    expect(request?.body?.endsWith(`${ADDRESS}\n${SENDING_STOP_LINE}`)).toBe(true);
   });
 
-  it('hands over today’s bytes exactly when no address is configured', async () => {
+  it('holds the step with no fence when no address is configured, and hands over once one is', async () => {
     await setPostalAddress(null);
     const enrollmentId = await enrolledAndDue();
     const handoff = recordingSendHandoff();
+    const outcome = await runDueStepExecution(worker(), {
+      enrollmentId,
+      now: DUE,
+      eligibility: allowAllEligibility(),
+      sendHandoff: handoff,
+    });
+    // `postal_address_required` is a scoped pause, never an exception and never a footer
+    // without the address; nothing reaches the hand-off.
+    expect(outcome).toMatchObject({ kind: 'held', reasonCode: 'scoped_pause' });
+    expect(handoff.prepared).toEqual([]);
+
+    await setPostalAddress(ADDRESS);
+    await database.session.query('DELETE FROM active_holds');
+    await setDue(enrollmentId);
+    const second = recordingSendHandoff();
     expect(
       (await runDueStepExecution(worker(), {
         enrollmentId,
         now: DUE,
         eligibility: allowAllEligibility(),
-        sendHandoff: handoff,
+        sendHandoff: second,
       })).kind,
     ).toBe('handed_to_send');
-    expect(handoff.prepared[0]?.body).toBe(fixtureBody(`A short note about ${crm.collidingFirmName}.`));
+    expect(second.prepared[0]?.body).toBe(
+      `A short note about ${crm.collidingFirmName}.\n\n${sendFooterBlock({
+        signOff: FIXTURE_SIGN_OFF,
+        postalAddress: ADDRESS,
+      })}`,
+    );
   });
 
   it('composes a footerless approved body too: the shapes meet at the hand-off', async () => {
@@ -205,7 +227,7 @@ describe('the step hands over composed bytes', () => {
     // `{firm_website}` is whatever the CRM holds, so an approval can be clean and the
     // rendered bytes still carry a link the outbound CHECK refuses. A handled hold,
     // before any fence exists — never an exception out of the insert.
-    await setPostalAddress(null);
+    await setPostalAddress(ADDRESS);
     await database.session.query('UPDATE firms SET website = $3 WHERE workspace_id = $1 AND id = $2', [
       seeded.alpha.workspaceId,
       crm.alpha.firmId,
@@ -242,10 +264,10 @@ describe('the step hands over composed bytes', () => {
   });
 
   it('holds the step before any fence exists when the composed body would pass 4,000', async () => {
-    await setPostalAddress(null);
-    const footer = FIXTURE_SIGN_OFF;
-    // The longest body the template rules admit with no address: 4,000 composed.
-    await templateBody(`${'x'.repeat(4000 - footer.length - 2)}\n\n${footer}`);
+    // The longest body the template rules admit that composes to exactly 4,000 under a
+    // short address: a footerless approval, since an approval never carries an address.
+    const footer = sendFooterBlock({ signOff: FIXTURE_SIGN_OFF, postalAddress: SHORT_ADDRESS });
+    await templateBody('x'.repeat(4000 - footer.length - 2));
     await setPostalAddress(ADDRESS);
 
     const enrollmentId = await enrolledAndDue();
@@ -262,8 +284,8 @@ describe('the step hands over composed bytes', () => {
     const [execution] = await listStepExecutions(worker(), { enrollmentId });
     expect(execution).toMatchObject({ state: 'held', holdReasonCode: 'template_unapproved' });
 
-    // Clear the address and the same step goes: the refusal was the length.
-    await setPostalAddress(null);
+    // Shorten the address and the same step goes: the refusal was the length.
+    await setPostalAddress(SHORT_ADDRESS);
     await setDue(enrollmentId);
     const second = recordingSendHandoff();
     expect(

@@ -1,5 +1,5 @@
 import type { SessionQueryable } from '../../../db/queryable.ts';
-import { SENDING_STOP_LINE, templateContentHash } from '../../../src/rules/templates.ts';
+import { LEGACY_SENDING_STOP_LINE, sendFooterBlock, templateContentHash } from '../../../src/rules/templates.ts';
 import type { SeededWorkspace, TwoWorkspaces } from '../../db/support/fixtures.ts';
 
 /**
@@ -18,14 +18,26 @@ import type { SeededWorkspace, TwoWorkspaces } from '../../db/support/fixtures.t
 
 export const FIXTURE_SIGN_OFF = 'Sam Example\nCallie';
 
+/**
+ * The `postal_address` both fixture workspaces have configured: a send requires one
+ * (`SEND_FOOTER_POLICY`), and a step in a workspace with none holds for a reason none of
+ * the scenarios that run steps is about. Invented.
+ */
+export const FIXTURE_POSTAL_ADDRESS = '1 Example Way, Providence, RI 02903';
+
 /** A body that satisfies every rule `templateTextIssues` applies, including the footer. */
 export function fixtureBody(opening: string): string {
   return `${opening}\n\n${FIXTURE_SIGN_OFF}`;
 }
 
+/** What a send composes for `fixtureBody(opening)`: the words and the full footer block, under the fixture address. */
+export function composedFixtureBody(opening: string): string {
+  return `${opening}\n\n${sendFooterBlock({ signOff: FIXTURE_SIGN_OFF, postalAddress: FIXTURE_POSTAL_ADDRESS })}`;
+}
+
 /** The same body in the pre-0024 shape, which a send still recognises and rewrites. */
 export function legacyFixtureBody(opening: string): string {
-  return `${opening}\n\n${FIXTURE_SIGN_OFF}\n${SENDING_STOP_LINE}`;
+  return `${opening}\n\n${FIXTURE_SIGN_OFF}\n${LEGACY_SENDING_STOP_LINE}`;
 }
 
 export interface SeededTemplate {
@@ -99,6 +111,12 @@ async function seedTemplate(
 }
 
 async function seedSequence(session: SessionQueryable, workspace: SeededWorkspace): Promise<SeededSequence> {
+  await session.query(
+    `INSERT INTO workspace_settings (workspace_id, setting_key, version, value, change_note, changed_by_user_id)
+     VALUES ($1, 'postal_address', 1, $2::jsonb, 'fixture: a send requires a postal address', $3)
+     ON CONFLICT (workspace_id, setting_key, version) DO NOTHING`,
+    [workspace.workspaceId, JSON.stringify({ address: FIXTURE_POSTAL_ADDRESS }), workspace.admin.userId],
+  );
   await session.query(
     `INSERT INTO workspace_holiday_calendars (workspace_id, version, dates, created_by_user_id)
      VALUES ($1, $2, ARRAY[DATE '2026-12-25', DATE '2027-01-01'], $3)`,

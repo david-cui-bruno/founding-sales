@@ -10,7 +10,7 @@ import {
   templateVersionsResponseSchema,
   wireDrift,
 } from '@fss/contracts';
-import { SENDING_STOP_LINE } from '@fss/domain/src/rules/templates.ts';
+import { LEGACY_SENDING_STOP_LINE, SENDING_STOP_LINE } from '@fss/domain/src/rules/templates.ts';
 import { localNoopSuppressionJournal } from '../src/journal/index.ts';
 import { dispatch, type ApiRequest } from '../src/server.ts';
 import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from './support/authFixture.ts';
@@ -201,7 +201,7 @@ describe('the sequence, template and enrollment routes', () => {
       command({
         name: 'Still sending an address',
         subject: 'Hello',
-        body: `Hello.\n\n${SIGN_OFF}\n${SENDING_STOP_LINE}`,
+        body: `Hello.\n\n${SIGN_OFF}\n${LEGACY_SENDING_STOP_LINE}`,
         footerSignOff: SIGN_OFF,
         footerPostalAddress: '1 Example Way, Suite 100, Providence, RI 02903',
         requiredVariables: [],
@@ -213,7 +213,7 @@ describe('the sequence, template and enrollment routes', () => {
   });
 
   it('creates and approves a template a salesperson may not', async () => {
-    const body = `Hello {contact_first_name},\n\nA note about {firm_name}.\n\n${SIGN_OFF}\n${SENDING_STOP_LINE}`;
+    const body = `Hello {contact_first_name},\n\nA note about {firm_name}.\n\n${SIGN_OFF}\n${LEGACY_SENDING_STOP_LINE}`;
     const payload = {
       name: 'First touch',
       subject: 'A question about {firm_name}',
@@ -240,7 +240,7 @@ describe('the sequence, template and enrollment routes', () => {
       command({
         name: 'Copy advice',
         subject: 'A 20% price cut',
-        body: `${'Word '.repeat(90)}See https://one.example.test and https://two.example.test.\n\n${SIGN_OFF}\n${SENDING_STOP_LINE}`,
+        body: `${'Word '.repeat(90)}See https://one.example.test and https://two.example.test.\n\n${SIGN_OFF}\n${LEGACY_SENDING_STOP_LINE}`,
         footerSignOff: SIGN_OFF,
         requiredVariables: [],
         approve: true,
@@ -353,7 +353,7 @@ describe('the sequence, template and enrollment routes', () => {
       templateVersionId,
       name: 'First touch',
       subject: 'A question about {firm_name}',
-      body: `Hello {contact_first_name},\n\nA corrected note about {firm_name}.\n\n${SIGN_OFF}\n${SENDING_STOP_LINE}`,
+      body: `Hello {contact_first_name},\n\nA corrected note about {firm_name}.\n\n${SIGN_OFF}\n${LEGACY_SENDING_STOP_LINE}`,
       footerSignOff: SIGN_OFF,
       requiredVariables: ['firm_name', 'contact_first_name'],
     };

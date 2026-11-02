@@ -5,6 +5,8 @@ import { DEFAULT_MEETING_TRANSCRIPTION, meetingTranscriptionSettingSchema } from
 import { commandIdSchema } from './auth.ts';
 import { clientVersionRangeSchema, semanticVersionSchema } from './clientVersion.ts';
 import { instant, uuid } from './foundationRows.ts';
+import { sourcingUrlSchema } from './sourcing.ts';
+import { hasOptOutLink } from './templates.ts';
 
 /**
  * The wire contract of administrative configuration, the dashboard and Diagnostics
@@ -52,7 +54,7 @@ import { instant, uuid } from './foundationRows.ts';
  * reviewed postmaster — that a jsonb blob cannot express. See
  * `docs/decisions/g9-two-slices-that-belong-to-other-lanes.md`.
  */
-export const SETTING_KEYS = ['business_time_zone', 'sending_enabled', 'postal_address'] as const;
+export const SETTING_KEYS = ['business_time_zone', 'sending_enabled', 'postal_address', 'booking_link'] as const;
 export type ActiveSettingKey = (typeof SETTING_KEYS)[number];
 
 /**
@@ -86,9 +88,9 @@ const businessTimeZoneSettingSchema = z.strictObject({ timeZone: ianaTimeZoneSch
  *
  * The value is plain text and bounded, because it is appended to every automated body:
  * at most 200 characters, no markup, no link and no "unsubscribe" (which the fence's own
- * CHECK refuses in a body). `{ "address": null }` clears it, and a cleared address is not
- * an error: the footer is then the sign-off alone, and sending continues. The switch that would make it compulsory is `SEND_FOOTER_POLICY`
- * in `packages/domain/src/rules/templates.ts`.
+ * CHECK refuses in a body). `{ "address": null }` clears it, and a cleared address holds
+ * every send (`postal_address_required`, `SEND_FOOTER_POLICY` in
+ * `packages/domain/src/rules/templateFooter.ts`): the footer's company line carries it.
  */
 export const POSTAL_ADDRESS_MAX_LENGTH = 200;
 
@@ -108,6 +110,23 @@ export const postalAddressSettingSchema = z.strictObject({
   address: postalAddressTextSchema.nullable(),
 });
 export type PostalAddressSetting = z.infer<typeof postalAddressSettingSchema>;
+
+/**
+ * The booking link `{booking_link}` fills in a template (migration 0157, 1 November 2026).
+ *
+ * An admin sets one public HTTPS URL (no credentials, no port, a public host name, at
+ * most 500 characters, no whitespace) or `{ "url": null }` to clear it. An unset or
+ * invalid value leaves the variable absent, so a template that needs it holds its step
+ * like any other missing variable. The URL goes into plain text beside the opt-out
+ * link rule, so a URL that rule would already refuse is refused here.
+ */
+export const bookingLinkSettingSchema = z.strictObject({
+  url: sourcingUrlSchema
+    .refine(value => !/\s/u.test(value), 'no whitespace')
+    .refine(value => !hasOptOutLink(value), 'no opt-out wording')
+    .nullable(),
+});
+export type BookingLinkSetting = z.infer<typeof bookingLinkSettingSchema>;
 
 /**
  * 16.2: "Production sending remains disabled until ... an authenticated admin enables
@@ -147,6 +166,7 @@ export const SETTING_VALUE_SCHEMAS = {
   business_time_zone: businessTimeZoneSettingSchema,
   sending_enabled: sendingEnabledSettingSchema,
   postal_address: postalAddressSettingSchema,
+  booking_link: bookingLinkSettingSchema,
 } as const satisfies Record<ActiveSettingKey, z.ZodType>;
 
 /**
@@ -159,6 +179,8 @@ export const DEFAULT_SETTING_VALUES: Readonly<Record<ActiveSettingKey, unknown> 
     sending_enabled: { enabled: false, releaseGateReference: null },
     // No address until an admin configures one, and no address is not an error.
     postal_address: { address: null },
+    // No link until an admin configures one; `{booking_link}` is then absent.
+    booking_link: { url: null },
   });
 
 // ---------------------------------------------------------------------------

@@ -20,6 +20,10 @@ import {
   updateSetting,
 } from '../../settings/store.ts';
 import { readWorkspacePostalAddress } from '../../settings/postalAddress.ts';
+import { readWorkspaceBookingLink } from '../../settings/bookingLink.ts';
+import { templateVariablesFor } from '../../sequences/variables.ts';
+import { renderTemplate } from '../../src/rules/templates.ts';
+import { seedCrm, type SeededCrm } from '../db/support/crmFixtures.ts';
 import { ALL_BLOCKED_ACTION_KINDS, CHANNEL_BLOCKED_ACTION_KINDS } from '../../policy/types.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 import { FIXTURE_API_DIGEST, storeFixtureCiGateRecord } from '../release/support/releaseRecords.ts';
@@ -352,6 +356,109 @@ describe('the postal address', () => {
       database.session,
     );
     expect(await readWorkspacePostalAddress(beta)).toBeNull();
+  });
+});
+
+/**
+ * The `booking_link` key (migration 0157): the public HTTPS URL `{booking_link}` fills.
+ * An unset, cleared or unreadable value leaves the variable absent, so a template that
+ * needs it holds its step like any other missing variable.
+ */
+describe('the booking link', () => {
+  let database: TestDatabase;
+  let seeded: TwoWorkspaces;
+  let crm: SeededCrm;
+  let admin: RepositoryContext;
+  const url = 'https://cal.example.test/demo?utm=callie';
+  const variables = async (): Promise<Readonly<Record<string, string>>> =>
+    await templateVariablesFor(admin, { firmId: crm.alpha.firmId, contactId: crm.alpha.contactId });
+
+  beforeAll(async () => {
+    database = await createTestDatabase();
+    seeded = await seedTwoWorkspaces(database.session);
+    crm = await seedCrm(database.session, seeded);
+    admin = repositoryContext(
+      workspaceScope(seeded.alpha.workspaceId, { kind: 'user', userId: seeded.alpha.admin.userId, role: 'admin' }),
+      database.session,
+    );
+  });
+
+  afterAll(async () => {
+    await database.drop();
+  });
+
+  it('is absent by default, and the variable is absent with it', async () => {
+    expect(DEFAULT_SETTING_VALUES['booking_link']).toEqual({ url: null });
+    expect(await readWorkspaceBookingLink(admin)).toBeNull();
+    expect(await variables()).not.toHaveProperty('booking_link');
+    expect(renderTemplate({ subject: 'Hi', body: 'Book: {booking_link}' }, await variables())).toMatchObject({
+      rendered: false,
+      missing: ['booking_link'],
+    });
+  });
+
+  it('stores an https URL and fills {booking_link} from it', async () => {
+    const saved = await updateSetting(admin, { settingKey: 'booking_link', value: { url }, changeNote: 'the demo calendar' });
+    expect(saved.ok).toBe(true);
+    expect(await readWorkspaceBookingLink(admin)).toBe(url);
+    expect(await variables()).toMatchObject({ booking_link: url, firm_name: expect.any(String) });
+    expect(renderTemplate({ subject: 'Hi', body: 'Book:\n{booking_link}' }, await variables())).toMatchObject({
+      rendered: true,
+      body: `Book:\n${url}`,
+    });
+  });
+
+  it('refuses http, credentials, a port, a bare host, whitespace, wording the opt-out rule refuses, and 501 characters', async () => {
+    for (const value of [
+      { url: 'http://cal.example.test/demo' },
+      { url: 'https://user:pass@cal.example.test/demo' },
+      { url: 'https://cal.example.test:8443/demo' },
+      { url: 'https://localhost/demo' },
+      { url: 'https://10.0.0.1/demo' },
+      { url: 'cal.example.test/demo' },
+      { url: 'https://cal.example.test/a b' },
+      { url: 'https://cal.example.test/unsubscribe' },
+      { url: `https://cal.example.test/${'x'.repeat(480)}` },
+      { url: '' },
+      { url: 42 },
+      { url, extra: 'nope' },
+    ]) {
+      expect(
+        await updateSetting(admin, { settingKey: 'booking_link', value, changeNote: 'trying it on' }),
+        JSON.stringify(value).slice(0, 60),
+      ).toEqual({ ok: false, reason: 'invalid_value' });
+    }
+    expect(await readWorkspaceBookingLink(admin)).toBe(url);
+  });
+
+  it('clears with a null, which is a new version, and the variable is absent again', async () => {
+    const cleared = await updateSetting(admin, { settingKey: 'booking_link', value: { url: null }, changeNote: 'paused' });
+    expect(cleared.ok && cleared.value.current.version).toBe(2);
+    expect(await variables()).not.toHaveProperty('booking_link');
+    expect((await readSettingHistory(admin, 'booking_link')).map(entry => entry.value)).toEqual([{ url: null }, { url }]);
+  });
+
+  it('treats a stored value that no longer parses as absent, never as a half-parsed value', async () => {
+    await database.session.query(
+      `UPDATE workspace_settings SET superseded_at = now(), superseded_by_version = 3
+        WHERE workspace_id = $1 AND setting_key = 'booking_link' AND superseded_at IS NULL`,
+      [seeded.alpha.workspaceId],
+    );
+    await database.session.query(
+      `INSERT INTO workspace_settings (workspace_id, setting_key, version, value, changed_by_user_id)
+       VALUES ($1, 'booking_link', 3, '{"url":"http://insecure.example.test/x"}'::jsonb, $2)`,
+      [seeded.alpha.workspaceId, seeded.alpha.admin.userId],
+    );
+    expect(await readWorkspaceBookingLink(admin)).toBeNull();
+    expect(await variables()).not.toHaveProperty('booking_link');
+  });
+
+  it('is one workspace’s link and never the other’s', async () => {
+    const beta = repositoryContext(
+      workspaceScope(seeded.beta.workspaceId, { kind: 'user', userId: seeded.beta.admin.userId, role: 'admin' }),
+      database.session,
+    );
+    expect(await readWorkspaceBookingLink(beta)).toBeNull();
   });
 });
 

@@ -66,6 +66,8 @@ it('withholds generated prose when the authenticated device is revoked during ge
 it('accepts one exact explicit send receipt, refuses changed replay bytes and reads its durable queued state',async()=>{
  const input=await conversation(),ctx=repositoryContext(workspaceScope(f.alpha.workspaceId,{kind:'user',userId:f.alpha.salesperson.userId,role:'salesperson'}),f.db);
  await f.db.query("INSERT INTO sending_domains(workspace_id,domain,is_primary) VALUES($1,'example.test',true) ON CONFLICT DO NOTHING",[f.alpha.workspaceId]);
+ // A send requires a configured postal address (`SEND_FOOTER_POLICY`); the reply carries the footer.
+ await f.db.query("INSERT INTO workspace_settings(workspace_id,setting_key,version,value,change_note,changed_by_user_id) VALUES($1,'postal_address',1,$2::jsonb,'synthetic fixture address',$3) ON CONFLICT (workspace_id,setting_key,version) DO NOTHING",[f.alpha.workspaceId,JSON.stringify({address:'1 Example Way, Providence, RI 02903'}),f.alpha.admin.userId]);
  const {commandId,clientVersion,sourceRevision,...source}=input;
  const preview=await previewHumanReply(ctx,{...source,text:'My exact human reply.'});if(!preview.ok)throw new Error(preview.reason);
  const send={...source,text:'My exact human reply.',commandId,clientVersion,sourceRevision,draftRevision:preview.value.draftRevision};

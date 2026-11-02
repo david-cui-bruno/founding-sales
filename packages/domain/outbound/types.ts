@@ -61,8 +61,9 @@ export const SEND_REFUSAL_CODES = [
   'footer_not_composed',
   /**
    * `SEND_FOOTER_POLICY.postalAddressRequired` is on and the workspace has configured no
-   * `postal_address`. Off by default: an absent address composes the sign-off and the
-   * stop line, and sending continues.
+   * `postal_address`. On by default since the outbound campaign (November 2026): the footer
+   * carries the postal address, so a send without one is a scoped hold, never a footer
+   * without it.
    */
   'postal_address_required',
   'route_invalid',

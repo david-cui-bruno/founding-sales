@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
-import { APPROVAL_FOOTER_POLICY, composeSendBody, type SendFooterConfiguration } from './templateFooter.ts';
+import { APPROVAL_FOOTER_POLICY, composeSendBody, hasStopLine, type SendFooterConfiguration } from './templateFooter.ts';
 import {
+  LEGACY_SENDING_STOP_LINE,
   NO_OPTOUT_LINK_RULE,
   OPT_OUT_LINK_PATTERN,
   SENDING_STOP_LINE,
@@ -26,27 +27,31 @@ import {
  * The copy rules — word count, links, price and guarantee wording — are warnings since
  * 26 September 2026 (`TEMPLATE_WARNING_CODES`): an approval reports them and approves.
  *
- * The block is the sign-off, then the workspace's postal address when it has one. The
- * address left the block on 22 September 2026
+ * The block is the sign-off, the company line (`Callie, maintenance coordination
+ * software · <postal address>`) and the stop sentence (`SENDING_STOP_LINE`). The address
+ * left the block on 22 September 2026
  * (`docs/archive/decisions/g20-automated-email-carries-no-postal-address.md`) and came
  * back on 27 September as a *setting* rather than a template column, composed at send
- * (migration 0020, lane W3-F): reversing G20 is a new migration, not a revert.
+ * (migration 0020, lane W3-F): reversing G20 is a new migration, not a revert. Since
+ * David's approved outbound campaign (November 2026) a send *requires* it
+ * (`SEND_FOOTER_POLICY`); an approval never does (`APPROVAL_FOOTER_POLICY`).
  *
- * **The stop line went on 29 September 2026** (David: "remove the mandatory 'Reply
+ * **The old stop line went on 29 September 2026** (David: "remove the mandatory 'Reply
  * "stop"' footer and remove the blanket database ban on the word 'unsubscribe.'";
- * `docs/greenfield/decisions/email-presentation-20260929.md`). Nothing appends
- * `SENDING_STOP_LINE` any more. What is left of 12.6 is the part David kept: **no
- * visible opt-out link** (`NO_OPTOUT_LINK_RULE`, `hasOptOutLink`, and migration 0024's
- * two `*_no_optout_link` CHECKs), and a stop request in ordinary language still
- * suppresses (`rules/replyClassification.ts`, untouched by that decision).
+ * `docs/greenfield/decisions/email-presentation-20260929.md`), and the campaign brought
+ * back a different one: `If this isn't relevant, just reply and I won't email again.`
+ * The old sentence is `LEGACY_SENDING_STOP_LINE` and is only *recognised*. What is left
+ * of 12.6 is the part David kept: **no visible opt-out link** (`NO_OPTOUT_LINK_RULE`,
+ * `hasOptOutLink`, and migration 0024's two `*_no_optout_link` CHECKs), and a stop
+ * request in ordinary language suppresses (`rules/replyClassification.ts`).
  *
  * **The footer is composed at send, before the fence freezes the bytes.** `composeSendBody`
  * is the one function that decides the final text: it removes a recognised footer block —
  * and nothing else, never the sign-off a second time — and appends the block the
  * workspace's configuration says now. A recognised block is one this workspace's records
- * can rebuild, in today's shape or in the pre-0024 shape that ends with the stop line, so
- * a template approved or a fence prepared before the decision loses the line at send
- * rather than keeping it forever.
+ * can rebuild, in today's shape, in the shape before the company line, or in the pre-0024
+ * shape that ends with the legacy stop line, so a template approved or a fence prepared
+ * under an earlier footer is replaced at send rather than doubled.
  *
  * What does not survive from the old module is its hard-coded sign-off, which carried
  * a real name, phone number and site. The sign-off is workspace configuration here;
@@ -54,10 +59,12 @@ import {
  */
 
 /**
- * The pre-0024 stop line: recognised so it can be removed, never appended. It lives in
- * `@fss/contracts` so the Mac reads the same bytes, and so does the opt-out-link rule.
+ * The stop sentence sends end with, and the pre-0024 one that is only recognised, never
+ * appended. Both live in `@fss/contracts` so every client reads the same bytes, and so
+ * does the opt-out-link rule.
  */
 export {
+  LEGACY_SENDING_STOP_LINE,
   SENDING_STOP_LINE,
   NO_OPTOUT_LINK_RULE,
   OPT_OUT_LINK_PATTERN,
@@ -161,11 +168,10 @@ export function templateTextIssues(text: TemplateText, rules: TemplateRules): st
     issues.push('template_optout_link');
   }
 
-  // A sign-off that still carries the old stop sentence is refused before anything else
-  // is said about the body: every send composed under it would carry a line this release
-  // exists to remove, and `composeSendBody` refuses those bytes (review of PR 311, P1-3).
-  const stopLine = rules.footer.stopLine ?? SENDING_STOP_LINE;
-  const signOffRepeatsStopLine = rules.footer.signOff.includes(stopLine);
+  // A sign-off that carries a stop sentence is refused before anything else is said about
+  // the body: every send composed under it would carry that line twice, and
+  // `composeSendBody` refuses those bytes (review of PR 311, P1-3).
+  const signOffRepeatsStopLine = hasStopLine(rules.footer.signOff);
   if (signOffRepeatsStopLine) issues.push('template_sign_off_repeats_stop_line');
 
   // Since the footer is composed at send (lane W3-F), the rule is not "the body ends with

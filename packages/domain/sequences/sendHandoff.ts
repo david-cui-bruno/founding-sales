@@ -16,11 +16,12 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
  * re-checks the hash against `template_versions` and freezes the envelope.
  *
  * The **footer is composed before the hand-off** (lane W3-F, migration 0020): the
- * sign-off and the workspace's `postal_address` when it has one — and nothing else since
- * migration 0024 — are appended to the rendered body by `outbound/footer.ts` while the
+ * sign-off, the company line with the workspace's `postal_address`, and the stop sentence
+ * are appended to the rendered body by `outbound/footer.ts` while the
  * step is still deciding, so the bytes that cross this seam are the bytes the fence
  * freezes and the bytes Gmail receives. An approved body may carry a footer block inside
- * it, in today's shape or the pre-0024 one that ends with the stop line, or none at all;
+ * it, in today's shape, the earlier sign-off-and-address one, or the pre-0024 one that ends
+ * with the legacy stop line, or none at all;
  * the composition recognises and replaces a block it can rebuild, and the fence refuses
  * bytes it may not store — too long, or carrying a visible opt-out link.
  *

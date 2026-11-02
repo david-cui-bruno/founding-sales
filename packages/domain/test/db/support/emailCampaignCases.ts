@@ -40,7 +40,7 @@ async function admission(f: Fixture): Promise<Row> {
 const checks: [string, Row][] = [
   ['email_campaign_authorization_revision', { authorization_revision: 0 }],
   ['email_campaign_regions', { regions: [] }], ['email_campaign_regions', { regions: ['TX', 'TX'] }],
-  ['email_campaign_regions', { regions: ['CA'] }], ['email_campaign_regions', { regions: ['TX', null] }],
+  ['email_campaign_regions', { regions: ['PR'] }], ['email_campaign_regions', { regions: ['TX', null] }],
   ['email_campaign_lifetime_cap', { max_enrollments: 0 }], ['email_campaign_lifetime_cap', { max_enrollments: 26 }],
   ['email_campaign_daily_cap', { daily_admission_limit: 0 }], ['email_campaign_daily_cap', { daily_admission_limit: 6 }],
   ['email_campaign_revision', { revision: 0, revoked_at: '2026-10-22T13:00:00Z' }],

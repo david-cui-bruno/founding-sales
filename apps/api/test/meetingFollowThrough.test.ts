@@ -1,7 +1,7 @@
 import {meetingFollowThroughViewSchema,meetingFollowThroughViewV2Schema} from '@fss/contracts';
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { templateContentHash } from '@fss/domain/src/rules/templates.ts';
+import { sendFooterBlock, templateContentHash } from '@fss/domain/src/rules/templates.ts';
 import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
 import { readMeetingOutcomes } from '@fss/domain/meetings/outcomes.ts';
 import { dispatch } from '../src/server.ts';
@@ -27,7 +27,9 @@ describe('meeting follow-through API', () => {
   it('guards editing by version, keeps receipts free of content and reauthorizes replay',async()=>{
     const workspace=f.alpha.workspaceId,context=repositoryContext(workspaceScope(workspace,{kind:'user',userId:f.alpha.salesperson.userId,role:'salesperson'}),f.db);
     const source=(await readMeetingOutcomes(context,{meetingId}))!.sourceHash,templateId=randomUUID(),templateVersionId=randomUUID();
-    const subject='Meeting details',body='Private recap words.\n\nDavid';
+    const subject='Meeting details',body='Private recap words.\n\nDavid',postalAddress='1 Example Way, Providence, RI 02903';
+    // A ready draft carries the footer a send composes, which requires a configured postal address.
+    await f.db.query("INSERT INTO workspace_settings(workspace_id,setting_key,version,value,change_note,changed_by_user_id) VALUES($1,'postal_address',1,$2::jsonb,'synthetic fixture address',$3)",[workspace,JSON.stringify({address:postalAddress}),f.alpha.admin.userId]);
     await f.db.query(`INSERT INTO template_versions(workspace_id,id,template_id,version,name,subject,body,content_hash,footer_sign_off,required_variables,approved_at,approved_by_user_id) VALUES($1,$2,$3,1,'Recap',$4,$5,$6,'David','{}',now(),$7)`,[workspace,templateVersionId,templateId,subject,body,templateContentHash({templateId,version:1,subject,body}),f.alpha.admin.userId]);
     await f.db.query(`INSERT INTO meeting_follow_through(workspace_id,id,meeting_id,firm_id,owner_user_id,source_hash,notes_revision,current_draft_version) VALUES($1,$2,$3,$4,$5,$6,0,1)`,[workspace,planId,meetingId,firmId,f.alpha.salesperson.userId,source]);
     await f.db.query(`INSERT INTO meeting_follow_through_drafts(workspace_id,plan_id,version,subject,body,rendered_hash,template_version_id,template_content_hash,source_hash,created_at,not_before) VALUES($1,$2,1,$3,$4,$5,$6,$7,$8,now(),now()+interval '30 minutes')`,[workspace,planId,subject,body,'a'.repeat(64),templateVersionId,templateContentHash({templateId,version:1,subject,body}),source]);
@@ -37,7 +39,7 @@ describe('meeting follow-through API', () => {
     const version=(begun.body as {result:{version:number}}).result.version;
     expect((await call('/meetings/recap/edit',{...begin,action:'save',subject,body:'A stale edit',commandId:randomUUID()})).status).toBe(409);
     const save={...begin,expectedPlanVersion:version,action:'save',subject,body:'Revised private recap.\n\nDavid',commandId:randomUUID()};
-    expect((await call('/meetings/recap/edit',save)).body).toMatchObject({result:{currentDraft:{version:2,body:save.body}}});
+    expect((await call('/meetings/recap/edit',save)).body).toMatchObject({result:{currentDraft:{version:2,body:`Revised private recap.\n\n${sendFooterBlock({signOff:'David',postalAddress})}`}}});
     expect((await call('/meetings/recap/edit',save)).body).toMatchObject({replayed:true,result:{currentDraft:{version:2}}});
     const v2=await call('/meetings/recap/edit',save,new URLSearchParams({version:'2'}));expect(v2.body).toMatchObject({replayed:true,result:{approvalRequired:true}});expect(meetingFollowThroughViewV2Schema.safeParse((v2.body as {result:unknown}).result).success).toBe(true);
     expect(JSON.stringify((await f.db.query('SELECT result FROM command_receipts WHERE command_id=$1',[save.commandId])).rows)).not.toContain('private recap');

@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { z } from 'zod';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { meetingBriefResponseSchema, SENDING_STOP_LINE } from '@fss/contracts';
+import { meetingBriefResponseSchema, LEGACY_SENDING_STOP_LINE } from '@fss/contracts';
 import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from './support/authFixture.ts';
 import { issueSessionFor } from './support/sessionFixture.ts';
 import { seedContact, seedFirm, seedFollowUpPermission } from './support/crmSeed.ts';
@@ -182,7 +182,7 @@ describe('Cal.com depth, over HTTP', () => {
       command({
         name: 'Overview',
         subject: 'A question about {firm_name}',
-        body: `Hello {contact_first_name},\n\nA note about {firm_name}.\n\nSam Example\nCallie\n${SENDING_STOP_LINE}`,
+        body: `Hello {contact_first_name},\n\nA note about {firm_name}.\n\nSam Example\nCallie\n${LEGACY_SENDING_STOP_LINE}`,
         footerSignOff: 'Sam Example\nCallie',
         requiredVariables: ['firm_name', 'contact_first_name'],
         approve: true,

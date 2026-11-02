@@ -52,3 +52,11 @@ it('passes current authority callback into the domain mutation',async()=>{
  expect(mocks.approve).toHaveBeenCalledWith({scope:{}},policy,expect.any(Function));
  expect(await mocks.approve.mock.calls[0]?.[2]()).toBe(true);
 });
+it('accepts a nationwide region set and refuses codes outside the states and DC',async()=>{
+ const regions=['WA','DC','TX'],payload={...policy,regions};
+ expect(await routeEmailCampaigns(request('/outreach/email-campaigns/approve',{...command,regions}),options)).toMatchObject({status:200});
+ expect(mocks.command).toHaveBeenCalledExactlyOnceWith(options.auth,principal,{commandId:id,clientVersion:'1.0.0',kind:'outreach.email_campaign_approve',payload},expect.any(Function));
+ mocks.command.mockClear();
+ expect(await routeEmailCampaigns(request('/outreach/email-campaigns/approve',{...command,regions:['PR']}),options)).toMatchObject({status:400});
+ expect(mocks.command).not.toHaveBeenCalled();
+});

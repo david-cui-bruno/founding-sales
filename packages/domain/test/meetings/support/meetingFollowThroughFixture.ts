@@ -1,13 +1,27 @@
 import { randomUUID } from 'node:crypto';
 import type { MeetingNoteItem } from '@fss/contracts';
-import { templateContentHash } from '../../../src/rules/templates.ts';
+import { composeSendBody, templateContentHash } from '../../../src/rules/templates.ts';
 import { withTransaction } from '../../../db/queryable.ts';
 import { updateSetting } from '../../../settings/store.ts';
 import { meetingTasksFixture } from './meetingTasksFixture.ts';
 
 export const RECAP_AT = '2026-10-05T15:00:00.000Z';
+/** Invented; every footer composed in these fixtures carries it. */
+export const FIXTURE_POSTAL_ADDRESS = '1 Example Way, Providence, RI 02903';
+/** The bytes a send composes for a recap body under this fixture's address: one final footer block. */
+export function composedRecap(body: string, signOff = 'Sam Example\nCallie'): string {
+  const decision = composeSendBody(body, { signOff, postalAddress: FIXTURE_POSTAL_ADDRESS });
+  if (!decision.composed) throw new Error(`the recap body cannot be composed: ${decision.reason}`);
+  return decision.body;
+}
 export async function meetingFollowThroughFixture() {
   const f = await meetingTasksFixture();
+  // A recap's footer carries the postal address a send requires (`SEND_FOOTER_POLICY`).
+  await f.db.session.query(
+    `INSERT INTO workspace_settings (workspace_id, setting_key, version, value, change_note, changed_by_user_id)
+     VALUES ($1, 'postal_address', 1, $2::jsonb, 'synthetic fixture address', $3)`,
+    [f.workspace, JSON.stringify({ address: FIXTURE_POSTAL_ADDRESS }), f.seeded.alpha.admin.userId],
+  );
   const template = async (body = 'Thanks for our conversation.\n\n{meeting_recap}\n\nSam Example\nCallie', approved = true) => {
     const templateId = randomUUID(), subject = 'Our conversation';
     return (await f.db.session.query<{ id: string }>(`INSERT INTO template_versions(workspace_id,template_id,version,name,subject,body,content_hash,footer_sign_off,required_variables,approved_at,approved_by_user_id)

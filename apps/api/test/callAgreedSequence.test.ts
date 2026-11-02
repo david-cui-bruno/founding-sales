@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
-  SENDING_STOP_LINE,
+  LEGACY_SENDING_STOP_LINE,
   callFollowUpResultSchema,
   followUpPreviewResponseSchema,
   loggedCallResultSchema,
@@ -73,7 +73,7 @@ describe('an agreed sequence recorded on the call card', () => {
       command({
         name: `Agreed overview ${randomUUID().slice(0, 8)}`,
         subject: 'The overview for {firm_name}',
-        body: `Hello {contact_first_name},\n\nThe overview we spoke about.\n\nSam Example\nCallie\n${SENDING_STOP_LINE}`,
+        body: `Hello {contact_first_name},\n\nThe overview we spoke about.\n\nSam Example\nCallie\n${LEGACY_SENDING_STOP_LINE}`,
         footerSignOff: 'Sam Example\nCallie',
         requiredVariables: ['firm_name', 'contact_first_name'],
         approve: true,
@@ -622,7 +622,7 @@ describe('an agreed sequence recorded on the call card', () => {
         command({
           name: `Overview ${randomUUID().slice(0, 8)}`,
           subject: 'A note about {firm_name}',
-          body: `Hello {contact_first_name},\n\nA note.\n\nSam Example\nCallie\n${SENDING_STOP_LINE}`,
+          body: `Hello {contact_first_name},\n\nA note.\n\nSam Example\nCallie\n${LEGACY_SENDING_STOP_LINE}`,
           footerSignOff: 'Sam Example\nCallie',
           requiredVariables: ['firm_name', 'contact_first_name'],
           approve,

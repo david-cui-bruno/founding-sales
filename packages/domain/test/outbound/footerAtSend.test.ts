@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { SENDING_STOP_LINE } from '@fss/contracts';
+import { LEGACY_SENDING_STOP_LINE, SENDING_STOP_LINE } from '@fss/contracts';
 import { makeStepExecution } from '../../db/testing/stepExecutions.ts';
 import {
   holdFence,
@@ -15,6 +15,7 @@ import { sendFooterBlock } from '../../src/rules/templates.ts';
 import {
   TEMPLATE_BODY,
   TEMPLATE_SUBJECT,
+  TEMPLATE_WORDS,
   createOutboundWorld,
   type OutboundWorld,
 } from './support/outboundWorld.ts';
@@ -38,9 +39,10 @@ import { settingLockName } from '../../settings/store.ts';
  *
  *   1. **Exactly one final footer block, whatever the address is doing.** The fence
  *      refuses to store a body too long for its column, and a send goes out with one
- *      block whether the address is set, changed or cleared. Since migration 0024 the
- *      block is the sign-off and the address; a body approved before it loses its stop
- *      line here, at the send, rather than keeping it for ever.
+ *      block whether the address is set or changed. The block is the sign-off, the
+ *      company line with the address, and the stop sentence; a body prepared under an
+ *      earlier footer is replaced here, at the send, rather than doubled. A cleared
+ *      address is a handled hold, never a footer without one.
  *   2. **A recognised block is removed and nothing else is.** `Hi Signed off` before the
  *      stop line keeps its words — the sign-off is never stripped a second time.
  *   3. **Fences prepared before the address are reconciled under the claim lock.** A
@@ -49,7 +51,7 @@ import { settingLockName } from '../../settings/store.ts';
  *      and nothing reaches Gmail.
  *   4. **The 4,000-character limit is a handled hold, never an exception.** Before the
  *      insert at prepare, and before the claim at dispatch.
- *   5. **Both approval shapes send.** The legacy body and the footerless one compose to
+ *   5. **Every approval shape sends.** The legacy body and the footerless one compose to
  *      the same bytes.
  *
  * ## The vacuous-pass traps, named
@@ -245,13 +247,13 @@ describe('the fence never freezes a body a send may not carry', () => {
     ).rejects.toThrow(/outbound_messages_no_optout_link/);
   });
 
-  it('holds a fence whose body carries a stray legacy stop line above a recognised block (P1-3)', async () => {
+  it('holds a fence whose body carries a stray stop line above a recognised block (P1-3)', async () => {
     // The P0 of the review of PR 296, restored under the new rule. The final block is
     // recognised and would be replaced, and the earlier stop line would go out with the
     // send: composing is not the composer's to do here, so the fence is held.
-    await setPostalAddress(null);
+    await setPostalAddress(ADDRESS);
     const firm = await seedFirm(world, world.alpha, 'stray-stop-line');
-    const malformed = `Hello\n${SENDING_STOP_LINE}\n\n${SIGN_OFF}\n${SENDING_STOP_LINE}`;
+    const malformed = `Hello\n${SENDING_STOP_LINE}\n\n${SIGN_OFF}\n${LEGACY_SENDING_STOP_LINE}`;
     const fenceId = await prepareFor(world, world.alpha, firm);
     await world.database.session.query('UPDATE outbound_messages SET body = $3 WHERE workspace_id = $1 AND id = $2', [
       workspaceId(),
@@ -269,13 +271,14 @@ describe('the fence never freezes a body a send may not carry', () => {
   });
 });
 
-describe('a fence prepared before the address is reconciled under the claim lock', () => {
+describe('a fence prepared under an earlier footer is reconciled under the claim lock', () => {
   it('rewrites the body and its hash, sends those bytes, and records the rewrite', async () => {
     await setPostalAddress(null);
     const firm = await seedFirm(world, world.alpha, 'reconcile-prepared');
-    const fenceId = await prepareFor(world, world.alpha, firm);
+    const previous = `${TEMPLATE_WORDS}\n\n${SIGN_OFF}`;
+    const fenceId = await prepareFor(world, world.alpha, firm, { body: previous });
     const frozen = await readFence(context(), fenceId);
-    expect(frozen?.body).toBe(TEMPLATE_BODY);
+    expect(frozen?.body).toBe(previous);
 
     // The admin configures the address after the fence was prepared.
     await setPostalAddress(ADDRESS);
@@ -283,12 +286,13 @@ describe('a fence prepared before the address is reconciled under the claim lock
     const { report, sent } = await dispatch(fenceId);
     expect(report.outcome, why(report)).toBe('sent');
 
-    const composed = `Hello.\n\nI work with property managers nearby.\n\n${sendFooterBlock({
+    const composed = `${TEMPLATE_WORDS}\n\n${sendFooterBlock({
       signOff: SIGN_OFF,
       postalAddress: ADDRESS,
     })}`;
     expect(sent.at(-1)?.body).toBe(composed);
-    expect(sent.at(-1)?.body).not.toContain(SENDING_STOP_LINE);
+    expect(sent.at(-1)?.body).not.toContain(LEGACY_SENDING_STOP_LINE);
+    expect(sent.at(-1)?.body?.endsWith(`${ADDRESS}\n${SENDING_STOP_LINE}`)).toBe(true);
 
     // What left is what the fence froze, hash included.
     const after = await readFence(context(), fenceId);
@@ -324,7 +328,7 @@ describe('a fence prepared before the address is reconciled under the claim lock
     // A fence prepared now already carries those bytes: nothing is rewritten, and the
     // ledger has no reconciliation row.
     const second = await seedFirm(world, world.alpha, 'already-composed');
-    const composed = await composeBodyForWorkspace(context(), { body: TEMPLATE_BODY, signOff: SIGN_OFF });
+    const composed = await composeBodyForWorkspace(context(), { body: TEMPLATE_WORDS, signOff: SIGN_OFF });
     expect(composed.composed).toBe(true);
     if (!composed.composed) return;
     const fresh = await prepareFor(world, world.alpha, second, { body: composed.body });
@@ -336,28 +340,35 @@ describe('a fence prepared before the address is reconciled under the claim lock
     expect(events.map(event => event.toState)).toEqual(['prepared', 'dispatching', 'sent']);
   });
 
-  it('drops an address that was cleared, and sends the sign-off alone', async () => {
+  it('holds a fence whose address was cleared, and sends it once the address is back', async () => {
     await setPostalAddress(ADDRESS);
     const firm = await seedFirm(world, world.alpha, 'address-cleared');
-    const composed = await composeBodyForWorkspace(context(), { body: TEMPLATE_BODY, signOff: SIGN_OFF });
+    const composed = await composeBodyForWorkspace(context(), { body: TEMPLATE_WORDS, signOff: SIGN_OFF });
     expect(composed.composed && composed.body.includes(ADDRESS)).toBe(true);
-    const fenceId = await prepareFor(world, world.alpha, firm, {
-      body: composed.composed ? composed.body : TEMPLATE_BODY,
-    });
+    const body = composed.composed ? composed.body : TEMPLATE_WORDS;
+    const fenceId = await prepareFor(world, world.alpha, firm, { body });
 
+    // Never a footer without the address: the send is held, nothing reaches Gmail, and
+    // the fence keeps the bytes it was frozen with.
     await setPostalAddress(null);
+    await world.clearHolds(workspaceId());
+    const held = await dispatch(fenceId);
+    expect(held.report.outcome, why(held.report)).toBe('held');
+    expect(held.report.refusal).toBe('postal_address_required');
+    expect(held.sent).toHaveLength(0);
+    expect((await readFence(context(), fenceId))?.body).toBe(body);
+
+    await setPostalAddress(ADDRESS);
     await world.clearHolds(workspaceId());
     const { report, sent } = await dispatch(fenceId);
     expect(report.outcome, why(report)).toBe('sent');
-    expect(sent.at(-1)?.body).toBe(TEMPLATE_BODY);
-    expect(sent.at(-1)?.body).not.toContain(ADDRESS);
-    expect(sent.at(-1)?.body).not.toContain(SENDING_STOP_LINE);
+    expect(sent.at(-1)?.body).toBe(body);
   });
 
   it('holds a body whose greeting ends with the sign-off rather than editing it (the `Hi David` bug)', async () => {
     await setPostalAddress(ADDRESS);
     const firm = await seedFirm(world, world.alpha, 'hi-david');
-    const body = `Hello.\n\nHi Signed off\n${SENDING_STOP_LINE}`;
+    const body = `Hello.\n\nHi Signed off\n${LEGACY_SENDING_STOP_LINE}`;
     const fenceId = await prepareFor(world, world.alpha, firm, { body });
     await world.clearHolds(workspaceId());
 
@@ -372,25 +383,41 @@ describe('a fence prepared before the address is reconciled under the claim lock
     expect(held?.state).toBe('held');
   });
 
-  it('takes the stop line off a fence prepared before 0024, and sends the sign-off alone', async () => {
+  it('replaces the stop line of a fence prepared before 0024 with today’s footer', async () => {
     // Every fence prepared before David's 29 September decision ends with the sign-off
-    // and then the stop line. The block is recognised, so it is *replaced* rather than
-    // appended to: the line goes at the send and no row was edited by the migration.
-    await setPostalAddress(null);
+    // and then the old stop line. The block is recognised, so it is *replaced* rather than
+    // appended to: no row was edited by the migration, and the fence is not doubled.
+    await setPostalAddress(ADDRESS);
     const firm = await seedFirm(world, world.alpha, 'pre-0024');
-    const legacy = `${TEMPLATE_BODY}\n${SENDING_STOP_LINE}`;
+    const legacy = `${TEMPLATE_WORDS}\n\n${SIGN_OFF}\n${LEGACY_SENDING_STOP_LINE}`;
+    const composed = `${TEMPLATE_WORDS}\n\n${sendFooterBlock({ signOff: SIGN_OFF, postalAddress: ADDRESS })}`;
     const fenceId = await prepareFor(world, world.alpha, firm, { body: legacy });
     expect((await readFence(context(), fenceId))?.body).toBe(legacy);
     await world.clearHolds(workspaceId());
 
     const { report, sent } = await dispatch(fenceId);
     expect(report.outcome, why(report)).toBe('sent');
-    expect(sent.at(-1)?.body).toBe(TEMPLATE_BODY);
-    expect(sent.at(-1)?.body).not.toContain(SENDING_STOP_LINE);
+    expect(sent.at(-1)?.body).toBe(composed);
+    expect(sent.at(-1)?.body).not.toContain(LEGACY_SENDING_STOP_LINE);
     // What left is what the fence froze.
     const after = await readFence(context(), fenceId);
-    expect(after?.body).toBe(TEMPLATE_BODY);
-    expect(after?.renderedHash).toBe(renderedHash(TEMPLATE_SUBJECT, TEMPLATE_BODY));
+    expect(after?.body).toBe(composed);
+    expect(after?.renderedHash).toBe(renderedHash(TEMPLATE_SUBJECT, composed));
+  });
+
+  it('replaces the sign-off-and-address footer of an already-frozen fence, never doubling it', async () => {
+    // The shape before the company line and the stop sentence existed.
+    await setPostalAddress(ADDRESS);
+    const firm = await seedFirm(world, world.alpha, 'pre-company-line');
+    const frozenBody = `${TEMPLATE_WORDS}\n\n${SIGN_OFF}\n${ADDRESS}`;
+    const composed = `${TEMPLATE_WORDS}\n\n${sendFooterBlock({ signOff: SIGN_OFF, postalAddress: ADDRESS })}`;
+    const fenceId = await prepareFor(world, world.alpha, firm, { body: frozenBody });
+    await world.clearHolds(workspaceId());
+
+    const { report, sent } = await dispatch(fenceId);
+    expect(report.outcome, why(report)).toBe('sent');
+    expect(sent.at(-1)?.body).toBe(composed);
+    expect(sent.at(-1)?.body?.split(SIGN_OFF)).toHaveLength(2);
   });
 });
 
@@ -487,14 +514,14 @@ describe('the claim is the footer’s decision instant', () => {
 
 describe('a body that cannot be composed is a handled hold', () => {
   it('holds the fence for repair when the address would push it past 4,000, and never calls Gmail', async () => {
-    await setPostalAddress(null);
+    await setPostalAddress(ADDRESS);
     const firm = await seedFirm(world, world.alpha, 'too-long');
-    const footer = SIGN_OFF;
+    const footer = sendFooterBlock({ signOff: SIGN_OFF, postalAddress: ADDRESS });
     const body = `${'x'.repeat(4000 - footer.length - 2)}\n\n${footer}`;
     const fenceId = await prepareFor(world, world.alpha, firm, { body });
     expect((await readFence(context(), fenceId))?.body).toHaveLength(4000);
 
-    await setPostalAddress(ADDRESS);
+    await setPostalAddress(`${ADDRESS}\nSecond floor`);
     await world.clearHolds(workspaceId());
     const { report, sent } = await dispatch(fenceId);
     expect(report.outcome, why(report)).toBe('held');
@@ -506,9 +533,9 @@ describe('a body that cannot be composed is a handled hold', () => {
     expect(held?.body).toBe(body);
     expect(held?.heldReason).toBe('footer_not_composed');
 
-    // Clear the address and the same fence goes, with the bytes it always had: the
-    // refusal was the length the address added and nothing else about this send.
-    await setPostalAddress(null);
+    // Put the address back and the same fence goes, with the bytes it always had: the
+    // refusal was the length the longer address added and nothing else about this send.
+    await setPostalAddress(ADDRESS);
     await world.clearHolds(workspaceId());
     const again = await dispatch(fenceId);
     expect(again.report.outcome, why(again.report)).toBe('sent');
@@ -517,60 +544,64 @@ describe('a body that cannot be composed is a handled hold', () => {
 });
 
 describe('the postal-address switch, in both positions', () => {
-  it('sends without an address by default, and refuses every send when the switch is on', async () => {
+  it('refuses every send with no address by default, and sends once one is configured', async () => {
     await setPostalAddress(null);
     const firm = await seedFirm(world, world.alpha, 'switch');
     const refused = await prepareFor(world, world.alpha, firm);
     await world.clearHolds(workspaceId());
 
-    const strict = await dispatch(refused, { footerPolicy: { postalAddressRequired: true } });
+    // The default, which is what this release ships: no address, and nothing goes.
+    const strict = await dispatch(refused);
     expect(strict.report.outcome, why(strict.report)).toBe('held');
     expect(strict.report.refusal).toBe('postal_address_required');
     expect(strict.sent).toHaveLength(0);
 
-    // The default, which is what this release ships: no address, and the mail goes.
+    // The relaxed position exists to be driven in a test: the company line is then the
+    // company alone, and the mail goes.
     await world.clearHolds(workspaceId());
-    const { report, sent } = await dispatch(refused);
+    const { report, sent } = await dispatch(refused, { footerPolicy: { postalAddressRequired: false } });
     expect(report.outcome, why(report)).toBe('sent');
-    expect(sent.at(-1)?.body).toBe(TEMPLATE_BODY);
+    expect(sent.at(-1)?.body).toBe(`${TEMPLATE_WORDS}\n\n${sendFooterBlock({ signOff: SIGN_OFF })}`);
 
     // And the switch is about an absent address only: with one configured it sends.
     await setPostalAddress(ADDRESS);
     const second = await seedFirm(world, world.alpha, 'switch-configured');
     const fenceId = await prepareFor(world, world.alpha, second);
     await world.clearHolds(workspaceId());
-    const strictWithAddress = await dispatch(fenceId, { footerPolicy: { postalAddressRequired: true } });
-    expect(strictWithAddress.report.outcome, why(strictWithAddress.report)).toBe('sent');
-    expect(strictWithAddress.sent.at(-1)?.body).toContain(ADDRESS);
+    const configured = await dispatch(fenceId);
+    expect(configured.report.outcome, why(configured.report)).toBe('sent');
+    expect(configured.sent.at(-1)?.body).toContain(ADDRESS);
   });
 
   it('answers the same at the seam the step calls, with no address configured', async () => {
     await setPostalAddress(null);
+    expect(await composeBodyForWorkspace(context(), { body: TEMPLATE_WORDS, signOff: SIGN_OFF })).toEqual({
+      composed: false,
+      reason: 'postal_address_required',
+    });
     expect(
       await composeBodyForWorkspace(context(), {
-        body: TEMPLATE_BODY,
-        signOff: SIGN_OFF,
-        policy: { postalAddressRequired: true },
-      }),
-    ).toEqual({ composed: false, reason: 'postal_address_required' });
-    expect(
-      await composeBodyForWorkspace(context(), {
-        body: TEMPLATE_BODY,
+        body: TEMPLATE_WORDS,
         signOff: SIGN_OFF,
         policy: { postalAddressRequired: false },
       }),
-    ).toMatchObject({ composed: true, body: TEMPLATE_BODY, changed: false });
+    ).toMatchObject({ composed: true, body: `${TEMPLATE_WORDS}\n\n${sendFooterBlock({ signOff: SIGN_OFF })}` });
   });
 });
 
-describe('both approval shapes compose to the same bytes', () => {
-  it('appends to a footerless body and dedupes a legacy one', async () => {
+describe('every approval shape composes to the same bytes', () => {
+  it('appends to a footerless body and dedupes the earlier shapes', async () => {
     await setPostalAddress(ADDRESS);
-    const words = 'Hello.\n\nI work with property managers nearby.';
-    const legacy = await composeBodyForWorkspace(context(), { body: TEMPLATE_BODY, signOff: SIGN_OFF });
+    const words = TEMPLATE_WORDS;
+    const previous = await composeBodyForWorkspace(context(), { body: `${words}\n\n${SIGN_OFF}`, signOff: SIGN_OFF });
+    const legacy = await composeBodyForWorkspace(context(), {
+      body: `${words}\n\n${SIGN_OFF}\n${LEGACY_SENDING_STOP_LINE}`,
+      signOff: SIGN_OFF,
+    });
     const footerless = await composeBodyForWorkspace(context(), { body: words, signOff: SIGN_OFF });
-    expect(legacy.composed && footerless.composed).toBe(true);
-    if (!legacy.composed || !footerless.composed) return;
+    expect(previous.composed && legacy.composed && footerless.composed).toBe(true);
+    if (!previous.composed || !legacy.composed || !footerless.composed) return;
+    expect(previous.body).toBe(footerless.body);
     expect(legacy.body).toBe(footerless.body);
     expect(legacy.deduped).toBe(true);
     expect(footerless.deduped).toBe(false);

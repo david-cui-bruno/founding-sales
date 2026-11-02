@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { type EmailCampaignPolicy } from '@fss/contracts';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { US_BUSINESS_REGIONS, type EmailCampaignPolicy } from '@fss/contracts';
 import { BrowserClient, type InvalidationChannel } from '../../src/client/BrowserClient.ts';
 import { EmailCampaignClient } from '../../src/client/EmailCampaignClient.ts';
 import { BrowserEmailCampaigns } from '../../src/client/BrowserEmailCampaigns.tsx';
@@ -220,5 +220,35 @@ describe('campaign exact command custody over actual BrowserClient', () => {
     await vi.waitFor(() => { expect(scope.commands).toHaveLength(1); });
     expect(scope.commands[0]).toMatchObject({ mailboxId: id, sequenceVersionId: other, regions: ['MA'], authorizationRevision: 2, dailyAdmissionLimit: 1, maxEnrollments: 25, expiresAt: new Date('2026-10-23T12:00').toISOString() });
     expect(screen.queryByRole('button', { name: /^send|recipient/iu })).toBeNull();
+  });
+  it('offers every state and DC, and Select all approves all 51 regions', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date('2026-10-22T12:00:00.000Z'));
+    const scope = setup(); await scope.browser.refresh(); render(<BrowserEmailCampaigns client={scope.browser} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh campaigns' }));
+    await screen.findByText('Current campaign control loaded.');
+    revealPolicy();
+    await screen.findByRole('option', { name: /Published five-email/u });
+    const regions = (): HTMLInputElement[] => within(screen.getByRole('group', { name: 'Campaign regions' })).getAllByRole('checkbox');
+    expect(regions().map(box => box.labels?.[0]?.textContent)).toEqual([...US_BUSINESS_REGIONS]);
+    expect(regions().some(box => box.checked)).toBe(false);
+    fireEvent.click(screen.getByRole('checkbox', { name: 'WA' }));
+    expect(regions().filter(box => box.checked)).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Select all regions' }));
+    expect(regions().every(box => box.checked)).toBe(true);
+    fireEvent.change(screen.getByLabelText('Approved sender'), { target: { value: id } });
+    fireEvent.change(screen.getByLabelText('Approved email sequence'), { target: { value: other } });
+    fireEvent.change(screen.getByLabelText('Campaign expiry'), { target: { value: '2026-10-23T12:00' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Approve campaign once' }));
+    await vi.waitFor(() => { expect(scope.commands).toHaveLength(1); });
+    expect(scope.commands[0]).toMatchObject({ regions: [...US_BUSINESS_REGIONS] });
+  });
+  it('clears every region from the same control once all are selected', async () => {
+    const scope = setup(); await scope.browser.refresh(); render(<BrowserEmailCampaigns client={scope.browser} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh campaigns' }));
+    await screen.findByText('Current campaign control loaded.');
+    revealPolicy();
+    fireEvent.click(await screen.findByRole('button', { name: 'Select all regions' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Clear all regions' }));
+    expect(within(screen.getByRole('group', { name: 'Campaign regions' })).getAllByRole('checkbox').some(box => (box as HTMLInputElement).checked)).toBe(false);
   });
 });

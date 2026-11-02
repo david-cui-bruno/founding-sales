@@ -1,8 +1,9 @@
 import { TEMPLATE_VARIABLE_NAMES, type TemplateVariableName } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
+import { readWorkspaceBookingLink } from '../settings/bookingLink.ts';
 
 /**
- * Deterministic template variables from eligible CRM data (specification 11.1).
+ * Deterministic template variables from eligible CRM data and workspace settings (specification 11.1).
  *
  * "Launch templates support deterministic variables from eligible CRM data." The
  * whole list is here, it is closed, and every entry is a column somebody typed or a
@@ -20,7 +21,7 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
  * blank as missing, and a map that carried `''` would be a map that rendered a gap.
  */
 
-// The list is `@fss/contracts`', so the Mac's template form names the same seven; it is re-exported here so every importer of this module is unchanged.
+// The list is `@fss/contracts`', so the web template form names the same variables; it is re-exported here so every importer of this module is unchanged.
 export { TEMPLATE_VARIABLE_NAMES, type TemplateVariableName };
 
 const PLACEHOLDER_NAMES = new Set(['n/a', 'na', 'unknown', 'none', 'tbd', 'null']);
@@ -79,5 +80,6 @@ export async function templateVariablesFor(
   set('contact_full_name', present(row.full_name));
   set('contact_title', present(row.title));
   set('contact_first_name', present(firstNameOf(row.full_name)));
+  set('booking_link', present(await readWorkspaceBookingLink(context)));
   return values;
 }

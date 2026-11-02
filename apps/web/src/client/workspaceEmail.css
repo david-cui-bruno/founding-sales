@@ -103,6 +103,7 @@ aside.email-list.email-list {
 .email-campaign-policy { margin-top: 1.5rem; border-top: 1px solid var(--workspace-border, #d7dfe9); padding-top: .7rem; }
 .email-campaign-policy > label { display: grid; gap: .4rem; max-width: 36rem; margin: .8rem 0; }
 .email-campaign-policy fieldset label { display: inline-flex; gap: .4rem; align-items: center; margin-right: 1rem; }
+.email-campaign-regions { display: grid; grid-template-columns: repeat(auto-fill, minmax(4.5rem, 1fr)); gap: .3rem 0; margin-top: .6rem; }
 @media (max-width: 720px) {
   .email-inbox { grid-template-columns: minmax(0, 1fr); height: max(27rem, calc(100dvh - 18rem)); }
   .email-toolbar { align-items: flex-start; flex-wrap: wrap; gap: .5rem; }

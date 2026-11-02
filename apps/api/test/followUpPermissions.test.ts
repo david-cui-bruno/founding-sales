@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { SENDING_STOP_LINE, followUpPermissionsResponseSchema } from '@fss/contracts';
+import { LEGACY_SENDING_STOP_LINE, followUpPermissionsResponseSchema } from '@fss/contracts';
 import { createAuthFixture, type AuthFixture } from './support/authFixture.ts';
 import { issueSessionFor } from './support/sessionFixture.ts';
 import { seedContact, seedFirm, seedFollowUpPermission } from './support/crmSeed.ts';
@@ -56,7 +56,7 @@ describe('the follow-up permission endpoints', () => {
       command({
         name: `Overview ${randomUUID().slice(0, 8)}`,
         subject: 'A question about {firm_name}',
-        body: `Hello {contact_first_name},\n\nA note about {firm_name}.\n\nSam Example\nCallie\n${SENDING_STOP_LINE}`,
+        body: `Hello {contact_first_name},\n\nA note about {firm_name}.\n\nSam Example\nCallie\n${LEGACY_SENDING_STOP_LINE}`,
         footerSignOff: 'Sam Example\nCallie',
         requiredVariables: ['firm_name', 'contact_first_name'],
         approve: true,
@@ -76,7 +76,7 @@ describe('the follow-up permission endpoints', () => {
       command({
         name: `Follow up ${randomUUID().slice(0, 8)}`,
         subject: 'A question about {firm_name}',
-        body: `Hello {contact_first_name},\n\nA note about {firm_name}.\n\nSam Example\nCallie\n${SENDING_STOP_LINE}`,
+        body: `Hello {contact_first_name},\n\nA note about {firm_name}.\n\nSam Example\nCallie\n${LEGACY_SENDING_STOP_LINE}`,
         footerSignOff: 'Sam Example\nCallie',
         requiredVariables: ['firm_name', 'contact_first_name'],
         approve: true,
