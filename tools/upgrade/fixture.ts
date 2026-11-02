@@ -40,7 +40,6 @@ import { rescheduleExecution } from '@fss/domain/sequences/shifts.ts';
 import { consumeTerminalStops } from '@fss/domain/sequences/terminalStops.ts';
 import { updateSetting } from '@fss/domain/settings/store.ts';
 import { POSTURE_STATEMENT_KEYS } from '@fss/domain/src/rules/statePosture.ts';
-import { LEGACY_SENDING_STOP_LINE } from '@fss/domain/src/rules/templates.ts';
 import { canonicalizeHandle } from '@fss/domain/src/rules/suppressionCanonicalization.ts';
 import { recordSuppression } from '@fss/domain/suppression/events.ts';
 import { claimFinalization } from '@fss/domain/suppression/finalize.ts';
@@ -241,6 +240,11 @@ const LEGACY_TODAY_ALGORITHM_VERSION = 'today.1';
  * because the row it composes is a row written before that setting existed.
  */
 const LEGACY_POSTAL_ADDRESS = '1 Example Plaza, Suite 200, Providence, RI 02903';
+/**
+ * The stop sentence the pre-registry base templates carry. A literal rather than an import: this
+ * file is copied onto older baselines, where the contracts/domain symbol does not exist.
+ */
+const LEGACY_SENDING_STOP_LINE = 'Reply "stop" and I will not email you again.';
 
 /**
  * The handle the fixture opts out, and the firm whose contact it belongs to.
