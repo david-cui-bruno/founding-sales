@@ -46,6 +46,8 @@ export function emailVerificationDecides(record:EmailVerificationRecord,now:numb
  const days=(now-record.checkedAt.getTime())/86400000;
  return days<(record.outcome==='ok'?EMAIL_VERIFICATION_VALID_DAYS:EMAIL_VERIFICATION_RECHECK_DAYS);
 }
-export async function recordEmailVerification(ctx:RepositoryContext,address:string,result:EmailVerificationResult):Promise<void>{
- await ctx.db.query('INSERT INTO outreach_email_verifications(workspace_id,address_key,provider,result,outcome) VALUES($1,$2,$3,$4,$5)',[ctx.scope.workspaceId,emailVerificationKey(address),'dns_mx',result,emailVerificationOutcome(result)]);
+export type EmailVerificationProvider='dns_mx'|'millionverifier';
+/** `millionverifier`: the free check passed and the paid single-address check (ADR0038) was consulted on a published address: it answered ok, catch_all or unknown (valid) or invalid or disposable (invalid). */
+export async function recordEmailVerification(ctx:RepositoryContext,address:string,result:EmailVerificationResult,provider:EmailVerificationProvider='dns_mx'):Promise<void>{
+ await ctx.db.query('INSERT INTO outreach_email_verifications(workspace_id,address_key,provider,result,outcome) VALUES($1,$2,$3,$4,$5)',[ctx.scope.workspaceId,emailVerificationKey(address),provider,result,emailVerificationOutcome(result)]);
 }

@@ -203,6 +203,23 @@ variable "worker_reads_classifier_key" {
   default     = false
 }
 
+variable "worker_reads_millionverifier_api_key" {
+  description = <<-EOT
+    Whether the worker task definition is handed the MillionVerifier API key, as
+    FSS_MILLIONVERIFIER_API_KEY (guess-and-verify of named-person addresses, ADR0038).
+
+    ECS refuses to start a task whose `secrets` block names an entry with no value,
+    and with a minimum healthy percent of zero a worker whose replacement cannot start
+    leaves production with no worker. The `millionverifier-api-key` container is always created
+    (empty); this flag is the second stage. False, the default: the worker is not told
+    the secret exists and verifies nothing (no key, no check). The runbook's order is
+    apply with it false, install the value, then a separate one-line change flips it to
+    true and deploys (docs/greenfield/infra-apply-runbook.md, step 1.4).
+  EOT
+  type        = bool
+  default     = false
+}
+
 variable "worker_model_transport" {
   description = <<-EOT
     How the worker sends its Claude calls (slice BR1): "anthropic" (the direct API, with

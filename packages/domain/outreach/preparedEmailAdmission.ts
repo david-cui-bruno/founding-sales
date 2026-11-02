@@ -11,7 +11,8 @@ import {admittedCandidateIds,listPreparedEmailChoices} from './preparedEmailSele
 import type {PreparedEmailTarget} from './emailCampaignSource.ts';
 import {admissionStop,campaignAdmissionCounts,campaignCapacityAvailable,lockEmailCampaignAdmissionGates} from './emailCampaignAdmission.ts';
 import {campaignAuthorityCurrent,campaignCandidateProvenance,campaignDatabaseNow,type EmailCampaignRow} from './emailCampaignAuthority.ts';
-import {emailVerificationDecides,emailVerificationOutcome,latestEmailVerification,recordEmailVerification,type EmailVerifier} from './emailVerification.ts';
+import {emailVerificationDecides,emailVerificationOutcome,latestEmailVerification,recordEmailVerification,type EmailVerificationProvider,type EmailVerifier} from './emailVerification.ts';
+import {checkPublishedAddress,paidCheckTimeAvailable,type AddressVerifier} from './addressGuess.ts';
 type Result={ok:true;value:EmailCampaignAdmission}|{ok:false;reason:string};
 
 /** ADR0035/0036. One own-site prepared company, with its provider-found named decision-maker, into one approved campaign, composed from the same owners as a research Firm: campaign,
@@ -67,9 +68,12 @@ const ROUNDS=8;
  * Firm with the company's name or website host, an unresolvable time zone and a stopped address (the refusals admission would repeat on every
  * pass) are excluded before the list's limit, within the bounded 400-record scan, and what was tried this pass is skipped by the next list, so
  * refused or invalid companies never starve later valid ones. The check and reads run in autocommit before any admission lock; each
- * admission is its own transaction (the caller must not already hold one), so a check commits whatever an admission does. */
-export async function runPreparedEmailAdmission(ctx:RepositoryContext,deps:{verifier:EmailVerifier}):Promise<PreparedEmailPass>{
- const pass:PreparedEmailPass={admitted:0,checked:0,failed:0},w=ctx.scope.workspaceId;
+ * admission is its own transaction (the caller must not already hold one), so a check commits whatever an admission does.
+ * ADR0038: with a paid verifier, a PUBLISHED address that passed the free check is also asked of it once (a custody row and a credit, under the daily cap):
+ * invalid and disposable are recorded as an invalid check and dropped; ok, catch_all and unknown admit (the company published it). No verifier, no cap room or a failed
+ * check leaves the free check alone deciding, and a guessed address is never asked again (the paid check already answered ok). */
+export async function runPreparedEmailAdmission(ctx:RepositoryContext,deps:{verifier:EmailVerifier;paid?:AddressVerifier}):Promise<PreparedEmailPass>{
+ const pass:PreparedEmailPass={admitted:0,checked:0,failed:0},w=ctx.scope.workspaceId,startedAt=Date.now();
  const campaigns=(await ctx.db.query<EmailCampaignRow>('SELECT c.* FROM outreach_email_campaigns c WHERE c.workspace_id=$1 AND c.revoked_at IS NULL AND c.expires_at>clock_timestamp() AND NOT EXISTS(SELECT 1 FROM outreach_campaign_opening_policies p WHERE p.workspace_id=c.workspace_id AND p.campaign_id=c.id) ORDER BY c.approved_at,c.id',[w])).rows;
  for(const campaign of campaigns){
   const counts=await campaignAdmissionCounts(ctx,campaign),room=Math.min(campaign.max_enrollments-counts.total,campaign.daily_admission_limit-counts.daily);
@@ -86,9 +90,14 @@ export async function runPreparedEmailAdmission(ctx:RepositoryContext,deps:{veri
     let recorded=await latestEmailVerification(ctx,person.email);
     if(recorded&&!emailVerificationDecides(recorded,now))recorded=null;
     if(!recorded){
-     const result=await deps.verifier.verify(person.email);
+     let result=await deps.verifier.verify(person.email),provider:EmailVerificationProvider='dns_mx',wrote=false;const address=person.email;
      if(!result)continue;
-     await recordEmailVerification(ctx,person.email,result);pass.checked++;
+     if(result==='valid'&&deps.paid&&person.emailStatus==='published'&&paidCheckTimeAvailable(startedAt)){
+      const verdict=await checkPublishedAddress(ctx,deps.paid,company,address,async()=>{await recordEmailVerification(ctx,address,'invalid','millionverifier');wrote=true;});
+      if(verdict==='held')continue;
+      if(verdict!==null){provider='millionverifier';if(wrote)result='invalid';}
+     }
+     if(!wrote)await recordEmailVerification(ctx,address,result,provider);pass.checked++;
      recorded={result,outcome:emailVerificationOutcome(result),checkedAt:new Date(now)};
     }
     if(recorded.outcome!=='ok')continue;

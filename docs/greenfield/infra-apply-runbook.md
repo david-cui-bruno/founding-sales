@@ -218,8 +218,17 @@ Terraform creates seven **empty** Secrets Manager application entries, and two m
 | `fss-prod/twilio-voice` | Twilio Voice, as in [calling.md](calling.md); `{}` until calling is set up |
 | `fss-prod/calcom` | Cal.com webhook secret, as in [meetings.md](meetings.md); `{}` until bookings are set up |
 | `fss-prod/transcription` | Call transcription, `{"provider": "deepgram", "api_key": "..."}`, as in [calling.md](calling.md); `{}` until a key exists. It must hold `{}` before the apply that adds it to the worker task |
+| `fss-prod/millionverifier-api-key` | MillionVerifier API key for guess-and-verify of named-person addresses ([ADR0038](../adr/0038-guessed-address-verification.md)), as a bare string (not JSON). **Two stages, never one apply**, below |
 
 The Apollo people-data key of [ADR0036](../adr/0036-named-person-email-enrichment.md) is retired ([ADR0037](../adr/0037-own-site-people-extraction.md)): there is no `fss-prod/apollo-api-key` entry and no stage-two flag. If an earlier apply already created that entry, this change's plan destroys it; production keeps a destroyed secret for its 30-day recovery window (`recovery_window_days`), so `aws secretsmanager restore-secret` brings it back, and it was never read by any task.
+
+**The MillionVerifier key, in order (no targeted applies, no `-target`):** ECS refuses a task whose secret has no value and production runs the worker at minimum healthy zero, so one apply that both creates the empty entry and injects it would stop the worker.
+
+1. **Stage one, apply with injection off.** The change that adds `fss-prod/millionverifier-api-key` merges with `worker_reads_millionverifier_api_key = false` (the committed literal in `infra/roots/production/main.tf`) and is applied like any other (3.0 to 3.2). The container exists empty; the worker task is unchanged; no key means no verifier, so nothing is guessed and published addresses get the free check alone.
+2. **Root installs the value**, once, never on a command line: `aws secretsmanager put-secret-value --secret-id fss-prod/millionverifier-api-key --secret-string file:///dev/stdin`, paste the key, Ctrl-D. Read back only the version id (`aws secretsmanager describe-secret --secret-id fss-prod/millionverifier-api-key --query 'VersionIdsToStages'`), never the value.
+3. **Stage two, a separate change.** A one-line pull request flips `worker_reads_millionverifier_api_key = true`; it is planned, read and applied as its own release, which deploys the worker with `FSS_MILLIONVERIFIER_API_KEY`. Only then, and only with `people_enrichment` on and `dailyCredits` above 0, does the worker spend a credit.
+
+If stage two is applied before step 2, ECS cannot start the replacement worker task (`ResourceInitializationError` naming the secret): revert the literal to `false` and apply, or install the value and force a worker deployment.
 
 Nothing else goes in either Google entry. The Pub/Sub topic and the Workspace domain are public identifiers and travel in the task environment (`FSS_GMAIL_PUSH_TOPIC`, `FSS_GOOGLE_HOSTED_DOMAIN`). Neither is an input any more: the topic is the `gmail_push_topic` literal in `infra/roots/production`, which `infra/roots/production-google` owns and outputs, and the domain is the `google_hosted_domain` literal `usecallie.com` in `infra/modules/stack`. See [`docs/archive/release-first.md`](../archive/release-first.md) 1.6.
 

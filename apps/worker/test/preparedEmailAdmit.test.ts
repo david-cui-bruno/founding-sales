@@ -4,7 +4,7 @@ import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
 import { repositoryContext } from '@fss/domain/db/workspaceScope.ts';
 import { dnsEmailVerifier, emailVerificationKey } from '@fss/domain/outreach/emailVerification.ts';
 import { runPreparedEmailAdmission } from '@fss/domain/outreach/preparedEmailAdmission.ts';
-import { goodMx, preparedEmailWorld } from '../../../packages/domain/test/outreach/preparedEmailFixture.ts';
+import { fakeAddressVerifier, goodMx, preparedEmailWorld } from '../../../packages/domain/test/outreach/preparedEmailFixture.ts';
 import { runOnce } from '../src/runner/jobRunner.ts';
 import { runSchedulerPass } from '../src/scheduler/schedulerPass.ts';
 import { preparedEmailAdmitHandler, preparedEmailAdmitSource } from '../src/handlers/preparedEmailAdmit.ts';
@@ -37,4 +37,18 @@ it('commits the address check on its own: a failed admission rolls back only its
   expect((await world.runtime.query('SELECT outcome FROM outreach_email_verifications WHERE workspace_id=$1 AND address_key=$2', [world.ws, emailVerificationKey(`jordan.blake@${company.domain}`)])).rows).toEqual([{ outcome: 'ok' }]);
   expect((await world.runtime.query('SELECT 1 FROM firms WHERE workspace_id=$1 AND website=$2', [world.ws, `https://${company.domain}/`])).rows).toEqual([]);
   expect(await runPreparedEmailAdmission(world.ctx(true), { verifier: { verify: async () => { throw new Error('must not ask again inside the window'); } } })).toEqual({ admitted: 1, checked: 0, failed: 0 });
+});
+
+it('asks the paid verifier about a published address through the handler and refuses an invalid one, logging only counts', async () => {
+  await world.setPeople({ enabled: true, dailyCredits: 30 });
+  const company = await world.prepared('OH', domain => `Meet the team</p><p>Tyler Bradford</p><p>President, CPM</p><p>tyler@${domain}`, 'Columbus', true);
+  await world.enrichOwnSite();
+  const paid = fakeAddressVerifier(() => ({ ok: true, verdict: 'invalid' }));
+  const scheduled = await runSchedulerPass(world.runtime, { sources: [preparedEmailAdmitSource()], now: new Date(Date.now() + 3 * 3_600_000).toISOString() });
+  expect(scheduled.inserted).toBe(1);
+  const registry = new HandlerRegistry().register(preparedEmailAdmitHandler({ verifier: dnsEmailVerifier(goodMx, 50), paid: paid.verifier }));
+  expect(await runOnce(world.runtime, { registry, owner: 'prepared-email-paid', limit: 5 })).toMatchObject({ claimed: 1, completed: 1, failed: 0 });
+  expect(paid.calls).toEqual([`tyler@${company.domain}`]);
+  expect((await world.runtime.query('SELECT 1 FROM outreach_email_campaign_admissions WHERE workspace_id=$1 AND candidate_id=$2', [world.ws, company.candidateId])).rows).toEqual([]);
+  expect((await world.runtime.query('SELECT provider,result,outcome FROM outreach_email_verifications WHERE workspace_id=$1 AND address_key=$2', [world.ws, emailVerificationKey(`tyler@${company.domain}`)])).rows).toEqual([{ provider: 'millionverifier', result: 'invalid', outcome: 'drop' }]);
 });

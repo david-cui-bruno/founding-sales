@@ -39,6 +39,12 @@ locals {
   alert_emails    = ["callie@usecallie.com"]
   sending_enabled = true
 
+  # ADR0038 guess-and-verify of named-person addresses, two stages (docs/greenfield/infra-apply-runbook.md 1.4).
+  # The `fss-prod/millionverifier-api-key` container is always created, empty. ECS refuses a task whose
+  # secret has no value, so the worker is handed it only after Root has put the key in: the
+  # first apply keeps this false, a separate one-line pull request then flips it to true.
+  worker_reads_millionverifier_api_key = false
+
   # Adapter construction is separate from owner-controlled database activation.
   # David confirmed model credit coverage on 2026-10-19 at 01:35:53 UTC.
   # This 24-hour verification-freshness deadline is NOT AWS credit expiry.
@@ -124,8 +130,9 @@ module "stack" {
   worker_concurrency = 3
   bootstrap          = var.bootstrap
 
-  sending_enabled         = local.sending_enabled
-  crm_capability_adapters = local.crm_capability_adapters
+  sending_enabled                      = local.sending_enabled
+  worker_reads_millionverifier_api_key = local.worker_reads_millionverifier_api_key
+  crm_capability_adapters              = local.crm_capability_adapters
 
   # Null in code: the managed instance. Set only while the restore runbook
   # (docs/greenfield/runbooks/restore.md) has production on a point-in-time copy.

@@ -33,6 +33,8 @@ import {personEnrichHandler,personEnrichSource} from '../handlers/personEnrich.t
 import {ownSitePeople} from '@fss/domain/outreach/ownSitePeople.ts';
 import type {PeopleProvider} from '@fss/domain/outreach/peopleProvider.ts';
 import {dnsEmailVerifier} from '@fss/domain/outreach/emailVerification.ts';
+import type {AddressVerifier} from '@fss/domain/outreach/addressGuess.ts';
+import {millionVerifierFromEnvironment} from '../providers/millionVerifier.ts';
 import {qualificationExtraction} from '../sourcing/qualificationExtraction.ts';
 import {sourcingDiscoveryHandler,sourcingDiscoverySource,apolloDiscoverySource} from '../handlers/sourcingDiscovery.ts';
 import {apolloFromEnvironment} from '../sourcing/apolloSearch.ts';
@@ -149,6 +151,8 @@ export interface HandlerComposition extends CaptureReadComposition {
   readonly apolloDiscovery?: ApolloDiscoveryDependencies;
   /** The people source (ADR0036/0037): `own_site`, which reads the retained captures and needs no key. */
   readonly peopleProvider?: PeopleProvider;
+  /** The paid single-address check (ADR0038): present only when the task environment holds `FSS_MILLIONVERIFIER_API_KEY`. Absent: no address is guessed and a published address gets the free DNS check alone. */
+  readonly addressVerifier?: AddressVerifier;
   readonly discovery?: DiscoverySearchProvider;
   readonly meetingAutoRecording?: Parameters<typeof meetingAutoRecordingJobHandler>[0] | undefined;
   readonly meetingAnalysis?: MeetingAnalyzeOptions | undefined;
@@ -299,8 +303,9 @@ export function registerHandlers(
   // Tavily discovery reads list pages through the same research fetcher as qualification.
   const search=composition.discovery&&composition.research?{provider:composition.discovery,pageFetch:composition.research.pageFetch}:undefined;
   if(search||composition.apolloDiscovery)registry.register(sourcingDiscoveryHandler(search,composition.apolloDiscovery));
-  registry.register(preparedEmailAdmitHandler({verifier:dnsEmailVerifier(systemMailDomainResolver()),...log?{log}:{}}));
-  if(composition.peopleProvider)registry.register(personEnrichHandler({provider:composition.peopleProvider,...log?{log}:{}}));
+  const mailDomain=dnsEmailVerifier(systemMailDomainResolver());
+  registry.register(preparedEmailAdmitHandler({verifier:mailDomain,...composition.addressVerifier?{paid:composition.addressVerifier}:{},...log?{log}:{}}));
+  if(composition.peopleProvider)registry.register(personEnrichHandler({provider:composition.peopleProvider,...composition.addressVerifier?{guess:{verifier:composition.addressVerifier,mailDomain}}:{},...log?{log}:{}}));
   if(composition.research){
     registry.register(sourcingQualificationHandler({pageFetch:composition.research.pageFetch,extraction:composition.classifier?.processEnabled?qualificationExtraction(composition.classifier.transport):null}));
     registry.register(prospectPhoneDiscoveryHandler({pageFetch:composition.research.pageFetch,...log?{log}:{}}));
@@ -693,7 +698,7 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
   if(diagnosticRuntime&&!diagnostic)throw new Error('diagnostic_gmail_unavailable');
   const crmRuntime=createCrmCapabilityRuntime(crmConfiguration,{implementationCommit:buildCommit(environment),imageDigest:identity.digest,side:'worker',schemaVersion:REQUIRED_SCHEMA,gmailAvailable:deployment.gmail!==undefined});
   const crm=await composeCrmCapabilities({configuration:crmConfiguration,runtime:crmRuntime,openSession:async()=>{const client=new pg.Client({connectionString:config.database.connectionString,application_name:'fss-crm-authority'});await client.connect();return {session:asSession(client),close:()=>client.end()};},...deployment.gmail?{gmail:{...deployment.gmail,openSession:async()=>{const client=new pg.Client({connectionString:config.database.connectionString,application_name:'fss-crm-oauth'});await client.connect();return {session:asSession(client),close:()=>client.end()};}}}:{}});
-  const apolloDiscovery=apolloFromEnvironment(environment);
+  const apolloDiscovery=apolloFromEnvironment(environment),addressVerifier=millionVerifierFromEnvironment(environment);
   const composition: HandlerComposition = {
     ...composed,
     ...crm.handlers,
@@ -701,6 +706,7 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
     socialAssets:await socialDeletionPort(environment),
     ...apolloDiscovery?{apolloDiscovery}:{},
     peopleProvider:ownSitePeople(),
+    ...addressVerifier?{addressVerifier}:{},
     ...(environment['FSS_TAVILY_API_KEY']?{discovery:tavilySearch(environment['FSS_TAVILY_API_KEY'])}:{}),
     ...(zoomRecording.client!==null&&calRecording.ok&&calRecording.apiKey!==null?{meetingAutoRecording:{zoom:zoomRecording.client,calcom:calcomDemoClient({apiKey:calRecording.apiKey})}}:{}),
     ...(meetingAnalysis.options === null ? {} : { meetingAnalysis: meetingAnalysis.options }),
