@@ -5,7 +5,7 @@ import { promisify } from 'node:util';
 import { readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { createReleaseSafety } from './release-safety.mjs';
+import { createReleaseSafety, requireOutsideReleaseWindows } from './release-safety.mjs';
 import { parseFailedReaderCustody } from './application-reader-custody.mjs';
 import { recoverApplicationReader, readerRecoveryCommandEnvironment } from './application-reader-recovery.mjs';
 import { observeReaderOff, readerObservationRequested } from './application-off-observation.mjs';
@@ -232,6 +232,9 @@ export async function runRelease(io, environment) {
     }
     const result = await aws('rds', 'describe-db-instances', ['--db-instance-identifier', 'fss-prod-pg']);
     requireThat(result.DBInstances?.length === 1, 'database_unavailable'); database = result.DBInstances[0];
+    // Before any write: the first write is the reader registration after this preflight. The later
+    // recovery pin (a drained, stopped release) refuses a `backing-up` instance too late.
+    requireOutsideReleaseWindows(database, io.now());
     requireThat(database.DBInstanceArn === 'arn:aws:rds:us-east-1:326255650484:db:fss-prod-pg' && database.DbiResourceId && database.DBName && database.Endpoint?.Address && database.DBInstanceStatus === 'available' && database.BackupRetentionPeriod === 35, 'database_binding_changed');
     network = baseline.worker.networkConfiguration?.awsvpcConfiguration;
     const apiNetwork = baseline.api.networkConfiguration?.awsvpcConfiguration;
@@ -337,6 +340,11 @@ export async function runRelease(io, environment) {
     if (state.targetSchema !== state.fromSchema) {
       phase('migration-authentication'); await authenticate(current.migration);
       phase('suppress-incompatible-rollback');
+      // Registrations and the release record are already written, but no service is touched yet. A
+      // fresh read: the window may have come within the job horizon since preflight.
+      const fresh = await aws('rds', 'describe-db-instances', ['--db-instance-identifier', 'fss-prod-pg']);
+      requireThat(fresh.DBInstances?.length === 1, 'database_unavailable');
+      requireOutsideReleaseWindows(fresh.DBInstances[0], io.now());
       // Configuration update must NOT switch service definitions before the stop.
       await configuration(false);
       const beforeStop = await services();

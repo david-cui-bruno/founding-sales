@@ -8,7 +8,7 @@ import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isDeepStrictEqual as equal } from 'node:util';
 import { ACCOUNT, REGION } from './release-backend-contract.mjs';
-import { createReleaseSafety, normalizeTaskDefinition, readerTaskDocument } from './release-safety.mjs';
+import { createReleaseSafety, normalizeTaskDefinition, readerTaskDocument, requireOutsideReleaseWindows } from './release-safety.mjs';
 
 // Production identities not exported by repository config. Changing one is a reviewed source change.
 const REPOSITORY = 'david-cui-bruno/founding-sales', ORIGIN = 'https://api.usecallie.com', ACTOR = `arn:aws:iam::${ACCOUNT}:user/david`;
@@ -234,6 +234,7 @@ export function createOperator({ directory, run = execute, fetchJson = fetchPubl
     }
     const sharedHolds = releaseControls(gh);
     const db = aws('rds', 'describe-db-instances', ['--db-instance-identifier', 'fss-prod-pg']).DBInstances;
+    if (db?.length === 1) requireOutsideReleaseWindows(db[0], now());
     must(db?.length === 1 && db[0].DBInstanceArn === DATABASE && db[0].DBInstanceStatus === 'available' && db[0].BackupRetentionPeriod === 35, 'recovery_unavailable');
     const backup = aws('rds', 'describe-db-instance-automated-backups', ['--dbi-resource-id', db[0].DbiResourceId]);
     must(!backup.Marker && backup.DBInstanceAutomatedBackups?.length === 1, 'recovery_inventory_incomplete');

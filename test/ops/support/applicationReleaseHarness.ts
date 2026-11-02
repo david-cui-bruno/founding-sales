@@ -74,7 +74,7 @@ interface Options {
 }
 export function harness(options: Options = {}) {
   const from = options.from ?? 118, to = options.to ?? 118;
-  let schema = from, clock = Date.parse('2026-10-18T18:00:00Z'), revision = options.recovery ? 337 : 1, taskNumber = 0, recordStored = options.recovery === true, checks = 0;
+  let schema = from, clock = Date.parse('2026-10-18T18:00:00Z'), revision = options.recovery ? 337 : 1, taskNumber = 0, recordStored = options.recovery === true, checks = 0, databaseReads = 0;
   let recoveryRemoved = false, storedRecord: unknown;
   let promotionGateChanged = false;
   const productionTags: Partial<Record<'api' | 'worker', string>> = {};
@@ -154,7 +154,10 @@ export function harness(options: Options = {}) {
       const [kind, action] = args;
       if (kind === 'sts') return JSON.stringify({ Account: ACCOUNT, Arn: `arn:aws:sts::${ACCOUNT}:assumed-role/fss-prod-ci-application/fss-prod-application-33` });
       if (kind === 'rds' && action === 'describe-db-instance-automated-backups') return JSON.stringify({ DBInstanceAutomatedBackups: [{ DBInstanceArn: `arn:aws:rds:us-east-1:${ACCOUNT}:db:fss-prod-pg`, DbiResourceId: options.fault === 'pitr-drift' ? 'db-foreign' : 'db-owned', DBInstanceIdentifier: 'fss-prod-pg', Status: 'active', ...(options.fault === 'pitr-missing' ? {} : { RestoreWindow: { EarliestTime: new Date(options.fault === 'pitr-oldest' ? clock + 86400000 : clock - 86400000).toISOString(), LatestTime: new Date(options.fault === 'pitr' ? clock - 86400000 : options.fault === 'pitr-oldest' ? clock + 172800000 : clock + 1000).toISOString() } }) }] });
-      if (kind === 'rds') return JSON.stringify({ DBInstances: [{ DBInstanceArn: `arn:aws:rds:us-east-1:${ACCOUNT}:db:fss-prod-pg`, DbiResourceId: 'db-owned', DBName: 'founder_sales', DBInstanceStatus: 'available', Endpoint: { Address: 'private.invalid' }, BackupRetentionPeriod: 35 }] });
+      // 'window-after-preflight': the first read is clear; later reads see a backup window 30 minutes ahead.
+      const hhmm = (ms: number) => new Date(ms).toISOString().slice(11, 16);
+      const lateWindow = options.fault === 'window-after-preflight' && kind === 'rds' && action === 'describe-db-instances' && databaseReads++ > 0 ? `${hhmm(clock + 1800000)}-${hhmm(clock + 3600000)}` : undefined;
+      if (kind === 'rds') return JSON.stringify({ DBInstances: [{ DBInstanceArn: `arn:aws:rds:us-east-1:${ACCOUNT}:db:fss-prod-pg`, DbiResourceId: 'db-owned', DBName: 'founder_sales', DBInstanceStatus: options.fault === 'backing-up' ? 'backing-up' : 'available', Endpoint: { Address: 'private.invalid' }, BackupRetentionPeriod: 35, PreferredBackupWindow: lateWindow ?? (options.fault === 'backup-window-near' ? '18:30-19:00' : '07:30-08:00'), PreferredMaintenanceWindow: options.fault === 'maintenance-window-near' ? 'sun:18:30-sun:19:30' : 'tue:05:00-tue:06:00' }] });
       if (kind === 'secretsmanager') return JSON.stringify({ VersionIdsToStages: { current: ['AWSCURRENT'] } });
       if (kind === 'ec2') return JSON.stringify({ SecurityGroups: groups.filter(group => args.slice(args.indexOf('--group-ids') + 1, args.indexOf('--output')).includes(group.GroupId)) });
       if (kind === 'ecr') {
