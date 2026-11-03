@@ -440,6 +440,8 @@ export const updateSettingCommandSchema = z.strictObject({
   settingKey: z.enum([...SETTING_KEYS, ...INTEGRATION_SETTING_KEYS.filter(key => key !== 'booking_policy')]),
   /** Validated by the key's schema on the server, never by a schema the client chose. */
   value: z.unknown(),
+  /** Compare under the setting lock; omission keeps explicit owner saves last-write-wins. */
+  expectedVersion: z.number().int().min(0).optional(),
   /**
    * Optional since wave 2 (D5's API half): blank or absent is recorded as "Changed on
    * the Mac". Desktops up to 1.0.11 always send one.

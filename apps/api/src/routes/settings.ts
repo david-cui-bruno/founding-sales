@@ -229,6 +229,7 @@ export async function routeSettings(request: ApiRequest, options: RoutingOptions
       settingKey: body.settingKey,
       value: body.value,
       ...(body.changeNote === undefined ? {} : { changeNote: body.changeNote }),
+      ...(body.expectedVersion === undefined ? {} : { expectedVersion: body.expectedVersion }),
       commandId: body.commandId,
       // 16.2: an enable names a release record whose API digest is this
       // process's own. The domain refuses in the same transaction; the route only

@@ -110,6 +110,34 @@ describe('enabling production sending', () => {
     expect((await readSetting(admin, 'sending_enabled')).value).toEqual({ enabled: false, releaseGateReference: null });
   });
 
+  it('restores only the observed release pause and preserves a newer owner stop', async () => {
+    await enable(passing, FIXTURE_API_DIGEST);
+    const pause = () => updateSetting(admin, {
+      settingKey: 'sending_enabled', value: { enabled: false, releaseGateReference: null },
+      changeNote: 'Temporary release pause',
+    });
+    const restore = (expectedVersion: number) => updateSetting(admin, {
+      settingKey: 'sending_enabled', value: { enabled: true, releaseGateReference: passing },
+      runningApiDigest: FIXTURE_API_DIGEST,
+      expectedVersion,
+    });
+    const firstPause = await pause();
+    if (!firstPause.ok) throw new Error(firstPause.reason);
+    expect(await restore(firstPause.value.current.version)).toMatchObject({
+      ok: true, value: { previousVersion: firstPause.value.current.version, current: { value: { enabled: true } } },
+    });
+
+    const secondPause = await pause();
+    if (!secondPause.ok) throw new Error(secondPause.reason);
+    await updateSetting(admin, {
+      settingKey: 'sending_enabled', value: { enabled: false, releaseGateReference: null },
+      changeNote: 'Owner stopped sending after the release pause',
+    });
+    const ownerStop = await readSetting(admin, 'sending_enabled');
+    expect(await restore(secondPause.value.current.version)).toEqual({ ok: false, reason: 'setting_version_conflict' });
+    expect(await readSetting(admin, 'sending_enabled')).toEqual(ownerStop);
+  });
+
   it('still refuses a salesperson before it looks at any record', async () => {
     const salesperson = repositoryContext(
       workspaceScope(seeded.alpha.workspaceId, {

@@ -44,7 +44,7 @@ import { lockSendGateForStopFact } from '../policy/sendGate.ts';
  * passes that digest in as `runningApiDigest`. The four refusals are the release
  * record's binding refusals, and they are made here for the same reason as the
  * others: a check at the route would be a check a second caller could walk past.
- * `enabled: false` is always accepted, because turning sending off must never need a
+ * Unconditional `enabled: false` is accepted because turning sending off must never need a
  * rehearsal. The reference may be the release process, `ci-gate:main`:
  * the enable then needs a stored, passing `ci-gate` record naming this API's digest.
  * A production API binds only `ci-gate` records under either form.
@@ -215,6 +215,8 @@ export interface UpdateSettingInput {
   /** A settings-page key or one of the call-to-booking keys (`INTEGRATION_SETTING_KEYS`). */
   readonly settingKey: StoredSettingKey;
   readonly value: unknown;
+  /** Conditional operator writes refuse after any intervening change, including another OFF. */
+  readonly expectedVersion?: number | undefined;
   /** Optional since wave 2 (D5): blank or absent records `DEFAULT_SETTING_CHANGE_NOTE`. */
   readonly changeNote?: string | undefined;
   readonly commandId?: string | undefined;
@@ -350,6 +352,9 @@ async function writeSetting(
   );
   const previous = currentRead.rows[0];
   const previousVersion = previous?.version ?? 0;
+  if (input.expectedVersion !== undefined && input.expectedVersion !== previousVersion) {
+    return { ok: false, reason: 'setting_version_conflict' };
+  }
   const nextVersion = previousVersion + 1;
 
   if (previous !== undefined) {
