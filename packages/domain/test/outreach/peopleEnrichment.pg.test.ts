@@ -13,7 +13,8 @@ afterAll(async()=>world?.stop());
 // The custody row joined to its person copy (null columns when none: a non-found lookup, or an erased person).
 const rows=async()=>(await world.runtime.query<Record<string,unknown>>('SELECT l.*,c.provider_person_id,c.first_name,c.last_name,c.title,c.email,c.email_status,c.match_confidence FROM outreach_people_lookups l LEFT JOIN outreach_people_contacts c ON c.workspace_id=l.workspace_id AND c.lookup_id=l.id WHERE l.workspace_id=$1 ORDER BY l.reserved_at,l.id',[world.ws])).rows;
 const rowFor=async(candidateId:string)=>(await rows()).find(row=>row['candidate_id']===candidateId)!;
-const spentToday=async()=>Number((await world.runtime.query<{n:string}>('SELECT coalesce(sum(credits),0)::text AS n FROM outreach_people_lookups WHERE workspace_id=$1',[world.ws])).rows[0]!.n);
+// Fixture workspace dates are New York business dates, never the database session's current_date.
+const spentToday=async()=>Number((await world.runtime.query<{n:string}>("SELECT coalesce(sum(credits),0)::text AS n FROM outreach_people_lookups WHERE workspace_id=$1 AND business_date=(clock_timestamp() AT TIME ZONE 'America/New_York')::date",[world.ws])).rows[0]!.n);
 const PERSON_COLUMNS=['provider_person_id','first_name','last_name','title','email','email_status','match_confidence'];
 
 it('reserves before the call, records the verified decision-maker, and never pays twice for the same company',async()=>{
@@ -110,14 +111,14 @@ it('treats a provider that throws as possibly charged, and a reservation that ne
  expect(await world.enrich({provider:throwing})).toMatchObject({looked:1,halted:'unavailable'});
  expect(await rowFor(thrown.candidateId)).toMatchObject({state:'unknown',credits:1});
  const crashed=await world.prepared('OH',()=>'x');
- await world.runtime.query("INSERT INTO outreach_people_lookups(workspace_id,candidate_id,candidate_revision,host,provider,state,credits,business_date,business_time_zone,reserved_at,expires_at) VALUES($1,$2,1,$3,'fake_people','reserved',1,current_date,'America/New_York',clock_timestamp()-interval '10 minutes',clock_timestamp()+interval '30 days')",[world.ws,crashed.candidateId,crashed.domain]);
+ await world.runtime.query("INSERT INTO outreach_people_lookups(workspace_id,candidate_id,candidate_revision,host,provider,state,credits,business_date,business_time_zone,reserved_at,expires_at) VALUES($1,$2,1,$3,'fake_people','reserved',1,(clock_timestamp() AT TIME ZONE 'America/New_York')::date,'America/New_York',clock_timestamp()-interval '10 minutes',clock_timestamp()+interval '30 days')",[world.ws,crashed.candidateId,crashed.domain]);
  const people=fakePeople();await world.enrich(people);
  expect(await rowFor(crashed.candidateId)).toMatchObject({state:'unknown',credits:1});
  expect(people.calls).not.toContain(crashed.domain);
 });
 it('refuses a found person at the database unless it is verified, lower case and at the company host',async()=>{
  const company=await world.prepared('OH',()=>'x');
- const lookup=(await world.runtime.query<{id:string}>("INSERT INTO outreach_people_lookups(workspace_id,candidate_id,candidate_revision,host,provider,state,credits,business_date,business_time_zone,observed_at,expires_at) VALUES($1,$2,1,$3,'other_provider','found',1,current_date,'America/New_York',now(),now()+interval '30 days') RETURNING id",[world.ws,company.candidateId,company.domain])).rows[0]!.id;
+ const lookup=(await world.runtime.query<{id:string}>("INSERT INTO outreach_people_lookups(workspace_id,candidate_id,candidate_revision,host,provider,state,credits,business_date,business_time_zone,observed_at,expires_at) VALUES($1,$2,1,$3,'other_provider','found',1,(clock_timestamp() AT TIME ZONE 'America/New_York')::date,'America/New_York',now(),now()+interval '30 days') RETURNING id",[world.ws,company.candidateId,company.domain])).rows[0]!.id;
  const insert=(email:string,status='verified')=>world.runtime.query("INSERT INTO outreach_people_contacts(workspace_id,lookup_id,candidate_id,host,provider_person_id,first_name,last_name,title,email,email_status,match_confidence) VALUES($1,$2,$3,$4,'p','A','B','Owner',$5,$6,'high')",[world.ws,lookup,company.candidateId,company.domain,email,status]);
  await expect(insert(`a@other.org`)).rejects.toMatchObject({code:'23514'});
  await expect(insert(`A@${company.domain}`)).rejects.toMatchObject({code:'23514'});
