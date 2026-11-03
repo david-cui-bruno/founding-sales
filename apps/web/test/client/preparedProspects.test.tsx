@@ -49,7 +49,7 @@ it('opens a useful company brief without email or canonical publication, using o
  const f=await mounted();await screen.findByRole('heading',{name:row().displayName});
  fireEvent.click(screen.getByRole('button',{name:'Open company brief for '+row().displayName}));
  const detail=await screen.findByRole('article',{name:'Prepared company brief'});
- expect(within(detail).getByRole('heading',{name:brief.displayName})).toBe(document.activeElement);
+ await waitFor(()=>expect(within(detail).getByRole('heading',{name:brief.displayName})).toBe(document.activeElement));
  for(const passage of brief.passages)expect(within(detail).getByText(passage.quote)).toBeTruthy();
  expect(within(detail).getByText('Business email is unknown')).toBeTruthy();
  expect(within(detail).getByText('Home | HRM 1')).toBeTruthy();
