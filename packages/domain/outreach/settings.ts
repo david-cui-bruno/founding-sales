@@ -13,7 +13,7 @@ type Result<T>={ok:true;value:T}|{ok:false;reason:string};
 export async function campaignKind(ctx:RepositoryContext,id:string):Promise<'email_first'|'call_first'|null>{
  const v=await readSequenceVersion(ctx,id);if(!v||v.state!=='published')return null;
  const channels=v.steps.map(s=>s.channel).join(',');
- const kind=channels==='email,email,email,email,email'?'email_first':channels==='call_task,email,call_task,email,call_task,email,call_task,email'?'call_first':null;
+ const kind=channels==='email'||channels==='email,email,email,email,email'?'email_first':channels==='call_task,email,call_task,email,call_task,email,call_task,email'?'call_first':null;
  if(!kind)return null;
  for(const step of v.steps.filter(s=>s.channel==='email')){const t=step.templateVersionId?await readTemplateVersion(ctx,step.templateVersionId):null;if(!t||!t.approvedAt||t.retiredAt)return null;}
  return kind;
