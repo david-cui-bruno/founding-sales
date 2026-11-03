@@ -16,6 +16,7 @@
     "@aws-sdk/client-transcribe": "^3.1149.0",
     "@fss/contracts": "*",
     "@fss/domain": "*",
+    "@fss/telemetry": "*",
     "pg": "^8.23.1"
   },
   "devDependencies": {

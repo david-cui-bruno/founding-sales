@@ -1,6 +1,9 @@
 import { randomBytes } from 'node:crypto';
 import {formatAccessToken} from '../../../api/src/auth/tokens.ts';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { captureTechnicalError } from '@fss/telemetry/node';
+import { DatabaseBusyError } from '../../../api/src/bootstrap/connections.ts';
+import { BrowserUnavailableError } from '../../src/server/runtime.ts';
 import type { AuthDeps } from '../../../api/src/auth/config.ts';
 import type { ApiOptions, ApiRequest } from '../../../api/src/server.ts';
 import { createBrowserHandler } from '../../src/server/browser.ts';
@@ -10,6 +13,7 @@ const mocks = vi.hoisted(() => ({ start: vi.fn(), callback: vi.fn(), claim: vi.f
 vi.mock('../../../api/src/auth/signIn.ts', () => ({ startSignIn: mocks.start, handleCallback: mocks.callback, claimSignIn: mocks.claim }));
 vi.mock('../../../api/src/auth/sessions.ts', () => ({ authenticate: mocks.authenticate, endSession: mocks.end }));
 vi.mock('../../../api/src/server.ts', () => ({ route: mocks.route }));
+vi.mock('@fss/telemetry/node', () => ({ captureTechnicalError: vi.fn() }));
 const origin = 'https://localhost:8443';
 const now = new Date('2026-10-22T06:00:00Z');
 const expiresAt = '2026-10-22T07:00:00Z';
@@ -43,6 +47,25 @@ beforeEach(() => {
   mocks.authenticate.mockResolvedValue({ authenticated: true, principal });
   mocks.route.mockResolvedValue({ status: 200, body: { firms: [] } });
   mocks.end.mockResolvedValue(undefined);
+});
+describe('browser adapter technical failures', () => {
+  it.each([
+    { error: new TypeError('fictional technical failure'), captured: true },
+    { error: new DatabaseBusyError('fixture busy'), captured: false },
+    { error: new BrowserUnavailableError(), captured: false },
+  ])('retains the existing response and captures only an unexpected failure ($captured)', async ({ error, captured }) => {
+    const unavailable = createBrowserHandler({
+      origin, cookieKey: key, clientVersion: '1.4.0',
+      withRequest: async () => { throw error; },
+    });
+    expect(await unavailable(request('/browser/session'))).toMatchObject({ status: 503, body: { error: 'browser_request_refused' } });
+    if (captured) expect(captureTechnicalError).toHaveBeenCalledExactlyOnceWith(error, 'api_request');
+    else expect(captureTechnicalError).not.toHaveBeenCalled();
+  });
+  it('does not collect normal transport or business refusals', async () => {
+    expect((await handler(post('/browser/session')))?.status).toBe(405);
+    expect(captureTechnicalError).not.toHaveBeenCalled();
+  });
 });
 describe('explicit calling readiness read', () => {
   const path = '/browser/api/dial/check';

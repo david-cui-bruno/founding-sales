@@ -6,13 +6,18 @@ const index = '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta 
 
 /** Builds only the existing browser presentation. No runtime settings enter esbuild. */
 export async function buildBrowserAssets(): Promise<BrowserAssets> {
+  return (await buildBrowserAssetOutput()).assets;
+}
+
+/** Build-only seam: private maps never enter the HTTP asset map. */
+export async function buildBrowserAssetOutput(privateSourceMaps = false) {
   const result = await build({
     absWorkingDir: fileURLToPath(new URL('../../', import.meta.url)),
     entryPoints: [fileURLToPath(new URL('../client/main.tsx', import.meta.url))],
     outdir: 'browser-public-build', entryNames: 'renderer',
     bundle: true, write: false, format: 'esm', platform: 'browser',
     target: 'es2022', jsx: 'automatic', minify: true,
-    sourcemap: false, legalComments: 'none',
+    sourcemap: privateSourceMaps ? 'external' : false, sourcesContent: true, legalComments: 'none',
     define: { 'process.env.NODE_ENV': '"production"' },
     metafile: true,
   });
@@ -25,12 +30,14 @@ export async function buildBrowserAssets(): Promise<BrowserAssets> {
   }
   const script = result.outputFiles.find(file => file.path.endsWith('/renderer.js'));
   const styles = result.outputFiles.find(file => file.path.endsWith('/renderer.css'));
-  if (result.outputFiles.length !== 2 || !script || !styles || !script.contents.length || !styles.contents.length) {
+  const maps = result.outputFiles.filter(file => file.path.endsWith('.map'));
+  if (result.outputFiles.length !== (privateSourceMaps ? 4 : 2) || !script || !styles || !script.contents.length || !styles.contents.length) {
     throw new Error('Invalid browser public asset output');
   }
-  return new Map([
+  const assets: BrowserAssets = new Map([
     ['/', { body: new TextEncoder().encode(index), contentType: 'text/html; charset=utf-8' }],
     ['/renderer.js', { body: script.contents, contentType: 'text/javascript; charset=utf-8' }],
     ['/styles.css', { body: styles.contents, contentType: 'text/css; charset=utf-8' }],
   ]);
+  return { assets, maps };
 }

@@ -16,6 +16,14 @@ Historical generated-answer/index, AI booking, older automatic-admission and rec
 
 The scheduler materializes work; a leased job is not proof of an external effect. Runner fencing, business uniqueness and outbound uncertainty are described in [jobs](jobs.md). Process shutdown drains in-flight work before sessions close, subject to its deadline. Heartbeats and metrics are operational signals, not business consent or provider-quality evidence.
 
+## Error-only diagnostics
+
+[`packages/telemetry`](../../packages/telemetry/src/privacy.ts) owns the shared error allowlist and final-envelope filter. API and worker bootstrap initialize its Node client; the browser initializes before React from public `GET /browser/runtime` metadata. `FSS_SENTRY_DSN` selects the server project, `FSS_SENTRY_BROWSER_DSN` selects the browser project, and `FSS_BUILD_COMMIT` supplies the exact release. An absent DSN disables capture. Diagnostics must not change request results, job fencing, retries, sending authority or shutdown outcomes.
+
+Events contain a fixed technical error, service/boundary, release and validated code locations—not error messages, causes, users, requests, breadcrumbs, attachments, queue payloads, credentials, prospect/Gmail content or model inputs. Replay, tracing, profiling, logs and automatic instrumentation are disabled. Native Node TypeScript remains unminified: an image-generated exact source manifest permits only trusted code context, without runtime variables or fabricated source maps. The browser's private debug-ID maps match the published JavaScript byte-for-byte; only main-push CI uploads them with its dedicated `org:ci` token, never Docker or application runtime.
+
+The US Sentry organization must retain server-side PII scrubbing, IP removal, disabled JavaScript scraping/shared issues/AI, and an advanced `[Remove] [Anything] from [$user.geo.**]` rule. IP removal alone still permits provider-derived geolocation ([provider documentation](https://docs.sentry.io/security-legal-pii/scrubbing/server-side-scrubbing/#geographic-information)). Sentry adds no immediate paging; the existing daily CloudWatch digest remains the alert policy. [Current state](../operations/current-state.md) distinguishes local/provider proof, CI publication and actual production activation.
+
 ## Registered due-work sources
 
 The default `workerDueWorkSources()` registry contains exactly the following names. Registration is not activation: composition flags, configured adapters and current domain authority determine whether a source materializes eligible work. Sources only touch PostgreSQL; provider effects belong to guarded handlers.

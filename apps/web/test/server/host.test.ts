@@ -60,6 +60,21 @@ async function raw(port: number, wire: string, abort = false): Promise<string> {
 const postHeaders = { origin, 'content-type': 'application/json' };
 
 describe('thin host HTTP transport', () => {
+  it('serves only public technical runtime configuration without auth or product work, with one exact CSP origin', async () => {
+    const telemetry = { dsn: 'https://abc123@o123.ingest.us.sentry.io/456', release: 'a'.repeat(40) };
+    const withRequest = vi.fn(async () => { throw new Error('Runtime configuration must not open a session'); });
+    const port = await start({ runtime: { origin, clientVersion: '1.0.0', cookieKey: randomBytes(32), telemetry, withRequest } });
+    const result = await send(port, '/browser/runtime', 'GET', { cookie: 'private=must-not-be-read' });
+    expect(result.status).toBe(200);
+    expect(JSON.parse(result.body)).toEqual(telemetry);
+    expect(withRequest).not.toHaveBeenCalled();
+    expect(result.headers['set-cookie']).toBeUndefined();
+    expect(result.headers['content-security-policy']).toContain("connect-src 'self' https://o123.ingest.us.sentry.io ");
+    expect(result.headers['content-security-policy']).not.toMatch(/abc123|\*|tunnel/u);
+    const refused = await send(port, '/browser/runtime', 'POST', postHeaders, '{}');
+    expect(refused.status).toBe(405);
+    expect(withRequest).not.toHaveBeenCalled();
+  });
   it('is directly consumable by an actual Node HTTPS server', async () => {
     const certificate = await localCertificate();
     const handler = createBrowserHostHandler({

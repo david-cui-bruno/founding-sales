@@ -84,6 +84,8 @@ export interface RunClaimedJobOptions {
   readonly chunkCountLimit?: number | undefined;
   /** Seconds of chunking before a chunked job is failed. `CHUNK_SECONDS_LIMIT` by default. */
   readonly chunkSecondsLimit?: number | undefined;
+  /** Exception only: no job, payload, scope or business outcome is exposed. */
+  readonly onException?: ((error: unknown) => void) | undefined;
 }
 
 /** True while this worker still holds the exact lease it was handed. */
@@ -155,6 +157,12 @@ interface AttemptOptions {
   readonly handler: JobHandler;
   readonly job: ClaimedJob;
   readonly failure: { readonly backoff: BackoffPolicy; readonly random: (() => number) | undefined };
+  readonly onException?: ((error: unknown) => void) | undefined;
+}
+
+function reportException(options: Pick<AttemptOptions, 'onException'>, error: unknown): void {
+  // Observation must never change retry, completion or fencing behavior.
+  try { options.onException?.(error); } catch { /* Diagnostic failure must not alter the job outcome. */ }
 }
 
 /** One call of the handler, with the transaction shape its protection asks for. */
@@ -175,6 +183,7 @@ async function runAttempt(session: SessionQueryable, options: AttemptOptions): P
       result = await handler.handle(input);
     } catch (error) {
       if (error instanceof ModelBudgetRefusal) return { outcome: await killJob(session, job, { code: error.code }) };
+      reportException(options, error);
       return { outcome: await failJob(session, job, { code: failureCode(error), detail: failureDetail(error), ...failure }) };
     }
     if (isJobChunk(result) && !result.done) {
@@ -229,6 +238,7 @@ async function runAttempt(session: SessionQueryable, options: AttemptOptions): P
   }
   if (thrown !== null) {
     if (thrown instanceof ModelBudgetRefusal) return { outcome: await killJob(session, job, { code: thrown.code }) };
+    reportException(options, thrown);
     return { outcome: await failJob(session, job, { code: failureCode(thrown), detail: failureDetail(thrown), ...failure }) };
   }
   if (chunk !== null && progress !== null) return { outcome: 'chunk', chunk, progress, writtenHostMs };
@@ -271,7 +281,7 @@ export async function runClaimedJob(session: SessionQueryable, options: RunClaim
       }
     }
     const startedAt = clock ?? (await now());
-    const attempt = await runAttempt(session, { handler, job, failure });
+    const attempt = await runAttempt(session, { handler, job, failure, onException: options.onException });
     if (attempt.outcome !== 'chunk') return attempt.outcome;
 
     const written = attempt.progress;
@@ -307,6 +317,8 @@ export interface RunOnceOptions {
   readonly instanceKey?: string | undefined;
   readonly backoff?: BackoffPolicy | undefined;
   readonly random?: (() => number) | undefined;
+  /** Called only for unexpected thrown failures, never normal handler outcomes. */
+  readonly onException?: ((error: unknown) => void) | undefined;
   /**
    * The lanes this slot claims, in order; with the worker's limit of one, the first
    * lane with a runnable job wins the pass. Defaults to every lane, urgent first,
@@ -369,6 +381,7 @@ export async function runOnce(session: SessionQueryable, options: RunOnceOptions
       job,
       backoff: options.backoff,
       random: options.random,
+      onException: options.onException,
     });
     if (outcome === 'completed') completed += 1;
     else if (outcome === 'lease_lost') leaseLost += 1;

@@ -21,7 +21,7 @@ const task = (n: number) => `${P}task/fss-prod-cluster/${String(n).padStart(32, 
 const image = (kind: string, digest: string) => `326255650484.dkr.ecr.us-east-1.amazonaws.com/fss-prod-${kind}@${digest}`;
 const PRODUCTION = 'b'.repeat(40), CANDIDATE = 'c'.repeat(40), HEAD = 'd'.repeat(40);
 const API = `sha256:${'1'.repeat(64)}`, WORKER = `sha256:${'2'.repeat(64)}`;
-const source = { candidate: CANDIDATE, gateId: 41243290797, imagesId: 41243290872, prHead: HEAD, prNumber: 871, upgradeJobId: 124661428799 };
+const source = { candidate: CANDIDATE, gateId: 41243290797, imagesId: 41243290872, offVersions: [4], prHead: HEAD, prNumber: 871, upgradeJobId: 124661428799 };
 const bindings = (overrides: Record<string, unknown> = {}) => ({ runId: null, jobId: null, ...source, ...overrides });
 const preflightFixture = () => ({
   at: '2026-10-31T21:48:12.586Z', production: PRODUCTION, schema: 153, targetSchema: 153, migration: null as null | Record<string, unknown>, bindings: { ...source },
@@ -85,7 +85,7 @@ function cloud(fault = '', onWrite: (action: string) => void = () => {}, artifac
       }
       case 'ecs register-task-definition': reader.document = JSON.parse(value('--cli-input-json')); return JSON.stringify({ taskDefinition: { taskDefinitionArn: READER } });
       case 'ecs run-task': reader.owner = value('--started-by'); return JSON.stringify({ failures: [], tasks: [{ taskArn: READER_TASK }] });
-      case 'logs get-log-events': return JSON.stringify({ events: [{ message: JSON.stringify({ releaseOff: true, schema: 153, storedOff: true, effectiveOff: true, finishing: 0, versions: [4], observedAt: OBSERVED_AT }) }] });
+      case 'logs get-log-events': return JSON.stringify({ events: [{ message: JSON.stringify({ releaseOff: true, schema: 153, storedOff: true, effectiveOff: true, finishing: 0, versions: fault === 'off-version-six' ? [6] : [4], observedAt: OBSERVED_AT }) }] });
       case 'ecs deregister-task-definition': reader.status = 'INACTIVE'; return JSON.stringify({ taskDefinition: { taskDefinitionArn: READER, status: 'INACTIVE' } });
       case 'rds describe-db-instances': return JSON.stringify({ DBInstances: [{ DBInstanceArn: 'arn:aws:rds:us-east-1:326255650484:db:fss-prod-pg', DbiResourceId: 'db-test', DBInstanceStatus: fault === 'backing-up' ? 'backing-up' : 'available', BackupRetentionPeriod: 35, PreferredBackupWindow: fault === 'backup-window-near' ? '21:30-22:00' : '07:30-08:00', PreferredMaintenanceWindow: fault === 'maintenance-window-near' ? 'sat:22:00-sat:23:00' : 'tue:05:00-tue:06:00' }] });
       case 'rds describe-db-instance-automated-backups': return JSON.stringify({ DBInstanceAutomatedBackups: [{ RestoreWindow: { EarliestTime: '2026-09-26T21:43:18+00:00', LatestTime: '2026-10-31T21:43:18+00:00' } }] });
@@ -134,7 +134,7 @@ describe('application release operator arguments and bindings', () => {
     for (const path of [join(directory, 'absent'), repositoryPath('infra'), repositoryPath(''), join(directory, 'file.json'), lookalike, link]) expect(() => operator.parseArguments(['preflight', '--dir', path]), path).toThrow('run_directory_invalid');
   });
 
-  it('requires exactly the eight binding keys with bound source/CI and, for application acceptance, bound run/job', () => {
+  it('binds source/CI, paused-setting versions and native run identity', () => {
     expect(operator.validateBindings(bindings())).toEqual(bindings());
     expect(operator.validateBindings(bindings({ runId: 41245379477, jobId: 124667631715 }), true)).toMatchObject({ runId: 41245379477 });
     for (const [value, reason] of [
@@ -145,6 +145,9 @@ describe('application release operator arguments and bindings', () => {
     ] as const) expect(() => operator.validateBindings(value), reason).toThrow(reason);
     expect(() => operator.validateBindings(bindings(), true)).toThrow('release_application_unbound');
     expect(() => operator.validateBindings(bindings({ runId: source.gateId, jobId: 1 }), true)).toThrow('candidate_invalid');
+    for (const versions of [null, [], [0], [1.5], ['6'], Array(101).fill(6)]) expect(() => operator.validateBindings(bindings({ offVersions: versions }))).toThrow('sending_off_versions_unbound');
+    // The reader orders by workspace ID, not by version; preserve the exact vector.
+    expect(operator.validateBindings(bindings({ offVersions: [6, 4, 6] }))).toMatchObject({ offVersions: [6, 4, 6] });
     expect(operator.validateBindings(bindings({ migrationReview: REVIEW }))).toMatchObject({ migrationReview: REVIEW });
     for (const review of [null, 'reviewed', { ...REVIEW, classification: 'additive' }, { ...REVIEW, classification: 'privilege' }, { ...REVIEW, report: ' ' }, { ...REVIEW, extra: 'x' }]) expect(() => operator.validateBindings(bindings({ migrationReview: review })), JSON.stringify(review)).toThrow('migration_review_invalid');
   });
@@ -262,6 +265,19 @@ describe('preflight for exactly one contiguous migration', () => {
 
 describe('later steps bind to the saved preflight', () => {
   const prepared = (extra: Record<string, unknown> = {}, bound = bindings()) => runDirectory({ 'release-bindings.json': bound, 'release-preflight.json': preflightFixture(), ...extra });
+
+  it('accepts a newly pinned pause version but refuses a newer stop or rebinding', async () => {
+    const pinned = { ...source, offVersions: [6] }, application = { ...bindings({ offVersions: [6] }), runId: 41245379477, jobId: 124667631715 };
+    const preflight = { ...preflightFixture(), bindings: pinned };
+    const directory = runDirectory({ 'release-bindings.json': bindings({ offVersions: [6] }), 'release-preflight.json': preflight });
+    const stub = cloud('off-version-six');
+    await expect(operator.createOperator({ directory, run: stub.run, fetchJson: stub.fetchJson, now: () => Date.parse(OBSERVED_AT) })['observe-off']()).resolves.toContain('OFF read accepted');
+    expect(JSON.parse(readFileSync(join(directory, 'preapproval-off-result.json'), 'utf8')).read.versions).toEqual([6]);
+    const changed = runDirectory({ 'release-bindings.json': application, 'release-preflight.json': preflight, 'application-native-input.json': native({ off: { ...native().nativeFinalStatus.off, versions: [7] } }) });
+    expect(await refused(changed, 'verify-application', 'native_off_changed')).toEqual([]);
+    const rebound = runDirectory({ 'release-bindings.json': bindings({ offVersions: [7] }), 'release-preflight.json': preflight });
+    expect(await refused(rebound, 'observe-off', 'bindings_changed_since_preflight')).toEqual([]);
+  });
 
   it('observe-off refuses replay, rebinding and a moved production commit before any write', async () => {
     expect(await refused(prepared({ 'preapproval-off-custody.json': {} }), 'observe-off', 'reader_already_attempted')).toEqual([]);

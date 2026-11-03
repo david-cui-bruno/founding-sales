@@ -72,6 +72,9 @@ on:
       - 'certs/**'
       - 'package.json'
       - 'package-lock.json'
+      - 'scripts/buildBrowserAssets.mjs'
+      - 'scripts/uploadSentrySources.mjs'
+      - 'scripts/writeSentrySourceManifest.mjs'
       - '.github/workflows/greenfield-images.yml'
       - '.github/workflows/greenfield-deploy.yml'
       - 'infra/**'
@@ -256,6 +259,9 @@ jobs:
           API_REPOSITORY: ${{ secrets.FSS_REHEARSAL_API_REPOSITORY }}
           WORKER_REPOSITORY: ${{ secrets.FSS_REHEARSAL_WORKER_REPOSITORY }}
           GH_TOKEN: ${{ github.token }}
+          FSS_SENTRY_API_DSN: ${{ vars.FSS_SENTRY_API_DSN }}
+          FSS_SENTRY_WORKER_DSN: ${{ vars.FSS_SENTRY_WORKER_DSN }}
+          FSS_SENTRY_BROWSER_DSN: ${{ vars.FSS_SENTRY_BROWSER_DSN }}
         run: |
           set -euo pipefail
           tag="ci-${GITHUB_SHA}"
@@ -272,6 +278,9 @@ jobs:
             repository="fss-rh-$service"
             uri="$API_REPOSITORY"
             [ "$service" = worker ] && uri="$WORKER_REPOSITORY"
+            dsn="$FSS_SENTRY_API_DSN"
+            [ "$service" = worker ] && dsn="$FSS_SENTRY_WORKER_DSN"
+            [ -n "$dsn" ] && [ -n "$FSS_SENTRY_BROWSER_DSN" ] || { echo "::error::public Sentry ingestion DSNs must be configured before publishing"; exit 1; }
             # The tag is immutable: it is pushed once, and reused only as this run's own.
             set +e
             existing="$(aws ecr describe-images --repository-name "$repository" --image-ids "imageTag=$tag" \
@@ -291,6 +300,8 @@ jobs:
                 --file "Dockerfile.$service" \
                 --build-arg "GIT_REVISION=${GITHUB_SHA}" \
                 --build-arg "FSS_BUILD_COMMIT=${GITHUB_SHA}" \
+                --build-arg "FSS_SENTRY_DSN=$dsn" \
+                --build-arg "FSS_SENTRY_BROWSER_DSN=$FSS_SENTRY_BROWSER_DSN" \
                 --provenance=false \
                 --metadata-file "$RUNNER_TEMP/$service-metadata.json" \
                 --tag "$uri:$tag" \
@@ -335,6 +346,42 @@ jobs:
           docker pull --platform linux/arm64 "$WORKER_REPOSITORY@$WORKER_DIGEST" > /dev/null
           infra/scripts/images.sh verify "$API_REPOSITORY@$API_DIGEST" api "$API_SCHEMA_MIN" "$API_SCHEMA_MAX"
           infra/scripts/images.sh verify "$WORKER_REPOSITORY@$WORKER_DIGEST" worker "$WORKER_SCHEMA_MIN" "$WORKER_SCHEMA_MAX"
+
+      - name: Export private browser sources and the published runtime bytes
+        env:
+          API_REPOSITORY: ${{ secrets.FSS_REHEARSAL_API_REPOSITORY }}
+        run: |
+          set -euo pipefail
+          # No upload token exists in this step or any Docker argument/environment.
+          npm ci --ignore-scripts --no-audit --no-fund
+          private="$RUNNER_TEMP/fss-sentry-private"
+          mkdir -p "$private/deployed"
+          docker buildx build --builder fss-images --platform linux/arm64 \
+            --file Dockerfile.api --target telemetry-artifacts \
+            --output "type=local,dest=$private/artifacts" .
+          uri="$API_REPOSITORY@$API_DIGEST"
+          commit="$(docker image inspect "$uri" --format '{{range .Config.Env}}{{println .}}{{end}}' | sed -n 's/^FSS_BUILD_COMMIT=//p')"
+          [ "$commit" = "$GITHUB_SHA" ] || { echo "::error::source release does not match the published image"; exit 1; }
+          container="$(docker create --platform linux/arm64 "$uri")"
+          trap 'docker rm -f "$container" >/dev/null' EXIT
+          docker cp "$container:/app/browser-public/." "$private/deployed/"
+          docker rm "$container" >/dev/null
+          trap - EXIT
+
+      - name: Upload private browser code and source maps to US Sentry
+        # This credential is scoped to this main-push-only step, not the build.
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.FSS_SENTRY_SOURCE_UPLOAD_TOKEN }}
+          SENTRY_ORG: ${{ vars.FSS_SENTRY_ORG }}
+          SENTRY_PROJECT_BROWSER: ${{ vars.FSS_SENTRY_PROJECT_BROWSER }}
+        run: |
+          set -euo pipefail
+          private="$RUNNER_TEMP/fss-sentry-private"
+          node scripts/uploadSentrySources.mjs "$private/artifacts/browser" "$private/deployed"
+
+      - name: Remove temporary private code and source maps
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/fss-sentry-private"
 
       - name: Record the digests
         run: |

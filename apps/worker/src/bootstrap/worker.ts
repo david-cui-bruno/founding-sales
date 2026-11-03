@@ -1,3 +1,4 @@
+import { captureTechnicalError } from '@fss/telemetry/node';
 import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
 import type { HandlerRegistry } from '@fss/domain/jobs/handlerRegistry.ts';
 import { MetricError, collectJobMetrics, type MetricDatum, type MetricSink } from '@fss/domain/jobs/metrics.ts';
@@ -125,6 +126,7 @@ export async function startWorker(options: WorkerProcessOptions): Promise<Worker
   let deadJobWatermark = now().toISOString();
 
   const logLoopFailure = (loop: string, error: unknown): void => {
+    captureTechnicalError(error, 'worker_loop');
     log.log('error', 'worker_loop_failed', { loop, ...errorFields(error) });
   };
   const onError = (loop: string) => (error: unknown) => {
@@ -194,6 +196,7 @@ export async function startWorker(options: WorkerProcessOptions): Promise<Worker
           limit: 1,
           instanceKey: config.instanceKey,
           classes: lanes.order(),
+          onException: error => captureTechnicalError(error, 'worker_handler'),
         });
         lanes.record(report.claimedClass);
         liveness.report(name, true);
@@ -255,6 +258,7 @@ export async function startWorker(options: WorkerProcessOptions): Promise<Worker
         try {
           data.push(...(await collect(sessions.metrics)));
         } catch (error) {
+          captureTechnicalError(error, 'worker_loop');
           log.log('error', 'metrics_collect_failed', { collector, ...errorFields(error) });
         }
       }

@@ -29,11 +29,13 @@ COPY package.json package-lock.json ./
 COPY apps/worker/package.json apps/worker/
 COPY packages/domain/package.json packages/domain/
 COPY packages/contracts/package.json packages/contracts/
+COPY packages/telemetry/package.json packages/telemetry/
 
 RUN npm ci --ignore-scripts --omit=dev --no-audit --no-fund \
       --workspace @fss/worker \
       --workspace @fss/domain \
       --workspace @fss/contracts \
+      --workspace @fss/telemetry \
  && npm cache clean --force
 
 # ---------------------------------------------------------------------------
@@ -75,6 +77,8 @@ COPY package.json ./
 COPY --from=dependencies /app/apps/worker ./apps/worker
 COPY --from=dependencies /app/packages/domain ./packages/domain
 COPY --from=dependencies /app/packages/contracts ./packages/contracts
+COPY --from=dependencies /app/packages/telemetry ./packages/telemetry
+COPY packages/telemetry/src packages/telemetry/src
 COPY apps/worker/src apps/worker/src
 COPY packages/domain/db packages/domain/db
 COPY packages/domain/crm packages/domain/crm
@@ -113,11 +117,13 @@ COPY packages/contracts/src packages/contracts/src
 # Exclude the repository harness and optional SDK test-helper entry points.
 # npm's production packages can include their own src/test and dist/test trees.
 RUN rm -rf packages/domain/db/testing \
- && for task_modules in apps/worker/node_modules packages/domain/node_modules packages/contracts/node_modules; do \
+ && for task_modules in apps/worker/node_modules packages/domain/node_modules packages/contracts/node_modules packages/telemetry/node_modules; do \
       if [ -d "$task_modules" ]; then \
         find "$task_modules" -type d \( -name test -o -name tests -o -name testing \) -prune -exec rm -rf {} +; \
       fi; \
     done
+COPY scripts/writeSentrySourceManifest.mjs /tmp/writeSentrySourceManifest.mjs
+RUN node /tmp/writeSentrySourceManifest.mjs /app && rm /tmp/writeSentrySourceManifest.mjs
 
 # The liveness file the ECS health check stats lives here. When the task
 # definition sets `readonlyRootFilesystem`, /tmp must be a tmpfs volume;
@@ -141,6 +147,10 @@ RUN install -d -m 1777 /tmp
 # ---------------------------------------------------------------------------
 ARG FSS_BUILD_COMMIT=""
 ENV FSS_BUILD_COMMIT=${FSS_BUILD_COMMIT}
+
+# Public ingestion DSN only; no Sentry upload token is accepted by this image.
+ARG FSS_SENTRY_DSN=""
+ENV FSS_SENTRY_DSN=${FSS_SENTRY_DSN}
 
 USER node
 

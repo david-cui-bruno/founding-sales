@@ -1,0 +1,23 @@
+{
+  "name": "@fss/telemetry",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./node": "./src/node.ts",
+    "./browser": "./src/browser.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@sentry/browser": "11.10.0",
+    "@sentry/core": "11.10.0",
+    "@sentry/node": "11.10.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.3"
+  }
+}

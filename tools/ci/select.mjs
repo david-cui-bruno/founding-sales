@@ -1,7 +1,7 @@
 // Required gate policy: input is every changed path, including deleted paths.
 import { readFileSync } from 'node:fs';
 const paths = readFileSync(0, 'utf8').split(/\r?\n/u).filter(Boolean);
-const all = ['contracts', 'domain', 'api', 'worker', 'web', 'ops'];
+const all = ['contracts', 'telemetry', 'domain', 'api', 'worker', 'web', 'ops'];
 const selected = new Set(['ops']);
 const reasons = [];
 let broad = process.argv.includes('--main') || paths.length === 0;
@@ -11,13 +11,13 @@ for (const path of paths) {
   if (/^packages\/domain\/db\/(migrations\/|schemaRange\.ts)/u.test(path) || path === '.gitattributes') upgrade = true;
   if (/^(docs\/|.*\.md$)/u.test(path)) reasons.push('documentation: operations contract checks');
   else if (path.startsWith('apps/api/')) {
-    ['domain', 'api', 'web'].forEach(suite => selected.add(suite));
+    ['telemetry', 'domain', 'api', 'web'].forEach(suite => selected.add(suite));
     reasons.push('API: domain controls and web consumer');
   } else if (path.startsWith('apps/worker/')) {
-    ['domain', 'api', 'worker'].forEach(suite => selected.add(suite));
+    ['telemetry', 'domain', 'api', 'worker'].forEach(suite => selected.add(suite));
     reasons.push('worker: domain controls and API-owned configured provider journeys');
   } else if (path.startsWith('apps/web/')) {
-    ['domain', 'api', 'web'].forEach(suite => selected.add(suite));
+    ['telemetry', 'domain', 'api', 'web'].forEach(suite => selected.add(suite));
     reasons.push('web: API and domain controls');
   } else {
     broad = true;

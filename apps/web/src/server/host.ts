@@ -1,7 +1,7 @@
 import type { IncomingMessage, RequestListener, ServerResponse } from 'node:http';
 import { readBody } from '../../../api/src/bootstrap/requestBody.ts';
 import { MAX_REQUEST_BYTES } from '../../../api/src/limits.ts';
-import { BROWSER_PATHS, browserApiPathAllowed } from '../shared/browserContract.ts';
+import { BROWSER_PATHS, browserApiPathAllowed, browserErrorConfigurationSchema } from '../shared/browserContract.ts';
 import { createBrowserHandler } from './browser.ts';
 import type { BrowserHostOptions, BrowserStaticAsset } from './hostContract.ts';
 import { BROWSER_SECURITY_HEADERS, BROWSER_REFUSAL_BODY, BROWSER_JSON_CONTENT_TYPE } from './httpPolicy.ts';
@@ -64,11 +64,11 @@ async function bodyOf(request: IncomingMessage, post: boolean, timeoutMs: number
   }
 }
 
-function send(response: ServerResponse, status: number, body: Buffer, head: boolean, headers: Record<string, string | readonly string[]> = {}): void {
+function sendWithPolicy(securityHeaders: Readonly<Record<string, string>>, response: ServerResponse, status: number, body: Buffer, head: boolean, headers: Record<string, string | readonly string[]> = {}): void {
   if (response.destroyed) return;
   response.statusCode = status;
   for (const [name, value] of Object.entries(headers)) response.setHeader(name, typeof value === 'string' ? value : [...value]);
-  for (const [name, value] of Object.entries(BROWSER_SECURITY_HEADERS)) response.setHeader(name, value);
+  for (const [name, value] of Object.entries(securityHeaders)) response.setHeader(name, value);
   response.setHeader('content-length', body.byteLength);
   response.end(head ? undefined : body);
 }
@@ -79,6 +79,17 @@ export function createBrowserHostHandler(options: BrowserHostOptions): RequestLi
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > 30_000) throw new Error('Invalid browser host configuration');
   const browser = createBrowserHandler(options.runtime);
   const host = new URL(options.runtime.origin).host;
+  const telemetry = options.runtime.telemetry === undefined ? undefined : browserErrorConfigurationSchema.parse(options.runtime.telemetry);
+  const securityHeaders = {
+    ...BROWSER_SECURITY_HEADERS,
+    ...(telemetry?.dsn === undefined ? {} : {
+      'content-security-policy': BROWSER_SECURITY_HEADERS['content-security-policy'].replace(
+        "connect-src 'self'", `connect-src 'self' ${new URL(telemetry.dsn).origin}`,
+      ),
+    }),
+  };
+  const send = (response: ServerResponse, status: number, body: Buffer, head: boolean, headers?: Record<string, string | readonly string[]>): void =>
+    sendWithPolicy(securityHeaders, response, status, body, head, headers);
   const assets = new Map<string, BrowserStaticAsset>();
   for (const [path, asset] of options.assets) {
     if (pathOf(path).path !== path || path === '/browser' || path.startsWith('/browser/')
@@ -99,7 +110,7 @@ export function createBrowserHostHandler(options: BrowserHostOptions): RequestLi
           if (method !== 'GET' && method !== 'POST') throw new Refusal(405);
           const api = path.startsWith(`${BROWSER_PATHS.apiPrefix}/`) ? path.slice(BROWSER_PATHS.apiPrefix.length) : null;
           if (api !== null ? !browserApiPathAllowed(method, api) : !Object.values(BROWSER_PATHS).some(value => value === path) || path === BROWSER_PATHS.apiPrefix) throw new Refusal(404);
-          if (api === null && method !== (path === BROWSER_PATHS.session || path === BROWSER_PATHS.callback ? 'GET' : 'POST')) throw new Refusal(405);
+          if (api === null && method !== (path === BROWSER_PATHS.session || path === BROWSER_PATHS.callback || path === BROWSER_PATHS.runtime ? 'GET' : 'POST')) throw new Refusal(405);
         }
         const post = method === 'POST';
         if (isBrowser) {

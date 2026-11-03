@@ -26,6 +26,8 @@ Supply also includes the [retained phone/person/office reading aid](selling.md#s
 
 Browser shell/navigation source: [BrowserApp](../../apps/web/src/client/BrowserApp.tsx), [sections](../../apps/web/src/client/workspaceNavigation.ts). Secondary destinations are linked where actually supported, not invented new routes. API/worker composition: [processes](../greenfield/processes.md). [ADR0027](../adr/0027-web-product.md) retires desktop; design from the selling goal, not screen parity.
 
+Technical failure diagnostics are separate from selling authority and product analytics: [error-only observability](../greenfield/processes.md#error-only-diagnostics) locates the shared privacy boundary, private source-map publication and provider controls. Diagnostic capture grants no Gmail capture, prospect contact or new alerting authority; activation status remains in current-state.
+
 ## Drive and interpret
 
 [Verification guide](verification.md) owns setup/navigation/check selection and Root's retained observed navigation/request/read path. Later acquisition authority and its finite correction dependency are in [PLAN](../../apps/web/PLAN.md), not granted by this map. Journey pages link source and existing checks. Other recipes not exercised by this documentation lane are **draft/unrun**. A screenshot proves visible state, not a database/provider effect.

@@ -1,4 +1,5 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { ModelBudgetRefusal } from '@fss/domain/research/modelBudget.ts';
 import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing/testDatabase.ts';
 import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
 import { runTwiceUnderStolenLease } from '@fss/domain/jobs/atLeastOnce.ts';
@@ -218,6 +219,30 @@ describe('at-least-once job execution under a stolen lease', () => {
     );
     expect(rows[0]?.completed_at).not.toBeNull();
     expect(rows[0]?.completed_by).toBe('worker-canary');
+  });
+
+  it.each([
+    { kind: 'mail.watch_renew', protection: 'fencing_token' },
+    { kind: 'mail.sync', protection: 'business_uniqueness' },
+    { kind: 'sequence.action', protection: 'outbound_fence' },
+  ] as const)('observes only unexpected $protection failures while retaining retry and refusal outcomes', async ({ kind, protection }) => {
+    for (const refused of [false, true]) {
+      const error = refused ? new ModelBudgetRefusal('credit_model_daily_ceiling') : new TypeError('fictional technical failure');
+      const registry = new HandlerRegistry().register({
+        kind, protection, maxAttempts: 4, leaseSeconds: 30,
+        handle: async () => { throw error; },
+      });
+      const key = `exception-observer:${kind}:${String(refused)}`;
+      await enqueueJob(database.session, { workspaceId, kind, idempotencyKey: key, payload: {}, maxAttempts: 4 });
+      const [job] = await claimJobs(database.session, { owner: 'observer-test', kinds: [kind], limit: 1, leaseSeconds: 30 });
+      if (job === undefined) throw new Error('Expected a claimed fixture job');
+      const onException = vi.fn(() => { throw new Error('Observer must not change retry behavior'); });
+      expect(await runClaimedJob(database.session, { registry, job, onException })).toBe(refused ? 'dead' : 'retryable');
+      if (refused) expect(onException).not.toHaveBeenCalled();
+      else expect(onException).toHaveBeenCalledExactlyOnceWith(error);
+      // Keep later fixture claims isolated from this intentionally retryable failure.
+      await database.session.query("UPDATE jobs SET not_before = now() + INTERVAL '1 day' WHERE workspace_id = $1 AND id = $2", [workspaceId, job.id]);
+    }
   });
 
   it('records a worker heartbeat with its expected interval', async () => {

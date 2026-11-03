@@ -1,3 +1,4 @@
+import { initNodeErrors, captureTechnicalError, flushTechnicalErrors } from '@fss/telemetry/node';
 import {campaignOpeningInterpretation} from '@fss/domain/outreach/campaignOpeningModel.ts';
 import type {CampaignOpeningModelPort} from '@fss/domain/outreach/campaignOpeningModelPort.ts';
 import {businessSelectionHandler} from '../handlers/businessSelection.ts';
@@ -665,6 +666,7 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
     });
     return WORKER_EXIT_CODES.ok;
   }
+  initNodeErrors({ dsn: environment['FSS_SENTRY_DSN'], release: buildCommit(environment) ?? '', service: 'worker' });
 
   // Lane G7b. Absent unless the deployment injected `FSS_LLM_CLASSIFIER_API_KEY`,
   // in which case `classify.reply` stays unclaimed in the queue; the source still
@@ -776,10 +778,12 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
     return WORKER_EXIT_CODES.ok;
   } catch (error) {
     if (error instanceof WorkerStartupRefusal) return error.exitCode;
+    captureTechnicalError(error, 'startup');
     log.log('error', 'worker_failed', errorFields(error));
     return WORKER_EXIT_CODES.databaseUnreachable;
   } finally {
     for (const client of clients) await client.end().catch(() => undefined);
+    await flushTechnicalErrors();
   }
 }
 

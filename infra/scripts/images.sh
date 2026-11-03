@@ -72,6 +72,8 @@ IMAGE_INPUTS=(
   certs
   package.json
   package-lock.json
+  scripts/buildBrowserAssets.mjs
+  scripts/writeSentrySourceManifest.mjs
   .github/workflows/greenfield-images.yml
 )
 PIN_SEARCH_DEPTH=25
