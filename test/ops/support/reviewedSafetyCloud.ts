@@ -17,7 +17,7 @@ const readerImage=(name,candidate)=>{
 const tags=[{key:'NamePrefix',value:'fss-prod'}];
 const definition=(name,candidate=false)=>({taskDefinitionArn:arn(name),status:'ACTIVE',family:'fss-prod-'+name,
  taskRoleArn:mode==='schema-reader-role'&&name==='operations'?'foreign-role':'arn:aws:iam::326255650484:role/fss-prod-worker-task',executionRoleArn:'arn:aws:iam::326255650484:role/fss-prod-worker-exec',
- containerDefinitions:[{name,image:readerImage(name,candidate),environment:[{name:'FSS_DATABASE_HOST',value:mode==='schema-reader-host'&&name==='operations'?'foreign.invalid':'private.invalid'},{name:'FSS_SENDING_ENABLED',value:'false'}],
+ containerDefinitions:[{name,image:readerImage(name,candidate),environment:[{name:'FSS_DATABASE_HOST',value:mode==='schema-reader-host'&&name==='operations'?'foreign.invalid':'private.invalid'},{name:'FSS_SENDING_ENABLED',value:mode==='smoke-existing-record'?'true':'false'}],
  secrets:[{name:'DATABASE_SECRET_ARN',valueFrom:'arn:aws:secretsmanager:us-east-1:326255650484:secret:fss-prod/app-runtime-database-test'},{name:'google-gmail-oauth-client',valueFrom:'arn:aws:secretsmanager:us-east-1:326255650484:secret:fss-prod/google-gmail-oauth-client-test'},...(mode==='schema-reader-credential'&&name==='operations'?[{name:'MIGRATION_DATABASE_SECRET',valueFrom:'foreign-credential'}]:[])],
  logConfiguration:{options:{'awslogs-group':'/fss/fss-prod/worker','awslogs-stream-prefix':'operations'}}}]});
 const db={DBInstanceIdentifier:'fss-prod-pg',DBInstanceArn:mode==='schema-database-binding'?'foreign-database':'arn:aws:rds:us-east-1:326255650484:db:fss-prod-pg',DbiResourceId:'db-identifier',Endpoint:{Address:'private.invalid'},DBInstanceStatus:'available',BackupRetentionPeriod:35,LatestRestorableTime:new Date().toISOString()};
