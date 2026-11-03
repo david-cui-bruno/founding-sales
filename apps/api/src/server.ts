@@ -1,3 +1,4 @@
+import { captureTechnicalError } from '@fss/telemetry/node';
 import { dispatchBrowser } from './bootstrap/browser.ts';
 import { createApiHttpServer } from './bootstrap/browserTransport.ts';
 import type { ApiBrowserMount } from './bootstrap/browserContract.ts';
@@ -477,6 +478,7 @@ async function handle(
       send(response, REFUSAL_STATUS.database_busy, redactError('database_busy'));
       return;
     }
+    captureTechnicalError(error, 'api_request');
     // Logged at `error`, with the cause. The caller learns nothing about why: the why
     // may name a table, a path or a prospect.
     options.log?.log('error', 'request_failed', { path, ...errorFields(error) });

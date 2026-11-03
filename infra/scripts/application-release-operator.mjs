@@ -14,10 +14,8 @@ import { createReleaseSafety, normalizeTaskDefinition, readerTaskDocument, requi
 const REPOSITORY = 'david-cui-bruno/founding-sales', ORIGIN = 'https://api.usecallie.com', ACTOR = `arn:aws:iam::${ACCOUNT}:user/david`;
 const CLUSTER = `arn:aws:ecs:${REGION}:${ACCOUNT}:cluster/fss-prod-cluster`, DEFINITION = `arn:aws:ecs:${REGION}:${ACCOUNT}:task-definition/`, DATABASE = `arn:aws:rds:${REGION}:${ACCOUNT}:db:fss-prod-pg`;
 const SUBNETS = ['subnet-01f53573964548294', 'subnet-07ae1d846228e9e83'], SECURITY_GROUPS = ['sg-001321fbde693b058'];
-// Current stored owner OFF setting versions. A newer owner stop changes them and needs review, never an override.
-const OFF_VERSIONS = [4];
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
-const SOURCE_KEYS = ['candidate', 'gateId', 'imagesId', 'prHead', 'prNumber', 'upgradeJobId'], BINDING_KEYS = ['jobId', 'runId', ...SOURCE_KEYS].sort();
+const SOURCE_KEYS = ['candidate', 'gateId', 'imagesId', 'offVersions', 'prHead', 'prNumber', 'upgradeJobId'], BINDING_KEYS = ['jobId', 'runId', ...SOURCE_KEYS].sort();
 const FILES = { bindings: 'release-bindings.json', preflight: 'release-preflight.json', custody: 'preapproval-off-custody.json', result: 'preapproval-off-result.json', independent: 'preapproval-off-independent.json', native: 'application-native-input.json', images: 'main-images/image-digests.json', acceptance: 'application-acceptance.json' };
 const OUTPUTS = { preflight: [['preflight'], 'observation_already_saved'], 'observe-off': [['custody', 'result'], 'reader_already_attempted'], 'verify-off': [['independent'], 'snapshot_already_exists'], 'verify-application': [['acceptance'], 'report_already_exists'] };
 const READS = { sts: ['get-caller-identity'], ecs: ['describe-services', 'describe-task-definition', 'list-tasks', 'describe-tasks'], rds: ['describe-db-instances', 'describe-db-instance-automated-backups'] };
@@ -51,15 +49,16 @@ export function parseArguments(argv) {
   return { command: argv[0], directory };
 }
 
-// The eight keys are always present. Application run/job identities stay null until dispatch. An optional
-// `migrationReview` {reviewer, report, classification} records the separate review a touches-existing
-// migration needs; it authorizes only the classification the repository classifier actually printed.
+// Source identities and expected paused-setting versions are pinned before preflight. A later
+// owner stop must not be accepted by retuning a source constant or rebinding the run.
+// Optional migrationReview authorizes only the classifier result it actually names.
 export function validateBindings(value, application = false) {
   const keys = value && typeof value === 'object' && !Array.isArray(value) ? Object.keys(value).filter(k => k !== 'migrationReview').sort() : null;
   must(equal(keys, BINDING_KEYS), 'release_bindings_shape_invalid');
   for (const key of ['prNumber', 'gateId', 'imagesId', 'upgradeJobId']) must(positive(value[key]), 'release_source_ci_unbound');
   must(sha(value.candidate) && sha(value.prHead), 'release_source_commit_unbound');
   must(value.gateId !== value.imagesId, 'release_ci_identity_alias');
+  must(Array.isArray(value.offVersions) && value.offVersions.length > 0 && value.offVersions.length <= 100 && value.offVersions.every(positive), 'sending_off_versions_unbound');
   for (const key of ['runId', 'jobId']) must(application ? positive(value[key]) : value[key] === null || positive(value[key]), 'release_application_unbound');
   if (application) must(new Set([value.runId, value.gateId, value.imagesId]).size === 3, 'candidate_invalid');
   const review = value.migrationReview;
@@ -246,7 +245,7 @@ export function createOperator({ directory, run = execute, fetchJson = fetchPubl
   async function observeOff() {
     const { bindings, baseline } = bound(false); absent('observe-off');
     const owner = readerOwner(bindings), expected = baseline.operations.definition;
-    const state = { owner, sourceOperationsDefinition: expected, currentTaskArn: null, lastStoppedTaskArn: null, temporaryReaderDefinition: null, settingVersions: [...OFF_VERSIONS], schema: baseline.schema, production: baseline.production, observationOnly: true, attemptedWrites: [] };
+    const state = { owner, sourceOperationsDefinition: expected, currentTaskArn: null, lastStoppedTaskArn: null, temporaryReaderDefinition: null, settingVersions: [...bindings.offVersions], schema: baseline.schema, production: baseline.production, observationOnly: true, attemptedWrites: [] };
     let saved = false;
     const save = () => { writeFileSync(path('custody'), JSON.stringify({ ...state, savedAt: new Date(now()).toISOString() }, null, 2) + '\n', { mode: 0o600, flag: saved ? 'w' : 'wx' }); saved = true; };
     const aws = awsClient(run, OFF_READS, { retries: true, writes: OFF_WRITES, beforeWrite(action) { must(saved && !state.attemptedWrites.some(w => w.action === action), 'write_already_attempted'); state.attemptedWrites.push({ action, at: new Date(now()).toISOString() }); save(); } });
@@ -278,7 +277,7 @@ export function createOperator({ directory, run = execute, fetchJson = fetchPubl
     must(c.outcome === 'complete' && c.currentTaskArn === null && c.temporaryReaderDefinition === null && c.lastTaskExitCode === 0 && c.owner === readerOwner(bindings) && c.sourceOperationsDefinition === baseline.operations.definition && c.schema === baseline.schema, 'custody_incomplete');
     must(equal({ ...c, savedAt: undefined }, { ...result.state, savedAt: undefined }) && equal(c.off, result.read), 'result_conflict');
     must(c.production === baseline.production, 'baseline_production_changed');
-    const rootOff = result.read; must(rootOff?.releaseOff && rootOff.storedOff && rootOff.effectiveOff && rootOff.finishing === 0 && rootOff.schema === baseline.schema && equal(rootOff.versions, OFF_VERSIONS), 'off_changed');
+    const rootOff = result.read; must(rootOff?.releaseOff && rootOff.storedOff && rootOff.effectiveOff && rootOff.finishing === 0 && rootOff.schema === baseline.schema && equal(rootOff.versions, bindings.offVersions), 'off_changed');
     const aws = awsClient(run, { sts: READS.sts, ecs: READS.ecs }), who = actor(aws);
     const task = aws('ecs', 'describe-tasks', ['--cluster', CLUSTER, '--tasks', c.lastStoppedTaskArn]); must(!task.failures?.length && task.tasks?.length === 1, 'task_unavailable');
     const t = task.tasks[0];
@@ -304,7 +303,7 @@ export function createOperator({ directory, run = execute, fetchJson = fetchPubl
     must(native?.phase === 'completed' && native.outcome === 'completed' && native.writesStarted === true && native.reason == null && native.rollback == null && native.readerRecovery == null && native.offObservation == null, 'native_completion_missing');
     must(native.fromSchema === fromSchema && native.targetSchema === schema && native.observedSchema === schema && native.migrationStarted === migrating, 'native_schema_binding_changed');
     must(native.currentTaskArn === null && native.temporaryReaderDefinition === null && native.lastTaskExitCode === 0 && taskArn(native.lastStoppedTaskArn), 'native_custody_not_closed');
-    const off = native.off; must(off?.releaseOff === true && off.storedOff === true && off.effectiveOff === true && off.finishing === 0 && off.schema === schema && equal(off.versions, OFF_VERSIONS), 'native_off_changed'); instant(off.observedAt);
+    const off = native.off; must(off?.releaseOff === true && off.storedOff === true && off.effectiveOff === true && off.finishing === 0 && off.schema === schema && equal(off.versions, bindings.offVersions), 'native_off_changed'); instant(off.observedAt);
     const previous = native.previousDefinitions, normal = native.candidateDefinitions;
     for (const name of kinds) must(previous?.[name] === baseline[name].definition && typeof normal?.[name] === 'string' && normal[name] !== previous[name], 'native_definition_binding_changed');
     const images = read('images'); must(images.schema === 'fss.image-digests.v1' && images.commit === candidate && String(images.workflowRunId) === String(imagesId) && String(images.workflowRunAttempt) === '1', 'artifact_binding_changed');
@@ -402,7 +401,7 @@ export function createOperator({ directory, run = execute, fetchJson = fetchPubl
     const preapproval = read('result'), custody = read('custody'), saved = read('independent'), rootState = preapproval.state;
     must(equal(rootState, custody) || equal({ ...rootState, savedAt: undefined }, { ...custody, savedAt: undefined }), 'root_custody_conflict');
     must(rootState.production === baseline.production && rootState.schema === fromSchema && rootState.outcome === 'complete' && rootState.lastTaskExitCode === 0 && rootState.currentTaskArn === null && rootState.temporaryReaderDefinition === null && rootState.sourceOperationsDefinition === previous.operations && rootState.owner === readerOwner(bindings), 'root_reader_custody_incomplete');
-    const rootOff = preapproval.read; must(rootOff?.releaseOff === true && rootOff.storedOff === true && rootOff.effectiveOff === true && rootOff.finishing === 0 && rootOff.schema === fromSchema && equal(rootOff.versions, OFF_VERSIONS) && equal(rootState.off, rootOff) && saved.outcome === 'PASS' && saved.cloudWrites === 0 && equal(saved.rootOff, rootOff), 'root_off_snapshot_changed');
+    const rootOff = preapproval.read; must(rootOff?.releaseOff === true && rootOff.storedOff === true && rootOff.effectiveOff === true && rootOff.finishing === 0 && rootOff.schema === fromSchema && equal(rootOff.versions, bindings.offVersions) && equal(rootState.off, rootOff) && saved.outcome === 'PASS' && saved.cloudWrites === 0 && equal(saved.rootOff, rootOff), 'root_off_snapshot_changed');
     must(saved.normalOperations === baseline.operations.revision && saved.migration === baseline.migration.revision && saved.nonterminalOneoffs === 0, 'root_snapshot_baseline_changed');
     const at = instant(saved.observedAt); must(instant(preflight.at) <= instant(rootOff.observedAt) && instant(rootOff.observedAt) <= instant(preapproval.completedAt) && instant(preapproval.completedAt) <= at && at <= instant(readerTasks[0].createdAt) && at <= now(), 'root_off_snapshot_order_changed');
     must(saved.task?.tasks?.length === 1 && !saved.task.failures?.length, 'root_task_snapshot_incomplete');

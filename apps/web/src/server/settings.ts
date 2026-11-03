@@ -1,3 +1,5 @@
+import { buildCommit } from '@fss/domain/release/identity.ts';
+import { browserErrorConfigurationSchema } from '../shared/browserContract.ts';
 import { semanticVersionSchema } from '@fss/contracts';
 import type { BrowserHostSettings } from './hostContract.ts';
 
@@ -14,5 +16,9 @@ export function readBrowserHostSettings(values: Readonly<Record<string, string |
   // mixed-case/otherwise normalized host spellings and empty query/hash suffixes.
   if (url.protocol !== 'https:' || url.origin !== origin || url.username || url.password) return refuse();
   if (clientVersion !== clientVersion.trim() || !semanticVersionSchema.safeParse(clientVersion).success || key.length !== 64 || !/^[a-fA-F0-9]{64}$/u.test(key)) return refuse();
-  return { origin, clientVersion, cookieKey: Buffer.from(key, 'hex') };
+  const dsn = values['FSS_SENTRY_BROWSER_DSN'] || undefined;
+  const release = buildCommit(values) ?? '';
+  const telemetry = browserErrorConfigurationSchema.safeParse({ ...(dsn === undefined ? {} : { dsn }), release });
+  if (!telemetry.success || (dsn !== undefined && release === '')) return refuse();
+  return { origin, clientVersion, cookieKey: Buffer.from(key, 'hex'), ...(dsn === undefined && release === '' ? {} : { telemetry: telemetry.data }) };
 }

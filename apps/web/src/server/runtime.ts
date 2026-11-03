@@ -1,6 +1,12 @@
+import type { BrowserErrorConfiguration } from '../shared/browserContract.ts';
 import type { ApiRequest, RouteResult } from '../../../api/src/routes/types.ts';
 import type { ApiOptions } from '../../../api/src/server.ts';
 import type { AuthDeps } from '../../../api/src/auth/config.ts';
+
+/** Readiness refusal, not an unexpected request exception. */
+export class BrowserUnavailableError extends Error {
+  constructor() { super('Browser unavailable'); }
+}
 
 export interface BrowserRequestContext {
   readonly auth: AuthDeps;
@@ -12,6 +18,7 @@ export interface BrowserRuntime {
   readonly founder?: Readonly<{ workspaceId: string; userId: string }>;
   readonly origin: string;
   readonly clientVersion: string;
+  readonly telemetry?: BrowserErrorConfiguration;
   /** AES-256-GCM key, server-only. Rotation invalidates browser cookies. */
   readonly cookieKey: Buffer;
   readonly withRequest: <T>(work: (context: BrowserRequestContext) => Promise<T>) => Promise<T>;

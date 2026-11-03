@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { z } from 'zod';
 import type { BrowserHostSettings, BrowserAssets } from '../../../web/src/server/hostContract.ts';
-import type { BrowserRuntime } from '../../../web/src/server/runtime.ts';
+import { BrowserUnavailableError, type BrowserRuntime } from '../../../web/src/server/runtime.ts';
 import { readBrowserHostSettings } from '../../../web/src/server/settings.ts';
 import { createBrowserHostHandler } from '../../../web/src/server/host.ts';
 import { loadBrowserAssets } from '../../../web/src/server/publicAssets.ts';
@@ -36,7 +36,7 @@ export function createFounderBrowserRuntime(settings: FounderBrowserSettings, op
     withRequest: async work => {
       const connection = requestConnection(options.connections);
       try {
-        if (!(await buildReadinessReport({ session: connection.session })).ready) throw new Error('Browser unavailable');
+        if (!(await buildReadinessReport({ session: connection.session })).ready) throw new BrowserUnavailableError();
         const api = optionsForRequest({ ...options, auth }, connection.session);
         return await work({ api, auth: { ...auth, db: connection.session } });
       } finally { connection.release(); }

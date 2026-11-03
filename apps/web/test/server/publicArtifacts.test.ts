@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtemp, realpath, rm, writeFile, symlink, mkdir, truncate, readFile } from 'node:fs/promises';
+import { mkdtemp, realpath, rm, writeFile, symlink, mkdir, truncate, readFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -38,6 +38,29 @@ describe('prebuilt browser artifact boundary', () => {
     expect(html).toContain('src="/renderer.js"');
     expect(html).toContain('href="/styles.css"');
     expect(html).not.toMatch(/<script[^>]*>[^<]+|onload=|style=/u);
+  });
+
+  it('keeps maps private and deploys exactly the debug-ID-injected upload bytes', async () => {
+    const publicPath = await directory();
+    const privatePath = await directory();
+    const token = 'upload_token_canary_never_in_runtime_bytes';
+    const result = spawnSync(process.execPath, ['--experimental-transform-types', 'scripts/buildBrowserAssets.mjs', publicPath, privatePath], {
+      cwd: resolve(import.meta.dirname, '../../../..'), encoding: 'utf8',
+      env: { ...process.env, SENTRY_AUTH_TOKEN: token },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout + result.stderr).not.toContain(token);
+    expect((await readdir(publicPath)).sort()).toEqual(['index.html', 'renderer.js', 'styles.css']);
+    const publicScript = await readFile(join(publicPath, 'renderer.js'));
+    expect(publicScript.equals(await readFile(join(privatePath, 'renderer.js')))).toBe(true);
+    const map = JSON.parse(await readFile(join(privatePath, 'renderer.js.map'), 'utf8')) as { debug_id?: string; debugId?: string; sourcesContent: string[] };
+    const debugId = map.debug_id ?? map.debugId;
+    expect(debugId).toMatch(/^[0-9a-f-]{36}$/u);
+    expect(publicScript.toString()).toContain(`debugId=${debugId}`);
+    expect(map.sourcesContent.some(source => source.includes('createRoot'))).toBe(true);
+    expect(publicScript.toString()).not.toMatch(/sourceMappingURL=.*\\.map/u);
+    for (const name of await readdir(publicPath)) expect((await readFile(join(publicPath, name), 'utf8'))).not.toContain(token);
+    expect([...((await loadBrowserAssets(publicPath)).keys())]).toEqual(['/', '/renderer.js', '/styles.css']);
   });
 
   it('ignores unrelated files instead of creating arbitrary serving paths', async () => {

@@ -1,3 +1,4 @@
+import { initNodeErrors, captureTechnicalError, flushTechnicalErrors } from '@fss/telemetry/node';
 import {createCrmAcquisitionDiagnosticStartup} from '@fss/domain/mail/crmAcquisitionDiagnosticStartup.ts';
 import {REQUIRED_SCHEMA} from '@fss/domain/db/schemaRange.ts';
 import {readCrmCapabilityStartup,createCrmCapabilityRuntime} from '@fss/domain/crm/capabilityStartup.ts';
@@ -188,6 +189,7 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
     log.log('info', 'api_selftest', { ...describeApiConfig(config), ...describeDeployment(deployment) });
     return API_EXIT_CODES.ok;
   }
+  initNodeErrors({ dsn: environment['FSS_SENTRY_DSN'], release: buildCommit(environment) ?? '', service: 'api' });
   // Lane M4's contract check against the real bucket, with this task's role: run by
   // `infra/scripts/rehearsal.sh meeting-audio` as a one-off task, never by production.
   // No database, no socket.
@@ -314,10 +316,12 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
   try {
     await listen(server, config.port, diagnosticRuntime?.localIsolation?.kind==='local'?'127.0.0.1':'0.0.0.0');
   } catch (error) {
+    captureTechnicalError(error, 'startup');
     log.log('error', 'api_listen_failed', { port: config.port, ...errorFields(error) });
     await heartbeat.stop();
     await pool.end().catch(() => undefined);
     await heartbeatClient.end().catch(() => undefined);
+    await flushTechnicalErrors();
     return API_EXIT_CODES.listenFailed;
   }
   log.log('info', 'api_listening', { port: config.port });
@@ -338,6 +342,7 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
     log,
   });
   log.log('info', 'api_stopped', { drained });
+  await flushTechnicalErrors();
   return API_EXIT_CODES.ok;
 }
 

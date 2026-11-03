@@ -1,3 +1,6 @@
+import { captureTechnicalError } from '@fss/telemetry/node';
+import { DatabaseBusyError } from '../../../api/src/bootstrap/connections.ts';
+import { BrowserUnavailableError } from './runtime.ts';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import { commandIdSchema, semanticVersionSchema, socialGuidedRequestInputSchema, dialCheckRequestSchema, firmPageRequestSchema, pluralFirmPageResponseSchema } from '@fss/contracts';
@@ -98,6 +101,10 @@ export function createBrowserHandler(runtime: BrowserRuntime): BrowserHandler {
     };
     try {
       envelope(request, runtime.origin);
+      if (request.path === BROWSER_PATHS.runtime) {
+        if (request.method !== 'GET') throw new Refusal(405);
+        return response(200, runtime.telemetry ?? { release: '' });
+      }
       if (request.path === BROWSER_PATHS.apiPrefix) throw new Refusal(404);
       const apiPath = request.path.startsWith(`${BROWSER_PATHS.apiPrefix}/`) ? request.path.slice(BROWSER_PATHS.apiPrefix.length) : null;
       const expectedMethod = request.path === BROWSER_PATHS.session || request.path === BROWSER_PATHS.callback ? 'GET' : 'POST';
@@ -189,6 +196,9 @@ export function createBrowserHandler(runtime: BrowserRuntime): BrowserHandler {
         return await product(request, apiPath!, context, access.token, outgoing, runtime.clientVersion, principal);
       });
     } catch (error) {
+      if (!(error instanceof Refusal) && !(error instanceof DatabaseBusyError) && !(error instanceof BrowserUnavailableError)) {
+        captureTechnicalError(error, 'api_request');
+      }
       return response(error instanceof Refusal ? error.status : 503, { error: 'browser_request_refused' }, outgoing);
     }
   };

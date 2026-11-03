@@ -12,6 +12,7 @@
     "@aws-sdk/s3-request-presigner": "^3.1149.0",
     "@fss/contracts": "*",
     "@fss/domain": "*",
+    "@fss/telemetry": "*",
     "pg": "^8.23.1",
     "zod": "^4.6.5"
   },

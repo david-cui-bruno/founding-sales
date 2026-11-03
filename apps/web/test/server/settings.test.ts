@@ -11,6 +11,23 @@ describe('explicit browser host settings', () => {
     expect(readBrowserHostSettings({ ...valid, FSS_BROWSER_COOKIE_KEY_HEX: 'AB'.repeat(32) }).cookieKey).toEqual(settings.cookieKey);
   });
 
+  it('keeps the browser enabled when the image has an empty telemetry default', () => {
+    const settings = readBrowserHostSettings({ ...valid, FSS_SENTRY_BROWSER_DSN: '', FSS_BUILD_COMMIT: 'a'.repeat(40) });
+    expect(settings.origin).toBe(valid.FSS_BROWSER_ORIGIN);
+    expect(settings.telemetry).toEqual({ release: 'a'.repeat(40) });
+    expect(() => readBrowserHostSettings({ ...valid, FSS_SENTRY_BROWSER_DSN: 'malformed' })).toThrow();
+  });
+
+  it('publishes only a canonical US browser DSN paired with the actual build SHA', () => {
+    const dsn = 'https://abc123@o123.ingest.us.sentry.io/456';
+    const release = 'a'.repeat(40);
+    expect(readBrowserHostSettings({ ...valid, FSS_SENTRY_BROWSER_DSN: dsn, FSS_BUILD_COMMIT: release }).telemetry).toEqual({ dsn, release });
+    expect(() => readBrowserHostSettings({ ...valid, FSS_SENTRY_BROWSER_DSN: dsn })).toThrowError('Invalid browser host configuration');
+    for (const invalid of [dsn.replace('.us.', '.de.'), `${dsn}?private=value`, dsn.replace('abc123@', 'abc123:secret@'), 'https://example.test/456']) {
+      expect(() => readBrowserHostSettings({ ...valid, FSS_SENTRY_BROWSER_DSN: invalid, FSS_BUILD_COMMIT: release })).toThrowError('Invalid browser host configuration');
+    }
+  });
+
   it.each(Object.keys(valid))('refuses missing or empty %s without echoing configuration', name => {
     for (const value of [undefined, '']) {
       expect(() => readBrowserHostSettings({ ...valid, [name]: value })).toThrowError('Invalid browser host configuration');

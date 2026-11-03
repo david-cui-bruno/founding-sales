@@ -1,6 +1,12 @@
 import { z } from 'zod';
 import { instant, membershipRoleSchema, uuid } from '@fss/contracts';
 
+export const browserErrorConfigurationSchema = z.strictObject({
+  dsn: z.string().regex(/^https:\/\/[a-f0-9]+@o[0-9]+\.ingest\.us\.sentry\.io\/[0-9]+$/u).refine(value => !/\s/u.test(value)).optional(),
+  release: z.union([z.literal(''), z.string().length(40).regex(/^[a-f0-9]{40}$/u)]),
+});
+export type BrowserErrorConfiguration = z.infer<typeof browserErrorConfigurationSchema>;
+
 /** Browser presentation metadata only. Credentials remain in server-controlled cookies. */
 export const browserSessionSchema = z.discriminatedUnion('status', [
   z.strictObject({ status: z.literal('signed_out'), csrfToken: z.string().min(32).max(200) }),
@@ -18,6 +24,7 @@ export const browserSessionSchema = z.discriminatedUnion('status', [
 export type BrowserSession = z.infer<typeof browserSessionSchema>;
 
 export const BROWSER_PATHS = Object.freeze({
+  runtime: '/browser/runtime',
   session: '/browser/session',
   signIn: '/browser/sign-in',
   callback: '/browser/callback',

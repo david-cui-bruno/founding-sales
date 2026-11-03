@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import pg from 'pg';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { captureTechnicalError } from '@fss/telemetry/node';
 import { withTransaction, type QueryResultRowLike, type SessionQueryable } from '@fss/domain/db/queryable.ts';
 import type { SuppressionJournal, SuppressionJournalRecord } from '@fss/domain/suppression/journal.ts';
 import { createApiServer } from '../src/server.ts';
@@ -14,6 +15,8 @@ import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from './s
 import { issueSessionFor } from './support/sessionFixture.ts';
 import { seedContact, seedFirm } from './support/crmSeed.ts';
 import { databaseUrlOf, leased, testRequestPool } from './support/poolFixture.ts';
+
+vi.mock('@fss/telemetry/node', () => ({ captureTechnicalError: vi.fn() }));
 
 /**
  * One database connection per request (lane g75, audit item C01).
@@ -349,6 +352,7 @@ describe('one database connection per request', () => {
 
   describe('the connection goes back', () => {
     it('a request that throws gives its connection back to the pool', async () => {
+      vi.mocked(captureTechnicalError).mockClear();
       const { origin } = await serve(poolConnections(pool));
       // Warm, so the baseline is a pool that already has an idle connection to lend.
       expect((await send(origin, 'POST', '/probe/commit', { label: 'leak-warm' })).status).toBe(200);
@@ -358,6 +362,7 @@ describe('one database connection per request', () => {
       const failed = await send(origin, 'POST', '/probe/throw', {});
       expect(failed.status).toBe(500);
       expect(failed.body['error']).toBe('internal_error');
+      expect(captureTechnicalError).toHaveBeenCalledExactlyOnceWith(expect.any(Error), 'api_request');
       expect({ total: pool.totalCount, idle: pool.idleCount }).toEqual(baseline);
       expect(leased(pool)).toBe(0);
 
@@ -388,6 +393,7 @@ describe('one database connection per request', () => {
 
   describe('when there is no connection to be had', () => {
     it('answers 503 database_busy inside the checkout timeout rather than hanging', async () => {
+      vi.mocked(captureTechnicalError).mockClear();
       const tiny = testRequestPool(fixture.database, { max: 1, checkoutTimeoutMilliseconds: 250 });
       const { origin, log } = await serve(poolConnections(tiny));
       const taken = await tiny.connect();
@@ -399,6 +405,7 @@ describe('one database connection per request', () => {
         expect(refused.body).toEqual({ error: 'database_busy', message: 'The API is busy. Nothing was changed; try again.' });
         expect(log.lines).toContainEqual(expect.objectContaining({ event: 'refusal', reason: 'database_busy', path: '/firms' }));
         expect(log.lines.some(line => line['event'] === 'request_failed')).toBe(false);
+        expect(captureTechnicalError).not.toHaveBeenCalled();
 
         // Readiness says so truthfully; liveness needs no connection and still answers.
         const readiness = await send(origin, 'GET', '/readyz');
