@@ -1,6 +1,6 @@
 import { createHash, generateKeyPairSync } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, chmodSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, chmodSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -47,10 +47,18 @@ function execute(mode: string) {
       executable(join(scripts, 'deploy.sh'), `const fs=require('fs'),a=process.argv.slice(2);fs.appendFileSync(process.env.LOG,'deploy '+a.join(' ')+'\\n');if(a[0]==='ci'&&a[1]==='gate'){if(process.env.MODE==='schema-postrestart-gate'&&fs.existsSync(process.env.LOG+'.migrated'))process.exit(1);if(process.env.MODE==='schema-stale-finalgate'&&fs.existsSync(process.env.LOG+'.off-count')&&Number(fs.readFileSync(process.env.LOG+'.off-count','utf8'))===3){fs.writeFileSync(process.env.LOG+'.clock',String(Date.now()+181000));fs.appendFileSync(process.env.LOG,'final-gate advanced 181s\\n');}process.exit(0);}if(a[0]==='ci'&&a[1]==='canary')console.log('canary_age=1');else if(a[0]==='release'){fs.writeFileSync(process.env.LOG+'.migrated','yes');if(process.env.MODE==='schema-release-unknown')process.exit(1);}else process.exit(99);`);
       executable(join(bin, 'curl'), `const fs=require('fs'),m=fs.existsSync(process.env.LOG+'.migrated');console.log(JSON.stringify({status:'serving',build:{commit:(m?'b':'a').repeat(40)},schema:{accepted:true,databaseVersion:m&&process.env.MODE.startsWith('schema-')?89:88}}));`);
       for (const name of ['record.sh', 'images.sh']) executable(join(scripts, name), `require('fs').appendFileSync(process.env.LOG,'${name} '+process.argv.slice(2).join(' ')+'\\n');`);
+      if (mode === 'smoke-existing-record') {
+        // The immutable record already stored by application replacement carries no sending authority,
+        // independently of the deployment flag. The external record command refuses a changed payload.
+        writeFileSync(log + '.stored-record', JSON.stringify({ enablesSending: false }));
+        executable(join(scripts, 'record.sh'), `const fs=require('fs'),{isDeepStrictEqual}=require('util'),a=process.argv.slice(2),file=a[a.indexOf(a[0]==='from-ci'?'--out':'--release-record')+1];
+          if(a[0]==='from-ci')fs.writeFileSync(file,JSON.stringify({enablesSending:a.includes('--enables-sending')}));
+          else if(!isDeepStrictEqual(JSON.parse(fs.readFileSync(file,'utf8')),JSON.parse(fs.readFileSync(process.env.LOG+'.stored-record','utf8')))){console.error('release_record_conflict');process.exit(20);}`);
+      }
       mkdirSync(join(directory, 'scripts'));
       // A real child imports syntax Node24 cannot execute with strip-only support.
       writeFileSync(join(directory, 'scripts/smoke-types.ts'), 'export class Check { constructor(public passed: boolean) {} }');
-      writeFileSync(join(directory, 'scripts/productionSmoke.mjs'), `import { Check } from './smoke-types.ts';import { appendFileSync } from 'node:fs';appendFileSync(process.env.LOG,'smoke '+JSON.stringify({flags:process.execArgv,args:process.argv.slice(2),passed:new Check(true).passed})+'\\n');console.log('private-smoke-stdout');console.error('private-smoke-stderr');if(process.env.MODE==='smoke-fail')process.exit(1);`);
+      writeFileSync(join(directory, 'scripts/productionSmoke.mjs'), `import { Check } from './smoke-types.ts';import { appendFileSync } from 'node:fs';const args=process.argv.slice(2);appendFileSync(process.env.LOG,'smoke '+JSON.stringify({flags:process.execArgv,args,passed:new Check(true).passed})+'\\n');console.log('private-smoke-stdout');console.error('private-smoke-stderr');if(process.env.MODE==='smoke-fail'||process.env.MODE==='smoke-existing-record'&&args[args.indexOf('--expect-sending')+1]!=='enabled')process.exit(1);`);
     }
     const pair = generateKeyPairSync('rsa', { modulusLength: 3072 });
     const publicPath = join(directory, 'public.pem'); const privatePath = join(directory, 'private.pem');
@@ -87,7 +95,8 @@ function execute(mode: string) {
     if (!smoke) expect(commands).not.toMatch(/(?:^|\s)(?:apply|put|promote)(?:\s|$)/mu);
     const status = JSON.parse(readFileSync(join(output, 'status.json'), 'utf8')) as { writesStarted: boolean; outcome: string; reason: string; recoveryPoint?: { timestamp: string; earliest: string; latest: string; restoreTested: boolean }; containment?: { outcome: string; reason: string; stopRequests: { service: string; outcome: string }[] }; currentTaskArn?: string; currentTaskOwner?: string; temporaryReaderDefinition?: string; lastStoppedTaskArn?: string; quiescedAt?: string };
     const runtimeStopped = ['api', 'worker'].map(name => { try { readFileSync(log + '.contained-fss-prod-' + name); return true; } catch { return false; } });
-    return { exitCode: result.status, stdout: result.stdout, stderr: result.stderr, commands, status, runtimeStopped };
+    const storedRecord = existsSync(log + '.stored-record') ? JSON.parse(readFileSync(log + '.stored-record', 'utf8')) as { enablesSending: boolean } : null;
+    return { exitCode: result.status, stdout: result.stdout, stderr: result.stderr, commands, status, runtimeStopped, storedRecord };
   } finally { rmSync(directory, { recursive: true, force: true }); }
 }
 
@@ -258,4 +267,11 @@ describe('reviewed smoke child runtime', () => {
       ? { phase: 'verified', outcome: 'completed', writesStarted: true, schema: 88 }
       : { phase: 'smoke', outcome: 'repair-required', writesStarted: true, schema: 88, reason: 'reviewed_smoke_failed' });
   });
+});
+
+it('reuses the application release record without granting sending while deployment sending is on', () => {
+  const result = execute('smoke-existing-record');
+  expect(result.status, result.stderr).toMatchObject({ phase: 'verified', outcome: 'completed', schema: 88 });
+  expect(result.exitCode).toBe(0);
+  expect(result.storedRecord).toEqual({ enablesSending: false });
 });
