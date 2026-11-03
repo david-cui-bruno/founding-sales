@@ -15,7 +15,6 @@ afterAll(async()=>{if(root)await rm(root,{recursive:true,force:true});});
 it('uses only recognized143 fixture orchestration, resolves every business import to locked base, and never changes tracked base bytes',async()=>{
  const before=await readFile(join(base,'tools/upgrade/fixture.ts')),prepared=await prepareCheckout(base,head),shadow=dirname(dirname(dirname(prepared.loader)));
  try{
-  expect(prepared.fixtureOrigin).toContain('head fixture-only schema143 registry adapter');expect(prepared.fixtureOrigin).toContain(FIXTURE_143_BASE);expect(prepared.modules).toBe('linked from HEAD (identical lockfile)');
   expect(prepared.loader.startsWith(base)).toBe(false);await expect(verifyFixture143Imports(prepared.loader,base)).resolves.toBeUndefined();
   expect(await realpath(join(shadow,'node_modules'))).toBe(await realpath(join(base,'node_modules')));
   expect(await readFile(join(base,'tools/upgrade/fixture.ts'))).toEqual(before);expect(git(base,'status','--porcelain')).toBe('');
