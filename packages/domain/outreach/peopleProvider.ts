@@ -10,7 +10,7 @@ import {CONSUMER_EMAIL_DOMAINS} from './consumerEmailDomains.ts';
  * and what it may spend. */
 /** The source that reads a company's own retained pages (ADR0037): free, and read again when its person expires or the candidate changes. */
 export const OWN_SITE_PROVIDER='own_site';
-/** ADR0038. The custody provider key of the paid single-address check (MillionVerifier): one row per candidate, for the ONE guessed `first@host` of a named person who has no published address, or for the one check of a published address. */
+/** ADR0038. The provider key of a VERIFIED GUESS person's lookup row (free, 0 credits, read again in place like `own_site`): the named own-site person with the guessed `first@host` the paid single-address check (MillionVerifier) answered `ok` for. The paid checks themselves, their credits and their fences live in `outreach_people_paid_checks`, not here. */
 export const MILLIONVERIFIER_PROVIDER='millionverifier';
 /** Why a guess or a check of one address is not an address: the verifier's answer (`verdict_*`, an `ok` of a published address is recorded too), or the company's host has no mail domain (a free DNS refusal, nothing spent). */
 export type AddressRefusal='verdict_ok'|'verdict_catch_all'|'verdict_unknown'|'verdict_invalid'|'verdict_disposable'|'no_mail_domain';

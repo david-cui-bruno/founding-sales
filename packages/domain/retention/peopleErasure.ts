@@ -2,7 +2,7 @@ import type {RepositoryContext} from '../db/workspaceScope.ts';
 import type {ResearchErasureScope} from './officeAssessments.ts';
 /** ADR0036. The provider person's copy (name, title, address, provider id: `outreach_people_contacts`) of every company admitted into the deleted Firm or
  * contact, or whose address is one of the deleted routes. `$1` workspace, `$2` contact (null: the whole Firm), `$3` Firm. The body-free spend custody
- * (`outreach_people_lookups`) is deliberately not here: it survives, so the company is neither paid for again nor re-admitted. */
+ * (`outreach_people_lookups`) and paid-check ledger (`outreach_people_paid_checks`) survive, so erasure never resets a spend cap or paid-check fence. */
 const PEOPLE_IN_SCOPE=`c.workspace_id=$1 AND (c.candidate_id IN (SELECT candidate_id FROM outreach_email_campaign_admissions WHERE workspace_id=$1 AND firm_id=$3 AND ($2::uuid IS NULL OR contact_id=$2::uuid))
  OR c.email IN (SELECT lower(address) FROM email_addresses WHERE workspace_id=$1 AND firm_id=$3 AND ($2::uuid IS NULL OR contact_id=$2::uuid)))`;
 const parameters=(ctx:RepositoryContext,scope:ResearchErasureScope)=>[ctx.scope.workspaceId,scope.contactId,scope.firmId];
@@ -11,7 +11,12 @@ const count=async(ctx:RepositoryContext,sql:string,scope:ResearchErasureScope)=>
 export async function measurePeopleErasure(ctx:RepositoryContext,scope:ResearchErasureScope):Promise<{removes:Record<string,number>;retains:Record<string,number>}>{
  return {
   removes:{outreach_people_contacts:await count(ctx,`SELECT count(*) AS count FROM outreach_people_contacts c WHERE ${PEOPLE_IN_SCOPE}`,scope)},
-  retains:{outreach_people_lookups:await count(ctx,`SELECT count(*) AS count FROM outreach_people_lookups l WHERE l.workspace_id=$1 AND l.id IN (SELECT c.lookup_id FROM outreach_people_contacts c WHERE ${PEOPLE_IN_SCOPE})`,scope)},
+  retains:{
+   outreach_people_lookups:await count(ctx,`SELECT count(*) AS count FROM outreach_people_lookups l WHERE l.workspace_id=$1 AND l.id IN (SELECT c.lookup_id FROM outreach_people_contacts c WHERE ${PEOPLE_IN_SCOPE})`,scope),
+   outreach_people_paid_checks:await count(ctx,`SELECT count(*) AS count FROM outreach_people_paid_checks p WHERE p.workspace_id=$1 AND p.candidate_id IN (
+    SELECT c.candidate_id FROM outreach_people_contacts c WHERE ${PEOPLE_IN_SCOPE}
+    UNION SELECT candidate_id FROM outreach_email_campaign_admissions WHERE workspace_id=$1 AND firm_id=$3 AND ($2::uuid IS NULL OR contact_id=$2::uuid))`,scope),
+  },
  };
 }
 /** Commit: delete the person copies measured above. Called before the routes and contacts they are matched through are redacted. */
