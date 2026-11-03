@@ -25,7 +25,7 @@ export async function approveEmailCampaign(ctx:RepositoryContext,input:EmailCamp
  const box=(await ctx.db.query('SELECT id FROM mailboxes WHERE workspace_id=$1 AND id=$2 AND owner_user_id=$3 AND status=\'connected\' FOR SHARE',[ctx.scope.workspaceId,policy.mailboxId,owner])).rows[0];
  const auth=await authorizationForMailbox(ctx,policy.mailboxId);
  if(!box||!auth.allowed||auth.revision!==policy.authorizationRevision)return {ok:false,reason:'mailbox_not_authorized'};
- if(await campaignKind(ctx,policy.sequenceVersionId)!=='email_first')return {ok:false,reason:'approved_five_email_sequence_required'};
+ if(await campaignKind(ctx,policy.sequenceVersionId)!=='email_first')return {ok:false,reason:'approved_email_sequence_required'};
  return policySavepoint(ctx,async()=>{
   if(!await currentAuthority()||!await researchActor(ctx))return {ok:false,reason:'authority_changed'};
   const approvedAt=await campaignDatabaseNow(ctx);
