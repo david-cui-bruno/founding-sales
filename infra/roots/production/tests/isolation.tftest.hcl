@@ -216,21 +216,21 @@ run "each_production_task_carries_only_the_secrets_its_process_reads" {
   assert {
     condition = (
       module.stack.task_secret_names.api == tolist(["DATABASE_SECRET_ARN", "calcom", "device-credential-pepper", "google-gmail-oauth-client", "google-oidc-client", "session-signing-key", "twilio-voice"])
-      && module.stack.task_secret_names.worker == tolist(["DATABASE_SECRET_ARN", "FSS_LLM_CLASSIFIER_API_KEY", "FSS_TAVILY_API_KEY", "calcom", "google-gmail-oauth-client", "transcription", "twilio-voice", "zoom-meetings"])
+      && module.stack.task_secret_names.worker == tolist(["DATABASE_SECRET_ARN", "FSS_LLM_CLASSIFIER_API_KEY", "FSS_MILLIONVERIFIER_API_KEY", "FSS_TAVILY_API_KEY", "calcom", "google-gmail-oauth-client", "transcription", "twilio-voice", "zoom-meetings"])
       && module.stack.task_secret_names.operations == tolist(["DATABASE_SECRET_ARN", "google-gmail-oauth-client"])
     )
-    error_message = "Every production task definition carries the secrets its own process reads: the authentication secrets reach the API alone, and the classifier key reaches the worker as FSS_LLM_CLASSIFIER_API_KEY, and the MillionVerifier key stays out of the worker task until the second stage (worker_reads_millionverifier_api_key) flips: ECS refuses a task whose secret has no value."
+    error_message = "Every production task carries only the secrets its process reads: authentication secrets reach the API alone, and the classifier and MillionVerifier keys reach the worker alone."
   }
 }
 
-# ADR0038, stage one: the first apply creates the empty millionverifier-api-key container and does not hand it to the worker, so the worker task starts. The
-# committed literal is false; stage two is a separate one-line change.
-run "the_millionverifier_key_container_exists_but_the_worker_is_not_handed_it_in_stage_one" {
+# ADR0038, stage two: deploy only after Root installs the secret value. The verifier key must never
+# reach the API or one-off operations tasks; owner-controlled enrichment and credit caps remain separate.
+run "the_millionverifier_key_reaches_only_the_worker_in_stage_two" {
   command = plan
 
   assert {
-    condition     = contains(keys(module.stack.secret_names), "millionverifier-api-key") && !contains(module.stack.task_secret_names.worker, "FSS_MILLIONVERIFIER_API_KEY") && !contains(module.stack.task_secret_names.api, "FSS_MILLIONVERIFIER_API_KEY")
-    error_message = "Stage one creates the millionverifier-api-key entry and injects it nowhere."
+    condition     = contains(keys(module.stack.secret_names), "millionverifier-api-key") && contains(module.stack.task_secret_names.worker, "FSS_MILLIONVERIFIER_API_KEY") && !contains(module.stack.task_secret_names.api, "FSS_MILLIONVERIFIER_API_KEY") && !contains(module.stack.task_secret_names.operations, "FSS_MILLIONVERIFIER_API_KEY")
+    error_message = "The installed MillionVerifier key is injected into the worker only, never the API or operations."
   }
 }
 
