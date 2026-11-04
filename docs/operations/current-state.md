@@ -28,7 +28,7 @@ Root owns integration/interfaces/production. Broad coverage, soft ranking, buyin
 
 **Prioritization848 deployed:** [requirements](../greenfield/prospect-prioritization.md)/[audit](../greenfield/prospect-priority-interface-audit.md); hosted priority/fit saves accepted, no conversion claim. PR852 dated phone/person/office originals remain context, not canonical authority. Step1.3–1.5 software complete.
 
-**Social deployed:** NEW disclosed Generate binds private guide/approved facts to bounded Bedrock scope. Fictional output exposed an unsupported privacy claim; guidance corrected, no David-voice proof. Last guide empty. ADR0030/schema148 public-web LinkedIn originals retain30day erasure; runner/account/content/cadence/capture unfinished, no import/reply/publishing authority.
+**Social #925 SPEC AGREED, not activated:** [personal-brand workflow](../greenfield/founder-social-publishing.md): college founder/AI builder; Pavan Kumar of Clean primary, Ayaan secondary;3 posts/week, rough real bullets, approved media pool and three private calibration drafts before automation. Existing guide/drafts/disclosed generation and readiness/thread-reader software remain deployed148; private factual inputs, sanitized/publishable media and real web-owned publisher require implementation. Fictional diagnostics do not prove voice quality. Browser-platform permission is settled; actual account/calibration/content/cadence activation and public-thread capture remain separate. No photo access or LinkedIn action followed the interview.
 
 ## Preserved completed work and controls
 
