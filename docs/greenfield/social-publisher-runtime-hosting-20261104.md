@@ -12,6 +12,8 @@ Constraints: no new paid browser SaaS; no `--no-sandbox`, `chromiumSandbox: fals
 
 David approved approximately$20/month for one isolated browser-only EC2 host, keeping API/worker on Fargate and reusing existing AWS networking/ECR/TLS edge. Finite native sandbox and final authenticated six-client bridged transport/firewall/shutdown probes passed; all owned AWS resources were removed. Permanent provisioning, protected ALB/TLS delivery and actual account/publication acceptance remain separate.
 
+All five publisher security-group rule instances explicitly carry the module's `NamePrefix`, overriding conflicting caller labels; provider default tags alone do not satisfy the deployment role's tag-on-create condition. The generic request-tag creation grant no longer directly authorizes ingress/egress against existing groups. Owned-group authorization and separate rule-resource authorization remain required. This bounded repair does **not** close the pre-existing retagging/default-group adoption paths tracked in [#932](https://github.com/david-cui-bruno/founding-sales/issues/932). Native Terraform regression and IAM simulation qualify these prerequisites; actual protected provisioning and production transport acceptance remain separate.
+
 ### Controlled-DOM Linux CI browser dependency
 
 The Greenfield `ubuntu-24.04` job explicitly selects the hosted runner's installed
