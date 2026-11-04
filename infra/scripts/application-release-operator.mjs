@@ -23,6 +23,7 @@ const OFF_READS = { sts: READS.sts, ecs: READS.ecs, logs: ['get-log-events'] }, 
 const UPGRADE_GUARDS = ['Does this branch change the schema or a migration?', 'Resolve what production runs, from production', 'What production runs, and what this branch would move it to', 'The grants baseline may not move in the same pull request as a migration'];
 const UPGRADE_WORK = ['Install', 'No durability for the throwaway database', 'Upgrade test', 'Bind the upgrade evidence to observed source builds', 'Upload the evidence'];
 const SCHEMA_RANGE = 'packages/domain/db/schemaRange.ts', MIGRATIONS = 'packages/domain/db/migrations';
+const publisherHostImagePath = /^(?:packages\/social-publisher\/|Dockerfile\.api(?:\.dockerignore)?$|package-lock\.json$)/u;
 // The repository classifier's result (tools/upgrade/classify.ts) printed in the bound upgrade evidence.
 // `additive` migrates automatically; `touches-existing` needs an explicit matching `migrationReview`
 // binding; privilege, destructive, replaced-routine and unclassified work refuses here (reviewed path).
@@ -146,6 +147,8 @@ export function releaseSource(gh, base, candidate, schema) {
   const c = gh(`compare/${base}...${candidate}?per_page=100&page=1`);
   must(c.base_commit?.sha === base && c.merge_base_commit?.sha === base && c.status === 'ahead' && c.behind_by === 0 && positive(c.total_commits) && c.total_commits <= 100 && c.ahead_by === c.total_commits && c.commits?.length === c.total_commits && c.commits.at(-1)?.sha === candidate, 'source_comparison_incomplete');
   must(Array.isArray(c.files) && c.files.length > 0 && c.files.length < 300 && c.files.every(f => typeof f.filename === 'string' && (!Object.hasOwn(f, 'previous_filename') || typeof f.previous_filename === 'string')) && new Set(c.files.map(f => f.filename)).size === c.files.length, 'source_file_inventory_incomplete');
+  must(!c.files.some(f => publisherHostImagePath.test(f.filename) ||
+    (Object.hasOwn(f, 'previous_filename') && publisherHostImagePath.test(f.previous_filename))), 'publisher_host_image_requires_reviewed_plan');
   const schemaPath = p => p === '.gitattributes' || p.endsWith('/.gitattributes') || p === SCHEMA_RANGE || p === MIGRATIONS || p.startsWith(MIGRATIONS + '/');
   const touched = c.files.filter(f => schemaPath(f.filename) || (Object.hasOwn(f, 'previous_filename') && schemaPath(f.previous_filename)));
   const required = ref => { const s = gh(`contents/${SCHEMA_RANGE}?ref=${ref}`), match = s.encoding === 'base64' && typeof s.content === 'string' && /^export const REQUIRED_SCHEMA = ([1-9][0-9]*);$/mu.exec(Buffer.from(s.content, 'base64').toString('utf8')); must(match, 'schema_source_missing'); return Number(match[1]); };

@@ -54,6 +54,19 @@ resource "aws_s3_bucket_lifecycle_configuration" "assets" {
   }
 }
 
+resource "aws_s3_bucket_cors_configuration" "assets" {
+  count  = length(var.browser_origins) == 0 ? 0 : 1
+  bucket = aws_s3_bucket.assets.id
+
+  cors_rule {
+    allowed_origins = var.browser_origins
+    allowed_methods = ["PUT", "GET", "HEAD"]
+    allowed_headers = ["content-type", "content-length", "x-amz-checksum-sha256", "x-amz-meta-callie-upload", "if-none-match"]
+    expose_headers  = ["ETag"]
+    max_age_seconds = 300
+  }
+}
+
 locals {
   policy_document = {
     Version = "2012-10-17"

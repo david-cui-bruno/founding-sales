@@ -6,12 +6,14 @@ import {readSocialDraftRequest} from './drafts.ts';
 import {socialDraftView} from './draftWorkspace.ts';
 import {readApprovedAnswerBlocks} from '../outreach/facts.ts';
 import type {SocialResult} from './posts.ts';
+import {readSocialFounderInputsForOwner} from './founderInputs.ts';
 export interface PrivateSourceBasis{selection:SocialDraftRequest;hash:string;dependencies:Record<string,string[]>;expiresAt:Date|null}
 export async function privateSourceBasis(ctx:RepositoryContext,selection:SocialDraftRequest):Promise<SocialResult<PrivateSourceBasis>>{
  const current=await readSocialDraftSources(ctx,selection);if(!current.ok)return {ok:false,reason:'source_changed_or_unavailable'};
  const dependencies:Record<string,string[]>={};
  const add=(key:string,id:string):void=>{const values=dependencies[key]??=[];if(!values.includes(id))values.push(id);};
  if(selection.voiceGuideRef)add('social_voice_preferences',selection.voiceGuideRef.guideId);
+ for(const ref of selection.founderInputRefs??[])add('social_founder_inputs',ref.inputId);
  const blocks=selection.factBlocks.length?await readApprovedAnswerBlocks(ctx,selection.factBlocks):{ok:true as const,value:[]};
  if(!blocks.ok)return {ok:false,reason:'source_changed_or_unavailable'};
  for(const block of blocks.value){add('outreach_answer_blocks',block.id);const ref=block.socialInput?.sourceRef;if(ref)add('sourcing_candidates',ref.id);}
@@ -37,7 +39,12 @@ export async function privateSourceBasis(ctx:RepositoryContext,selection:SocialD
   const retrieved=new Date(row?.source_check.lastSuccess?.retrievedAt??'');
   if(!Number.isFinite(retrieved.getTime())||retrieved>now||day(retrieved)!==day(now))return {ok:false,reason:'source_changed_or_unavailable'};
  }
- const expiresAt=blocks.value.some(block=>block.socialInput?.sourceRef)?(await ctx.db.query<{deadline:Date}>("SELECT ((date_trunc('day',clock_timestamp() AT TIME ZONE 'America/New_York')+interval '1 day') AT TIME ZONE 'America/New_York') AS deadline")).rows[0]!.deadline:null;
+ let expiresAt=blocks.value.some(block=>block.socialInput?.sourceRef)?(await ctx.db.query<{deadline:Date}>("SELECT ((date_trunc('day',clock_timestamp() AT TIME ZONE 'America/New_York')+interval '1 day') AT TIME ZONE 'America/New_York') AS deadline")).rows[0]!.deadline:null;
+ if(selection.founderInputRefs?.length){
+  if(ctx.scope.actor.kind!=='user')return {ok:false,reason:'user_required'};
+  const notes=await readSocialFounderInputsForOwner(ctx,ctx.scope.actor.userId,selection.founderInputRefs);if(!notes.ok)return notes;
+  if(!expiresAt||notes.value.expiresAt<expiresAt)expiresAt=notes.value.expiresAt;
+ }
  return {ok:true,value:{selection,hash:current.value.hash,dependencies,expiresAt}};
 }
 export async function selectedPrivateSource(ctx:RepositoryContext,origin:Extract<SocialPrivateDraftOrigin,{kind:'suggestion'}>):Promise<SocialResult<PrivateSourceBasis>>{

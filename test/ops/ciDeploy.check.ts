@@ -1544,7 +1544,7 @@ function commitFiles(directory: string, message: string, files: readonly string[
 }
 
 /**
- * main: c0; c1 application code; c2 infrastructure; c3 application code; r1 adds a
+ * main: c0; c1 host-image/dependency inputs; c2 infrastructure; c3 application code; r1 adds a
  * workflow and r2 removes it; c4 application code; n1 moves an infrastructure file under
  * apps/; mg merges an app-only branch and edits infrastructure in the merge itself; m1 a
  * migration. x1 is on another branch, off c1.
@@ -1618,11 +1618,10 @@ function guard(stub: World, commit: string, directory = HISTORY.directory): Run 
 const at = (commit: string): WorldOptions => ({ productionTags: { api: [`ci-${commit}`], worker: [`ci-${commit}`] } });
 
 describe('the protected-path guard reads every commit since production’s, before any repository code runs', () => {
-  it('passes a range of application code, reading production’s commit from its images’ tags', () => {
+  it('requires a reviewed host rollout for image and dependency changes after the deployed build', () => {
     const run = guard(world(at(HISTORY.c0)), HISTORY.c1);
     expect(run.code, run.output).toBe(0);
-    expect(run.outputs['decision']).toBe('pass');
-    expect(run.output).toContain(`production's api image was built from ${HISTORY.c0}`);
+    expect(run.outputs['decision']).toBe('manual');
   });
 
   it('refuses a range with an infrastructure commit in it, although the last merge was application code', () => {

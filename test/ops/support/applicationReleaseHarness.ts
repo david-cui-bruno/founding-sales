@@ -146,7 +146,7 @@ export function harness(options: Options = {}) {
         return result;
       }
       if (program === 'node') {
-        if (args.includes('tools/ci/release-plan.ts')) return JSON.stringify({ fromSchema: from, toSchema: to, reasons: [] });
+        if (args.includes('tools/ci/release-plan.ts')) return JSON.stringify({ fromSchema: from, toSchema: to, reasons: options.fault === 'host-image-review' ? ['reviewed browser-host image change: packages/social-publisher/src/hostMain.ts'] : [] });
         if (options.fault === 'smoke') throw new Error('command_node_failed');
         return '';
       }

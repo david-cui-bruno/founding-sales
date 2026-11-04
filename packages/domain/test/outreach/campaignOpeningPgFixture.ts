@@ -21,7 +21,7 @@ import { readOutreachCadence, outreachStepDue } from '../../outreach/timing.ts';
  * as inspected here. No browser server/assets/HTTPS/Chrome is started by this
  * adapter. The existing auth fixture owns its Google stub and actual database.
  * NOT executed until root allocates the PG slot. */
-export async function campaignOpeningPgFixture(policyEnabled = true, openingExpiresAt?: string) {
+export async function campaignOpeningPgFixture(policyEnabled = true, openingExpiresAt?: () => string) {
   const fixture = await createAuthFixture();
   const stop = await registerOpeningFixture(fixture);
   try {
@@ -48,7 +48,7 @@ export async function campaignOpeningPgFixture(policyEnabled = true, openingExpi
       campaignId: approved.value.campaignId, campaignRevision: 1, sequenceVersionId: prepared.policy.sequenceVersionId,
       templateVersionId: template.id, templateContentHash: template.contentHash, revision: 1, mode: 'approved_variant_selection_v1',
       firstEmailOnly: true, variants: [{ id: 'local', text: 'I noticed {{firm_name}} serves {{firm_locality}}, {{firm_region}}.' }],
-      approvedAt: new Date().toISOString(), expiresAt: openingExpiresAt ?? prepared.policy.expiresAt };
+      approvedAt: new Date().toISOString(), expiresAt: openingExpiresAt?.() ?? prepared.policy.expiresAt };
     if (policyEnabled) await db.query('INSERT INTO outreach_campaign_opening_policies(workspace_id,id,campaign_id,policy) VALUES($1,$2,$3,$4::jsonb)', [w, policy.id, policy.campaignId, JSON.stringify(policy)]);
     // Only the fictional clock placement is controlled. Real source/policy expiry
     // still uses database wall time, and no owner sending switch is enabled.

@@ -6,7 +6,9 @@ import {buildSocialDraftRequest,prepareSocialDraftInput,prepareGroundedSocialDra
 import type {SocialResult} from './posts.ts';
 import {lockSocialMeetingSource} from './draftMeetingLocks.ts';
 import {readPrivateVoiceGuide} from './voiceGeneration.ts';
-import type {PrivateDraftAuthority} from './privateDrafts.ts';
+import {requirePrivateDraftAuthority,type PrivateDraftAuthority} from './privateDrafts.ts';
+import {readSocialFounderInputsForOwner} from './founderInputs.ts';
+import {checkSocialStandingGenerationAuthority} from './standingAuthority.ts';
 interface Prepared{input:SocialDraftInput;provenance:SocialDraftProvenance[];hash:string}
 function textOf(utterances:unknown):string|null{
  if(!Array.isArray(utterances))return null;let text='';
@@ -22,13 +24,26 @@ export async function readSocialDraftSources(ctx:RepositoryContext,raw:SocialDra
 /** Background identity remains system; owner comes from the durable request, not a renderer. */
 export async function readSocialDraftSourcesForWorker(ctx:RepositoryContext,ownerUserId:string,raw:SocialDraftRequest):Promise<SocialResult<Prepared>>{
  if(ctx.scope.actor.kind!=='system'||!['worker','scheduler'].includes(ctx.scope.actor.component))return {ok:false,reason:'worker_required'};
+ if(raw.standingPlanRef){const allowed=await checkSocialStandingGenerationAuthority(ctx,ownerUserId,raw.standingPlanRef);if(!allowed.ok)return allowed;}
  return readForOwner(ctx,ownerUserId,raw);
 }
 async function readForOwner(ctx:RepositoryContext,user:string,raw:SocialDraftRequest,authority?:PrivateDraftAuthority):Promise<SocialResult<Prepared>>{
  const parsed=socialDraftRequestSchema.safeParse(raw);if(!parsed.success)return {ok:false,reason:'invalid_input'};
  const input=parsed.data,workspace=ctx.scope.workspaceId;
- const active=(await ctx.db.query("SELECT 1 FROM workspace_memberships WHERE workspace_id=$1 AND user_id=$2 AND status='active' FOR SHARE",[workspace,user])).rows.length>0;
+ const active=(await ctx.db.query(`SELECT 1 FROM workspace_memberships WHERE workspace_id=$1 AND user_id=$2 AND status='active' FOR ${input.mode==='linkedin_founder'?'UPDATE':'SHARE'}`,[workspace,user])).rows.length>0;
  if(!active)return {ok:false,reason:'owner_unavailable'};
+ if(input.mode==='linkedin_founder'){
+  if(input.sourceRefs.length||input.founderInputProcessingScope!=='bedrock_haiku_founder_inputs_v1'||!input.founderFormat)return {ok:false,reason:'founder_input_scope_required'};
+  const voice=await readPrivateVoiceGuide(ctx,user,input,authority);if(!voice.ok)return voice;
+  const notes=await readSocialFounderInputsForOwner(ctx,user,input.founderInputRefs??[]);if(!notes.ok)return notes;
+  if(authority)await requirePrivateDraftAuthority(authority);
+  const factual=input.factBlocks.length?await readForOwner(ctx,user,{mode:'linkedin_grounded',sourceRefs:[],factBlocks:input.factBlocks},authority):null;
+  if(factual&&!factual.ok)return factual;
+  const prepared:SocialDraftInput={mode:'linkedin_founder',themes:[],facts:factual?.ok?factual.value.input.facts:[],founderNotes:notes.value.notes,founderFormat:input.founderFormat,founderInputProcessingScope:input.founderInputProcessingScope,...(voice.value?{privateVoiceGuide:voice.value}:{}),...(input.voiceGuideProcessingScope?{voiceGuideProcessingScope:input.voiceGuideProcessingScope}:{})};
+  if(!buildSocialDraftRequest(prepared))return {ok:false,reason:'input_too_large'};
+  const fresh=await readSocialFounderInputsForOwner(ctx,user,input.founderInputRefs??[]);if(!fresh.ok)return fresh;
+  return {ok:true,value:{input:prepared,provenance:[],hash:createHash('sha256').update(JSON.stringify({input:prepared,hashes:fresh.value.hashes,factualHash:factual?.ok?factual.value.hash:null})).digest('hex')}};
+ }
  if(input.mode==='linkedin_grounded'){
   const voice=await readPrivateVoiceGuide(ctx,user,input,authority);if(!voice.ok)return voice;
   if(!(await ctx.db.query("SELECT 1 FROM workspace_memberships WHERE workspace_id=$1 AND user_id=$2 AND status='active' AND role='admin'",[workspace,user])).rows.length)return {ok:false,reason:'owner_required'};

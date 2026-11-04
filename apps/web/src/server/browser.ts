@@ -9,7 +9,7 @@ import { startSignIn, handleCallback, claimSignIn } from '../../../api/src/auth/
 import { authenticate, endSession, type AuthenticatedPrincipal } from '../../../api/src/auth/sessions.ts';
 import { route } from '../../../api/src/server.ts';
 import { MAX_REQUEST_BYTES } from '../../../api/src/limits.ts';
-import type { ApiRequest } from '../../../api/src/routes/types.ts';
+import type { ApiRequest,RouteResult } from '../../../api/src/routes/types.ts';
 import { BROWSER_PATHS, BROWSER_COMMAND_PATHS, BROWSER_CSRF_HEADER, BROWSER_REVISION_HEADER, browserApiPathAllowed, browserSessionSchema, browserSignInSchema } from '../shared/browserContract.ts';
 import type { BrowserHandler, BrowserResponse, BrowserRuntime, BrowserRequestContext } from './runtime.ts';
 import { COOKIE_NAMES, clearCookie, cookieHeader, freshCsrf, openCookie, parseCookies, sealCookie, type Custody } from './cookies.ts';
@@ -28,6 +28,7 @@ import { callingReadinessAccess } from './callingReadinessAccess.ts';
 import { QUALIFICATION_BROWSER_PATHS, qualificationBrowserResult } from './qualificationBoundary.ts';
 import { PROSPECT_PHONE_DISCOVERY_BROWSER_PATHS, prospectPhoneDiscoveryBrowserResult } from './prospectPhoneDiscoveryBoundary.ts';
 import { BROWSER_SECURITY_HEADERS as SECURITY_HEADERS } from './httpPolicy.ts';
+import {socialWorkspaceRequestAllowed,socialWorkspaceBrowserResult,socialStorageResultAllowed} from './socialWorkspaceBoundary.ts';
 
 class Refusal extends Error {
   constructor(readonly status: number) { super('browser_request_refused'); }
@@ -193,7 +194,7 @@ export function createBrowserHandler(runtime: BrowserRuntime): BrowserHandler {
           await endSession(context.auth, principal);
           return response(200, { status: 'signed_out' }, outgoing);
         }
-        return await product(request, apiPath!, context, access.token, outgoing, runtime.clientVersion, principal);
+        return await product(request, apiPath!, {...context,...(runtime.socialStorageOrigin===undefined?{}:{socialStorageOrigin:runtime.socialStorageOrigin})}, access.token, outgoing, runtime.clientVersion, principal);
       });
     } catch (error) {
       if (!(error instanceof Refusal) && !(error instanceof DatabaseBusyError) && !(error instanceof BrowserUnavailableError)) {
@@ -213,7 +214,7 @@ async function product(request: ApiRequest, path: string, context: BrowserReques
   if (body !== null && typeof body === 'object' && !Array.isArray(body)) {
     for (const name of Object.keys(body)) {
       if (['authorization', 'cookie', 'headers', 'origin'].includes(name.toLowerCase())
-        && !(name === 'origin' && path === '/social/private-drafts/save')) throw new Refusal(400);
+        && !(name === 'origin' && ['/social/private-drafts/save','/social/assets/register'].includes(path))) throw new Refusal(400);
     }
   }
   if ((BROWSER_COMMAND_PATHS as readonly string[]).includes(path)) {
@@ -223,6 +224,7 @@ async function product(request: ApiRequest, path: string, context: BrowserReques
     body = { ...command, clientVersion };
   }
   if (isSocialFactsBrowserPath(path) && !socialFactsBrowserSchemas[path]!.safeParse(body).success) throw new Refusal(400);
+  if(!socialWorkspaceRequestAllowed(path,body))throw new Refusal(400);
   // Construct a closed transport envelope. Neither body nor browser headers set API credentials.
   const bookingLinkRoute = bookingLinkApiRequest(path, body);
   const result = await route(request.method, bookingLinkRoute?.path ?? path, { ...context.api, auth: context.auth }, {
@@ -246,6 +248,19 @@ async function product(request: ApiRequest, path: string, context: BrowserReques
       const fresh = await authenticate(context.auth, `Bearer ${token}`);
       if (!fresh.authenticated || revision(fresh.principal) !== revision(principal)) throw new Refusal(401);
     }
+  }
+  return productResponse(path,context,token,cookies,principal,result);
+}
+
+async function productResponse(path:string,context:BrowserRequestContext,token:string,cookies:string[],principal:AuthenticatedPrincipal,result:RouteResult):Promise<BrowserResponse>{
+  // Social projections and login frames are private. Recheck the exact principal
+  // after provider/storage waits before returning any private bytes.
+  if(path.startsWith('/social/')){
+    const fresh=await authenticate(context.auth,`Bearer ${token}`);
+    if(!fresh.authenticated||revision(fresh.principal)!==revision(principal))throw new Refusal(401);
+    if(!socialStorageResultAllowed(path,result.status,result.body,context.socialStorageOrigin))throw new Refusal(503);
+    const social=socialWorkspaceBrowserResult(path,result.status,result.body);
+    if(social!==null)return response(social.status,social.body,cookies);
   }
   const preparedPublication=result.status===200?await preparedCallingPublication(context,principal,path,result.body,token):()=>true;
   if(!preparedPublication())throw new Refusal(409);

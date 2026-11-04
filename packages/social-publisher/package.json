@@ -1,0 +1,30 @@
+{
+  "name": "@fss/social-publisher",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./startup": "./src/startup.ts",
+    "./host": "./src/publisherHost.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --experimental-transform-types --disable-warning=ExperimentalWarning --input-type=module -e \"import {preflightPublisherFixtureBrowser} from './test/publisherFixture.ts'; await preflightPublisherFixtureBrowser();\" && vitest run",
+    "host": "node --experimental-transform-types --disable-warning=ExperimentalWarning src/hostMain.ts",
+    "test:host": "vitest run --config test/publisherHost.config.ts"
+  },
+  "dependencies": {
+    "@fss/contracts": "*",
+    "@fss/domain": "*",
+    "pg": "^8.23.1",
+    "playwright": "1.64.0",
+    "ws": "8.22.1"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.11.10",
+    "@types/ws": "8.18.2",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.3"
+  }
+}

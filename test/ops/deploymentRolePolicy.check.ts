@@ -175,6 +175,7 @@ function allowsFor(policy: PolicyDocument, action: string): readonly PolicyState
 const SERVICE_OF_PREFIX: readonly (readonly [string, string])[] = [
   ['lb', 'elasticloadbalancing'],
   ['db_', 'rds'],
+  ['instance', 'ec2'],
   ['vpc', 'ec2'],
   ['subnet', 'ec2'],
   ['route', 'ec2'],

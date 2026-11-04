@@ -1,7 +1,7 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { repositoryPath } from './support/repository.ts';
 function history(sql: string, hiddenInfra = false) {
@@ -42,6 +42,18 @@ describe('routine release eligibility over deployed history', () => {
   it('sees infrastructure added and removed between the actual deployed build and release', () => {
     const value = history('CREATE TABLE second(id integer);', true);
     try { expect(plan(value).decision).toBe('reviewed'); } finally { rmSync(value.root, { recursive: true, force: true }); }
+  });
+  it.each(['packages/social-publisher/src/hostMain.ts', 'Dockerfile.api', 'Dockerfile.api.dockerignore', 'package-lock.json'])('requires a reviewed host rollout for %s even without a schema change', path => {
+    const value = history('CREATE TABLE second(id integer);');
+    try {
+      value.base = value.head;
+      const file = join(value.root, path); mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, 'owned browser-host input fixture\n');
+      execFileSync('git', ['add', '.'], { cwd: value.root });
+      execFileSync('git', ['commit', '-qm', 'browser-host input changed'], { cwd: value.root });
+      value.head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: value.root, encoding: 'utf8' }).trim();
+      expect(plan(value).decision).toBe('reviewed');
+    } finally { rmSync(value.root, { recursive: true, force: true }); }
   });
   it('refuses byte changes in an already deployed migration, including trailing whitespace', () => {
     const value = history('CREATE TABLE second(id integer);');

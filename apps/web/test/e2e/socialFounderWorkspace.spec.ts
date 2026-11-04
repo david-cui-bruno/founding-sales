@@ -1,0 +1,42 @@
+import {test,expect} from '../support/qualifiedResearchApp.ts';
+import {startManualProspectApp,type ManualProspectApp} from '../support/manualProspectApp.ts';
+import {routeManualProvider} from '../support/manualProspectSeed.ts';
+import {browserRequest} from '../support/browser.ts';
+import {randomUUID} from 'node:crypto';
+let app:ManualProspectApp;
+// Reuses the existing exclusive 773 signed HTTPS/OIDC/app_runtime lane. Root
+// must explicitly allocate it; this fixture never invokes a model or platform.
+test.beforeAll(async()=>{app=await startManualProspectApp('773');});
+test.afterAll(async()=>{await app?.stop();});
+test('signed owner source eligibility, lost-response receipt, stale CAS, private clearing and actionable activation holds',async({researchPage:page})=>{
+ await routeManualProvider(page,app);await page.goto(app.origin);
+ await expect(page.getByText('Checking browser session…',{exact:true})).toHaveCount(0);
+ await page.getByLabel('Workspace ID',{exact:true}).fill(app.fixture.alpha.workspaceId);
+ await page.getByRole('button',{name:'Sign in',exact:true}).click();await expect(page.getByRole('button',{name:'Sign out',exact:true})).toBeVisible();
+ await page.getByRole('navigation',{name:'Workspace sections'}).getByRole('button',{name:'Social',exact:true}).click();
+ const views=page.getByRole('navigation',{name:'Social views'});
+ for(const name of ['Updates','Media','Calibration','Plan','Activity','Posts','Conversations'])await expect(views.getByRole('button',{name,exact:true})).toBeVisible();
+ await views.getByRole('button',{name:'Updates',exact:true}).click();const updates=page.getByRole('region',{name:'Founder updates'});
+ const notes='Fictional fixture: I built a local campus prototype and learned to simplify the setup.';
+ await updates.getByLabel('Real bullets',{exact:true}).fill(notes);await updates.getByLabel('Use for my posts',{exact:true}).check();
+ await page.route('**/browser/api/social/inputs/save',async route=>{await route.fetch();await route.abort('failed');},{times:1});
+ await updates.getByRole('button',{name:'Save current update',exact:true}).click();
+ await expect(updates.getByRole('button',{name:'Reconcile same update command'})).toBeEnabled();
+ const receipt=(await app.fixture.db.query<{command_id:string}>('SELECT command_id FROM command_receipts WHERE command_kind=$1 ORDER BY created_at DESC LIMIT 1',['social.founder_input_save'])).rows[0]!;expect(receipt).toBeTruthy();
+ await views.getByRole('button',{name:'Conversations',exact:true}).click();await expect(page.getByLabel('Real bullets')).toHaveCount(0);
+ await views.getByRole('button',{name:'Updates',exact:true}).click();await updates.getByRole('button',{name:'Reconcile same update command'}).click();
+ await updates.getByRole('button',{name:'Read updates',exact:true}).click();await expect(updates.getByRole('button',{name:/revision 1 · eligible/u})).toBeVisible();
+ const input=(await app.fixture.db.query<{id:string}>('SELECT id FROM social_founder_inputs WHERE owner_user_id=$1',[app.fixture.alpha.admin.userId])).rows[0]!;
+ await updates.getByRole('button',{name:/revision 1 · eligible/u}).click();await expect(updates.getByLabel('Real bullets')).toHaveValue(notes);
+ const changed=await browserRequest(page,'/social/inputs/save',{body:{operation:'update',inputId:input.id,expectedRevision:1,bullets:'Fictional fixture: corrected exact current update.',context:'',experienceDate:null,publicSafe:true,commandId:randomUUID()}});expect(changed.status).toBe(200);
+ await updates.getByLabel('Real bullets').fill('Stale scratch must never overwrite the current input.');await updates.getByRole('button',{name:'Save current update',exact:true}).click();await expect(updates).toContainText('stale_revision');
+ await views.getByRole('button',{name:'Media',exact:true}).click();await expect(page.getByLabel('Real bullets')).toHaveCount(0);
+ await views.getByRole('button',{name:'Calibration',exact:true}).click();await page.getByRole('button',{name:'Read calibration and private examples'}).click();await expect(page.getByRole('region',{name:'Founder calibration'})).toBeVisible();
+ await views.getByRole('button',{name:'Plan',exact:true}).click();await expect(page.getByRole('region',{name:'LinkedIn publisher connection'})).toBeVisible();await page.getByRole('button',{name:'Read current plan',exact:true}).click();await expect(page.getByRole('button',{name:'Activate exact revised plan'})).toBeDisabled();await expect(page.getByRole('region',{name:'Standing publishing plan'})).toContainText('complete three private reviews first');
+ await views.getByRole('button',{name:'Activity',exact:true}).click();await expect(page.getByRole('region',{name:/activity/iu})).toBeVisible();
+ const persisted=await page.evaluate(()=>JSON.stringify({local:{...localStorage},session:{...sessionStorage}}));expect(persisted).not.toContain(notes);expect(persisted).not.toContain('Stale scratch');
+ expect((await app.fixture.db.query('SELECT count(*)::int n FROM command_receipts WHERE command_id=$1',[receipt.command_id])).rows[0]?.['n']).toBe(1);
+ expect((await app.fixture.db.query('SELECT count(*)::int n FROM social_standing_plans')).rows[0]?.['n']).toBe(0);
+ expect((await app.fixture.db.query('SELECT count(*)::int n FROM social_private_drafts')).rows[0]?.['n']).toBe(0);
+ await page.getByRole('button',{name:'Sign out',exact:true}).click();await expect(page.getByRole('region',{name:'Social workspace'})).toHaveCount(0);
+});

@@ -1,11 +1,11 @@
-import {socialConnectionSchema,LINKEDIN_ADAPTER_VERSION,type SocialConnection} from '@fss/contracts';
+import {socialConnectionSchema,type SocialConnection} from '@fss/contracts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {recordCrmAuditEvent} from '../crm/audit.ts';
 import type {SocialResult} from './posts.ts';
 const owner=(ctx:RepositoryContext)=>ctx.scope.actor.kind==='user'?ctx.scope.actor.userId:null;
 async function lock(ctx:RepositoryContext){await ctx.db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`social-accounts:${ctx.scope.workspaceId}:${owner(ctx)}`]);}
-/** Enable only the shipped native LinkedIn adapter; other destinations remain unsupported. */
-export async function saveSocialConnection(ctx:RepositoryContext,raw:SocialConnection):Promise<SocialResult<{accountId:string;state:'unsupported'|'connected'}>>{
+/** Legacy metadata registration never establishes a usable publisher session. */
+export async function saveSocialConnection(ctx:RepositoryContext,raw:SocialConnection):Promise<SocialResult<{accountId:string;state:'unsupported'}>>{
  const user=owner(ctx);if(!user)return {ok:false,reason:'user_required'};
  const parsed=socialConnectionSchema.safeParse(raw);if(!parsed.success)return {ok:false,reason:'invalid_input'};const input=parsed.data;
  if(input.platform==='facebook'&&input.accountKind!=='page')return {ok:false,reason:'facebook_page_required'};
@@ -22,9 +22,9 @@ export async function saveSocialConnection(ctx:RepositoryContext,raw:SocialConne
   await ctx.db.query("INSERT INTO social_accounts(workspace_id,id,owner_user_id,platform,external_id,display_name,account_kind,state) VALUES($1,$2,$3,$4,$5,$6,$7,'unsupported')",[ctx.scope.workspaceId,input.accountId,user,input.platform,input.externalId,input.displayName,input.accountKind]);
  }else{
   await ctx.db.query("UPDATE social_accounts SET display_name=$3,state='unsupported',revision=revision+1,adapter_version=NULL,verified_at=NULL,max_schedule_days=NULL WHERE workspace_id=$1 AND id=$2",[ctx.scope.workspaceId,input.accountId,input.displayName]);
+  await ctx.db.query("UPDATE social_publisher_sessions SET encrypted_state=NULL,state='disconnected',revision=revision+1 WHERE workspace_id=$1 AND account_id=$2 AND owner_user_id=$3",[ctx.scope.workspaceId,input.accountId,user]);
  }
- const state=input.platform==='linkedin'?'connected':'unsupported';
- if(state==='connected')await ctx.db.query("UPDATE social_accounts SET state='connected',adapter_version=$3,verified_at=now(),max_schedule_days=30 WHERE workspace_id=$1 AND id=$2",[ctx.scope.workspaceId,input.accountId,LINKEDIN_ADAPTER_VERSION]);
+ const state='unsupported' as const;
  await recordCrmAuditEvent(ctx,{action:'social.account_observed',subjectKind:'social_account',subjectId:input.accountId,detail:{platform:input.platform,accountKind:input.accountKind}});
  return {ok:true,value:{accountId:input.accountId,state}};
 }
@@ -32,6 +32,7 @@ export async function disconnectSocialAccount(ctx:RepositoryContext,input:{accou
  const user=owner(ctx);if(!user)return {ok:false,reason:'user_required'};await lock(ctx);
  const result=await ctx.db.query("UPDATE social_accounts SET state='disconnected',revision=revision+1,adapter_version=NULL,verified_at=NULL,max_schedule_days=NULL WHERE workspace_id=$1 AND id=$2 AND owner_user_id=$3 RETURNING id",[ctx.scope.workspaceId,input.accountId,user]);
  if(!result.rows.length)return {ok:false,reason:'not_found'};
+ await ctx.db.query("UPDATE social_publisher_sessions SET encrypted_state=NULL,state='disconnected',revision=revision+1 WHERE workspace_id=$1 AND account_id=$2 AND owner_user_id=$3",[ctx.scope.workspaceId,input.accountId,user]);
  // Existing native schedules are not recalled by deleting a local login. Their
  // receipts and pending cancellation state must remain for a later reconnect.
  await recordCrmAuditEvent(ctx,{action:'social.account_disconnected',subjectKind:'social_account',subjectId:input.accountId,detail:{}});

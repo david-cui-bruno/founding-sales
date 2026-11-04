@@ -8,6 +8,7 @@ import {readCalcomSecret,CALCOM_SECRET_VARIABLE} from '@fss/domain/meetings/calc
 import {calcomCapacityClient} from '../integrations/calcomCapacityClient.ts';
 import type {BookingCapacityDeps} from '../routes/bookingCapacity.ts';
 import {loadSocialMediaStore} from '../social/mediaStore.ts';
+import {startSocialPublisher} from '@fss/social-publisher/startup';
 import { CALL_AUDIO_BUCKET_VARIABLE, loadCallAudioRemover } from '../integrations/callAudio.ts';
 import { loadMeetingAudioStore } from '../integrations/meetingAudio.ts';
 import { checkMeetingAudioContract } from '../integrations/meetingAudioContract.ts';
@@ -262,6 +263,12 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
 
   const socialBucket=environment['FSS_SOCIAL_ASSETS_BUCKET']?.trim();
   const socialMedia=socialBucket ? await loadSocialMediaStore({bucket:socialBucket,region:environment['AWS_REGION']??'us-east-1'}):undefined;
+  const publisherRuntime=await startSocialPublisher({
+    environment,
+    executionSide:'api',
+    openSession:async()=>{const client=await pool.connect();return {session:asSession(client),close:async()=>{client.release();}};},
+    onHeartbeatError:()=>log.log('error','social_publisher_heartbeat_failed',{}),
+  });
   const callAudioBucket = environment[CALL_AUDIO_BUCKET_VARIABLE]?.trim() ?? '';
   const callAudioRegion = environment['AWS_REGION']?.trim() ?? '';
   const callAudio =
@@ -297,6 +304,7 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
     // Slice C3a: the deletion workflow's best-effort delete in the call-audio bucket.
     ...(callAudio === undefined ? {} : { callAudio }),
     ...(socialMedia === undefined ? {} : {socialMedia}),
+    ...(publisherRuntime===undefined?{}:{socialPublisher:publisherRuntime.publisher}),
     ...(meetingAudio === undefined ? {} : { meetingAudio }),
     ...(deployment.mail === undefined ? {} : { mail: deployment.mail }),
     // Lane g86: the root's `desktop_upgrade_url` in production, the placeholder elsewhere.
@@ -319,6 +327,7 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
     captureTechnicalError(error, 'startup');
     log.log('error', 'api_listen_failed', { port: config.port, ...errorFields(error) });
     await heartbeat.stop();
+    await publisherRuntime?.stop();
     await pool.end().catch(() => undefined);
     await heartbeatClient.end().catch(() => undefined);
     await flushTechnicalErrors();
@@ -341,6 +350,7 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
     timeoutMilliseconds: config.shutdownTimeoutMilliseconds,
     log,
   });
+  await publisherRuntime?.stop();
   log.log('info', 'api_stopped', { drained });
   await flushTechnicalErrors();
   return API_EXIT_CODES.ok;

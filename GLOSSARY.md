@@ -128,6 +128,26 @@ _Avoid_: representative reliability when evidence is limited
 Usefulness evaluated against varied business evidence appropriate to the claimed scope, with the categories and limitations disclosed.
 _Avoid_: synthetic pass when referring to observed real business performance
 
+**Founder update**:
+An owner's current private account of real experiences, progress or opinions. Only an explicit public-safe designation makes it eligible material for that owner's posts.
+_Avoid_: shared product fact, verified claim, publication approval
+
+**Voice calibration**:
+The owner's private review of three drafts for voice, factual accuracy and willingness to publish. It is not training or permission to publish those drafts.
+_Avoid_: automatic training, per-post approval
+
+**Approved media**:
+A supplied photo or screenshot whose exact sanitized version and public use the owner has approved, including accurate context and alt text.
+_Avoid_: camera-roll access, inferred scene or unrestricted photo permission
+
+**Standing social plan**:
+The owner's explicit account, material and cadence scope for scheduled generation and unattended publication. Drafting permission and publication permission remain distinct.
+_Avoid_: one-off draft request, platform connectivity
+
+**Managed social slot**:
+One planned publication opportunity within the owner's local week. Skipped and uncertain opportunities retain their identity rather than creating extra allowance.
+_Avoid_: confirmed publication, permission to retry
+
 **Public thread snapshot**:
 A bounded retained observation of a public discussion at a stated time and access context, with explicit coverage gaps and unknown attribution.
 _Avoid_: conversation history or current platform state when referring only to a captured excerpt

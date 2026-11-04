@@ -22,7 +22,7 @@ async function prepared(f: Awaited<ReturnType<typeof campaignOpeningPgFixture>>)
 }
 
 it.each(['expiry', 'revoked', 'erased', 'verified-bytes'] as const)('risk R1 historical %s recovery records terminal SENT without fresh send authority', async change => {
-  const f = await campaignOpeningPgFixture(true, change === 'expiry' ? new Date(Date.now() + 3_000).toISOString() : undefined);
+  const f = await campaignOpeningPgFixture(true, change === 'expiry' ? () => new Date(Date.now() + 3_000).toISOString() : undefined);
   try {
     const before = await prepared(f), sentAt = new Date().toISOString();
     const attempt = await readCampaignOpeningAttempt(f.worker, f.executionId);

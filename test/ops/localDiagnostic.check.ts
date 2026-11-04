@@ -6,6 +6,7 @@ import { arch, platform, tmpdir, networkInterfaces } from "node:os";
 import { join, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
 import { createServer, createConnection } from "node:net";
+import { setTimeout as delay } from "node:timers/promises";
 const execute = promisify(execFile);
 it("has hydrated the native PostgreSQL runtime libraries needed by the isolated cluster", async () => {
   const nativePackage = resolve("node_modules/@embedded-postgres", `${platform()}-${arch()}`);
@@ -67,6 +68,22 @@ it.each(["normal", "orphan", "restricted_storage", "failed_cleanup"] as const)(
         configuration,
       ]);
       started = true;
+      // Detached start returns before database preparation. Begin the existing
+      // API-readiness window only after the durable process handoff.
+      let initialization: { state: string } | null = null;
+      for (let attempt = 0; attempt < 100; attempt++) {
+        const status = await readFile(join(directory, "status.json"), "utf8").catch(
+          (error: unknown) => {
+            if (error instanceof Error && "code" in error && error.code === "ENOENT")
+              return null;
+            throw error;
+          },
+        );
+        initialization = status === null ? null : JSON.parse(status);
+        if (initialization && initialization.state !== "preparing") break;
+        await delay(100);
+      }
+      expect(initialization).toMatchObject({ state: "running" });
       let ready = false;
       for (let attempt = 0; attempt < 100; attempt++) {
         try {

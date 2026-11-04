@@ -80,13 +80,14 @@ export function createBrowserHostHandler(options: BrowserHostOptions): RequestLi
   const browser = createBrowserHandler(options.runtime);
   const host = new URL(options.runtime.origin).host;
   const telemetry = options.runtime.telemetry === undefined ? undefined : browserErrorConfigurationSchema.parse(options.runtime.telemetry);
+  const storageOrigin=options.runtime.socialStorageOrigin;
+  if(storageOrigin!==undefined&&!/^https:\/\/[a-z0-9][a-z0-9-]{1,61}[a-z0-9]\.s3\.[a-z]{2}(?:-gov)?-[a-z]+-\d\.amazonaws\.com$/u.test(storageOrigin))throw new Error('Invalid browser host configuration');
+  const connectOrigins=[telemetry?.dsn===undefined?undefined:new URL(telemetry.dsn).origin,storageOrigin].filter(value=>value!==undefined).join(' ');
   const securityHeaders = {
     ...BROWSER_SECURITY_HEADERS,
-    ...(telemetry?.dsn === undefined ? {} : {
-      'content-security-policy': BROWSER_SECURITY_HEADERS['content-security-policy'].replace(
-        "connect-src 'self'", `connect-src 'self' ${new URL(telemetry.dsn).origin}`,
-      ),
-    }),
+    'content-security-policy':BROWSER_SECURITY_HEADERS['content-security-policy']
+      .replace("connect-src 'self'",`connect-src 'self'${connectOrigins?` ${connectOrigins}`:''}`)
+      .replace("img-src 'self'",`img-src 'self' data:${storageOrigin?` ${storageOrigin}`:''}`),
   };
   const send = (response: ServerResponse, status: number, body: Buffer, head: boolean, headers?: Record<string, string | readonly string[]>): void =>
     sendWithPolicy(securityHeaders, response, status, body, head, headers);

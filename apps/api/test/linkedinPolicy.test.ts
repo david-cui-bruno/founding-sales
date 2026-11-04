@@ -9,6 +9,7 @@ import {repositoryContext,workspaceScope} from '@fss/domain/db/workspaceScope.ts
 import {checkLinkedinPolicyForWork} from '@fss/domain/social/linkedinPolicy.ts';
 import {setTimeout as delay} from 'node:timers/promises';
 import {createServer} from 'node:http';
+import {postgresPublisherSessions} from '@fss/social-publisher';
 
 const approvedRulesVersion='634-2026-10-13';
 const command=()=>({commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION});
@@ -16,19 +17,28 @@ const generation={provider:'bedrock',providerKey:'configured-founder-haiku',regi
 function caller(f:AuthFixture,token:string,db:SessionQueryable=f.db){
  return (path:string,body:unknown)=>dispatch({method:'POST',path,query:new URLSearchParams(),headers:token?{authorization:`Bearer ${token}`}:{},body},{session:db,auth:{...f.deps,db},supportedClientVersions:f.deps.config.supportedClientVersions,sendingEnabled:false,upgradeUrl:'https://fixture.invalid/update'});
 }
+const publisherExternalId='https://www.linkedin.com/in/controlled-founder';
+/** Controlled native observation fixture. Posting session evidence is never
+ * LinkedIn outreach identity/acquisition/history or dispatch authority. */
+async function observePublisherAccount(f:AuthFixture,accountId:string,displayName='Founder',space=f.alpha){
+ const sessions=postgresPublisherSessions(f.db,Buffer.alloc(32,29));
+ const binding=await sessions.save({workspaceId:space.workspaceId,ownerUserId:space.admin.userId},accountId,{externalId:publisherExternalId,displayName},JSON.stringify({cookies:[{name:'fixture',value:'controlled-private-session'}],origins:[]}),async()=>{});
+ await sessions.heartbeat('worker','controlled-fixture-chromium');
+ return binding;
+}
 async function setup(){
  const f=await createAuthFixture();
  const token=(await issueSessionFor(f,f.alpha,f.alpha.admin)).accessToken;
  const call=caller(f,token);
  const accountId=randomUUID();
- expect((await call('/social/accounts/connect',{accountId,platform:'linkedin',externalId:'controlled-founder',displayName:'Founder',accountKind:'profile',...command()})).status).toBe(200);
+ await observePublisherAccount(f,accountId);
  const input={...command(),expectedRevision:0,accountId,accountRevision:1,approved:true,approvedRulesVersion,dataScope:'founder_sales_business',acquisitionBinding:null,generation:null};
  return {f,token,call,accountId,input};
 }
 it('saves and reads the complete settled policy without enabling or borrowing posting authority',async()=>{
  const {f,call,accountId,input}=await setup();try{
  expect((await call('/social/linkedin-policy/save',input)).status).toBe(200);
- expect((await call('/social/linkedin-policy/read',{})).body).toMatchObject({revision:1,state:'saved',approved:true,enabled:false,technicallyReady:false,policy:{accountId,accountExternalId:'controlled-founder',accountRevision:1,dataScope:'founder_sales_business',generation:null,rules:{
+ expect((await call('/social/linkedin-policy/read',{})).body).toMatchObject({revision:1,state:'saved',approved:true,enabled:false,technicallyReady:false,policy:{accountId,accountExternalId:publisherExternalId,accountRevision:1,dataScope:'founder_sales_business',generation:null,rules:{
   version:approvedRulesVersion,
   invitations:{rolling24Hours:20,rolling7Days:140,includeManual:true,clock:'elapsed_rolling',window:{zone:'prospect_local',startHour:9,endHourExclusive:17,weekends:true,unknownTimezone:'postpone'},notes:'never',unknownRemainingAllowance:'hold'},
   directMessages:{rolling24Hours:20,includeManual:true,window:{zone:'prospect_local',weekends:false},unknownRemainingAllowance:'hold'},
@@ -59,8 +69,8 @@ it('discloses approved rules before first save and requires exact explicit polic
 });
 it('exposes selectable current owner account revisions without presenting posting verification as outreach identity',async()=>{
  const {f,call,input,accountId}=await setup();try{
- expect((await call('/social/linkedin-policy/read',{})).body).toMatchObject({accounts:[{id:accountId,externalId:'controlled-founder',displayName:'Founder',revision:1,state:'connected',identityVerified:false}]});
- expect((await call('/social/accounts/connect',{accountId,platform:'linkedin',externalId:'controlled-founder',displayName:'Updated Founder',accountKind:'profile',...command()})).status).toBe(200);
+ expect((await call('/social/linkedin-policy/read',{})).body).toMatchObject({accounts:[{id:accountId,externalId:publisherExternalId,displayName:'Founder',revision:1,state:'connected',identityVerified:false}]});
+ await observePublisherAccount(f,accountId,'Updated Founder');
  expect((await call('/social/linkedin-policy/read',{})).body).toMatchObject({accounts:[{id:accountId,revision:2,identityVerified:false}]});
  expect((await call('/social/linkedin-policy/save',{...input,accountRevision:2})).status).toBe(200);
  expect((await call('/social/linkedin-policy/read',{})).body).toMatchObject({policy:{accountRevision:2},accounts:[{id:accountId,revision:2}]});
@@ -90,7 +100,7 @@ it('enforces owner and workspace isolation with real sign-in and colliding exter
   expect((await other('/social/linkedin-policy/revoke',{...command(),expectedRevision:1})).body).toMatchObject({reason:'policy_not_saved'});
   expect((await other('/social/linkedin-policy/check-current',{expectedRevision:1,accountId,accountRevision:1})).body).toMatchObject({current:false,allowed:false});
  }
- expect((await beta('/social/accounts/connect',{accountId,platform:'linkedin',externalId:'controlled-founder',displayName:'Beta Founder',accountKind:'profile',...command()})).status).toBe(200);
+ await observePublisherAccount(f,accountId,'Beta Founder',f.beta);
  expect((await beta('/social/linkedin-policy/save',{...input,generation})).status).toBe(200);
  expect((await beta('/social/linkedin-policy/read',{})).body).toMatchObject({revision:1,policy:{generation}});
  expect((await call('/social/linkedin-policy/read',{})).body).toMatchObject({revision:1,policy:{generation:null}});
@@ -121,7 +131,7 @@ it('makes disable/revoke idempotent, retains historical command readback and ref
 it('invalidates account revisions and scope/provider changes without carrying old approval forward',async()=>{
  const {f,call,input,accountId}=await setup();try{
  expect((await call('/social/linkedin-policy/save',input)).status).toBe(200);
- expect((await call('/social/accounts/connect',{accountId,platform:'linkedin',externalId:'controlled-founder',displayName:'Updated Founder',accountKind:'profile',...command()})).status).toBe(200);
+ await observePublisherAccount(f,accountId,'Updated Founder');
  expect((await call('/social/linkedin-policy/read',{})).body).toMatchObject({revision:1,policy:{accountRevision:1},holds:expect.arrayContaining(['account_changed'])});
  expect((await call('/social/linkedin-policy/check-current',{expectedRevision:1,accountId,accountRevision:1})).body).toMatchObject({current:false,reason:'account_changed'});
  expect((await call('/social/linkedin-policy/save',{...input,...command(),expectedRevision:1})).body).toMatchObject({reason:'account_changed'});
@@ -184,7 +194,7 @@ it('rechecks policy after controlled external account observation waits and pres
  let release!:()=>void,entered!:()=>void;
  const wait=new Promise<void>(resolve=>{release=resolve;});
  const observed=new Promise<void>(resolve=>{entered=resolve;});
- const evidence={accountExternalId:'controlled-founder',observedAt:'2026-10-13T18:00:00Z',receiptId:'controlled-account-observation'};
+ const evidence={accountExternalId:publisherExternalId,observedAt:'2026-10-13T18:00:00Z',receiptId:'controlled-account-observation'};
  const server=createServer((_request,response)=>{
   entered();
   void wait.then(()=>{response.writeHead(200,{'content-type':'application/json'});response.end(JSON.stringify(evidence));});

@@ -17,3 +17,8 @@ output "access_log_bucket" {
   description = "Bucket holding load-balancer access logs."
   value       = aws_s3_bucket.access_logs.bucket
 }
+
+output "https_listener_arn" {
+  description = "Existing TLS listener for the authenticated publisher control route."
+  value       = aws_lb_listener.https.arn
+}
