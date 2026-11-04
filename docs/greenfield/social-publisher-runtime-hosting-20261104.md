@@ -31,13 +31,16 @@ permitted. A runner image missing Chrome or unable to attest confinement fails t
 preflight rather than silently falling back. These CI changes do not alter the
 remote-only production boundary or establish production-host acceptance.
 
-The failed November4 CI log exposed only `runtime_unavailable`, not Chromium's
-underlying error; therefore missing cached Chromium versus another launch failure
-is not proven by that log. Explicit installed-browser selection removes the
-implicit cache dependency, and the preflight makes remaining startup failures
-observable. The post-marker revocation test also observes submission failure while
-waiting for its marker and always releases its authority wait, instead of leaving
-an unhandled rejection until the test timeout.
+The first November4 failure log exposed only `runtime_unavailable`, so it did not
+prove a missing browser. Run41786606583 subsequently passed the installed-Chrome
+Node preflight and all21 relay cases, while Vitest's11 native-runtime cases failed.
+An actual Vite SSR transform showed the attestation callback's browser import
+rewritten to `__vite_ssr_dynamic_import__`, a Node-only helper absent from WebUI.
+The fixed attestation sends a static, non-interpolated browser program instead:
+its Linux-only `chrome://` import and native strict boolean checks remain inside
+Chromium. No source-text assertion substitutes for the real Linux runtime cases.
+The post-marker test also surfaces submission failure and releases its authority
+wait instead of leaving an unhandled rejection until timeout.
 
 ## What the primary sources establish
 

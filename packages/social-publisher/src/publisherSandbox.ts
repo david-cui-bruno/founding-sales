@@ -11,12 +11,13 @@ export async function attestPublisherSandbox(browser:Browser,mode:'local'|'linux
  try{
   const page=await context.newPage();
   await page.goto('chrome://sandbox/',{waitUntil:'load',timeout:10000});
-  const status=await page.evaluate(async modulePath=>{
-   // This module exists only inside Linux Chromium's internal WebUI, never Node.
-   // A static Node import cannot load the browser-owned chrome:// module.
-   const {loadTimeData}=await import(modulePath);
+  // Keep this WebUI program literal: Vite rewrites imports in serialized
+  // functions into Node-only helpers that do not exist inside Chromium.
+  // The Linux chrome:// module exists only in WebUI, not Node's import graph.
+  const status=await page.evaluate<{good:unknown;suid:unknown;userNs:unknown;pidNs:unknown;netNs:unknown;seccomp:unknown}>(`(async()=>{
+   const {loadTimeData}=await import('chrome://resources/js/load_time_data.js');
    return {good:loadTimeData.getBoolean('sandboxGood'),suid:loadTimeData.getBoolean('suid'),userNs:loadTimeData.getBoolean('userNs'),pidNs:loadTimeData.getBoolean('pidNs'),netNs:loadTimeData.getBoolean('netNs'),seccomp:loadTimeData.getBoolean('seccompBpf')};
-  },'chrome://resources/js/load_time_data.js');
+  })()`);
   if(status.good!==true||!(status.suid===true||status.userNs===true)||status.pidNs!==true||status.netNs!==true||status.seccomp!==true)throw new PublisherRefusal('renderer_sandbox_unavailable');
  }catch{throw new PublisherRefusal('renderer_sandbox_unavailable');}
  finally{await context.close();}
