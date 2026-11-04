@@ -66,7 +66,7 @@ ExecStart=/usr/bin/docker run --rm --name fss-social-publisher --init \
   --tmpfs /tmp:rw,noexec,nosuid,nodev,size=256m,mode=1777 --ulimit nofile=4096:4096 \
   --dns 169.254.169.253 --publish 8080:8080 --env-file /run/fss-social-publisher/runtime.env \
   --env FSS_SOCIAL_PUBLISHER_CHROMIUM_PATH=/usr/bin/chromium \
-  --health-cmd 'node -e "fetch(\"http://127.0.0.1:8080/health\").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"' \
+  --health-cmd "node -e \"fetch('http://127.0.0.1:8080/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\"" \
   --log-driver awslogs --log-opt awslogs-region=${region} \
   --log-opt awslogs-group=${log_group} --log-opt awslogs-stream=runtime \
   --entrypoint /usr/bin/env ${image} \
