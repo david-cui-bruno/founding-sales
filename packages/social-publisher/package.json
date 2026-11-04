@@ -10,7 +10,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "vitest run",
+    "test": "node --experimental-transform-types --disable-warning=ExperimentalWarning --input-type=module -e \"import {preflightPublisherFixtureBrowser} from './test/publisherFixture.ts'; await preflightPublisherFixtureBrowser();\" && vitest run",
     "host": "node --experimental-transform-types --disable-warning=ExperimentalWarning src/hostMain.ts",
     "test:host": "vitest run --config test/publisherHost.config.ts"
   },

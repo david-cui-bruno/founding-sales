@@ -1,4 +1,29 @@
 import {createServer,type Server} from 'node:http';
+import {chromium,type Browser} from 'playwright';
+import type {PublisherLocalBrowser} from '../src/publisherConfig.ts';
+import {createPrivatePublisherLaunch} from '../src/publisherNative.ts';
+import {attestPublisherSandbox} from '../src/publisherSandbox.ts';
+
+/** Use the same explicit installed-browser selection as the isolated host tests. */
+export function publisherFixtureBrowser():PublisherLocalBrowser{
+ const executablePath=process.env['FSS_SOCIAL_PUBLISHER_CHROMIUM_PATH'];
+ return {kind:'local',...(executablePath?{executablePath}:{})};
+}
+
+/** CI-only owned-browser preflight: no account state, credentials or external routes.
+ * Keep startup diagnostics here, never in the private production refusal path. */
+export async function preflightPublisherFixtureBrowser():Promise<void>{
+ const launch=await createPrivatePublisherLaunch(publisherFixtureBrowser().executablePath);
+ let browser:Browser|undefined;
+ try{
+  browser=await chromium.launch(launch.options);
+  await attestPublisherSandbox(browser,'local');
+ }catch(error){
+  throw new Error(`Owned publisher fixture browser preflight failed: ${String(error).slice(0,12000)}`);
+ }finally{
+  try{await browser?.close();}finally{await launch.close();}
+ }
+}
 
 export interface PublisherFixture {
  origin:string;close:()=>Promise<void>;

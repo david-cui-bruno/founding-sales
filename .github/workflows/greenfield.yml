@@ -36,6 +36,9 @@ jobs:
       FSS_TEST_POSTGRES_URL: postgresql://postgres:greenfield-ci@127.0.0.1:5432/postgres
       # Native vector tests install the extension only in their owned fixtures.
       FSS_TEST_REQUIRE_PGVECTOR: '1'
+      # Select the runner's installed, sandbox-capable Chrome, not an implicit
+      # Playwright cache (npm lifecycle scripts remain disabled).
+      FSS_SOCIAL_PUBLISHER_CHROMIUM_PATH: /opt/google/chrome/chrome
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:

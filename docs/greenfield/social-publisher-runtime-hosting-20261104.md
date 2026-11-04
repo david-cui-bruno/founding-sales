@@ -12,6 +12,33 @@ Constraints: no new paid browser SaaS; no `--no-sandbox`, `chromiumSandbox: fals
 
 David approved approximately$20/month for one isolated browser-only EC2 host, keeping API/worker on Fargate and reusing existing AWS networking/ECR/TLS edge. Finite native sandbox and final authenticated six-client bridged transport/firewall/shutdown probes passed; all owned AWS resources were removed. Permanent provisioning, protected ALB/TLS delivery and actual account/publication acceptance remain separate.
 
+### Controlled-DOM Linux CI browser dependency
+
+The Greenfield `ubuntu-24.04` job explicitly selects the hosted runner's installed
+Google Chrome at `/opt/google/chrome/chrome` using the existing
+`FSS_SOCIAL_PUBLISHER_CHROMIUM_PATH` setting. Both initial and replacement
+controlled-DOM fixture runtimes use that executable. Local runs may select their
+own installed browser with the same setting; when unset, Playwright still requires
+its matching browser to be installed separately. `npm ci --ignore-scripts` does not
+provision that browser, and the previous job had no browser-install/selection step.
+
+The publisher package's test command first runs an owned browser preflight using the production private launch
+options and native Linux renderer-sandbox attestation, then closes the browser and
+removes its temporary home. Startup errors are bounded to 12,000 characters in
+this account-free fixture diagnostic only; production still sanitizes failures.
+No host sandbox-policy changes, disabled confinement or Linux test skips are
+permitted. A runner image missing Chrome or unable to attest confinement fails the
+preflight rather than silently falling back. These CI changes do not alter the
+remote-only production boundary or establish production-host acceptance.
+
+The failed November4 CI log exposed only `runtime_unavailable`, not Chromium's
+underlying error; therefore missing cached Chromium versus another launch failure
+is not proven by that log. Explicit installed-browser selection removes the
+implicit cache dependency, and the preflight makes remaining startup failures
+observable. The post-marker revocation test also observes submission failure while
+waiting for its marker and always releases its authority wait, instead of leaving
+an unhandled rejection until the test timeout.
+
 ## What the primary sources establish
 
 | Evidence | Consequence / boundary |

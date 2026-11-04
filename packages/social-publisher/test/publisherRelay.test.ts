@@ -138,15 +138,39 @@ describe('authenticated publisher WebSocket relay with actual local transport',(
   expect((await incoming).data.toString()).toBe('separate context transport');
   const replacementNativeClosed=closed(replacement.upstream);replacement.client.terminate();await replacementNativeClosed;
  });
- it('accepts a full 12MiB binary message and rejects oversized messages from either side',async()=>{
-  const h=await harness();const first=await h.open();
-  const received=message(first.upstream);first.client.send(Buffer.alloc(limit,19));
-  const accepted=await received;expect(accepted.binary).toBe(true);expect(accepted.data).toEqual(Buffer.alloc(limit,19));
-  const firstClientClosed=closed(first.client),firstNativeClosed=closed(first.upstream);
-  first.client.send(Buffer.alloc(limit+1));await Promise.all([firstClientClosed,firstNativeClosed]);
-  const second=await h.open();const secondClientClosed=closed(second.client),secondNativeClosed=closed(second.upstream);
-  second.upstream.send(Buffer.alloc(limit+1));await Promise.all([secondClientClosed,secondNativeClosed]);
+ it('roundtrips a full 12MiB binary message unchanged in both directions',async()=>{
+  const h=await harness();const {client,upstream}=await h.open();
+  const payload=Buffer.alloc(limit,19);
+  for(const {source,destination} of [{source:client,destination:upstream},{source:upstream,destination:client}]){
+   const received=message(destination);source.send(payload);
+   const accepted=await received;expect(accepted.binary).toBe(true);
+   if(!Buffer.isBuffer(accepted.data))throw new Error('expected_binary_buffer');
+   expect(accepted.data.length).toBe(limit);
+   // Compare every byte natively: deep equality enumerates millions of Buffer
+   // entries and can starve transport callbacks before the close assertions run.
+   expect(accepted.data.equals(payload)).toBe(true);
+  }
  });
+ it.each(['downstream','native'])('promptly closes both peers and releases a full relay slot on %s overflow',async side=>{
+  const h=await harness();const first=await h.open();
+  for(let i=0;i<5;i++)await h.open();
+  expect((await h.upgrade()).status).toBe(503);expect(h.connections).toBe(6);
+  const source=side==='downstream'?first.client:first.upstream;
+  const destination=side==='downstream'?first.upstream:first.client;
+  let forwarded=false;destination.on('message',()=>{forwarded=true;});
+  // Observe both actual closes before sending; neither an error event nor a
+  // teardown helper is evidence that the relay rejected and released the pair.
+  const clientClosed=closed(first.client),nativeClosed=closed(first.upstream);
+  source.send(Buffer.alloc(limit+1));
+  await Promise.all([clientClosed,nativeClosed]);
+  expect(first.client.readyState).toBe(WebSocket.CLOSED);
+  expect(first.upstream.readyState).toBe(WebSocket.CLOSED);
+  expect(forwarded).toBe(false);expect(h.native.clients.size).toBe(5);
+  const replacement=await h.open();expect(h.connections).toBe(7);
+  expect((await h.upgrade()).status).toBe(503);expect(h.native.clients.size).toBe(6);
+  const received=message(replacement.upstream);replacement.client.send('released slot');
+  expect((await received).data.toString()).toBe('released slot');
+ },5000);
  it('tears down the other side on native clean closure and abrupt socket errors',async()=>{
   const h=await harness();const first=await h.open();
   const firstClosed=closed(first.client);first.upstream.close(1000);await firstClosed;

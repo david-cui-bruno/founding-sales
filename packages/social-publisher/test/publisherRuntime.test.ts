@@ -3,7 +3,7 @@ import {randomUUID,createHash} from 'node:crypto';
 import type {SocialPublisherAttempt,SocialPublisherBinding} from '@fss/contracts';
 import {SocialBrowserPublisher} from '../src/publisherRuntime.ts';
 import {sealPublisherSession,openPublisherSession,type PublisherSessionStore} from '../src/publisherSessions.ts';
-import {publisherFixture} from './publisherFixture.ts';
+import {publisherFixture,publisherFixtureBrowser} from './publisherFixture.ts';
 
 const resources:Array<()=>Promise<void>>=[];
 afterEach(async()=>{for(const close of resources.splice(0).reverse())await close();});
@@ -17,7 +17,7 @@ async function harness(){
   async save(owner,accountId,identity,newState,authority){await authority();expect(owner.workspaceId).toBe(binding.workspaceId);expect(accountId).toBe(binding.accountId);expect(identity.externalId).toBe(binding.externalId);state=newState;return binding;},
   async disconnect(){available=false;},async heartbeat(){},
  };
- const runtime=new SocialBrowserPublisher({sessions,executionSide:'worker',browser:{kind:'local'}}, {origin:fixture.origin});resources.push(()=>runtime.close());
+ const runtime=new SocialBrowserPublisher({sessions,executionSide:'worker',browser:publisherFixtureBrowser()}, {origin:fixture.origin});resources.push(()=>runtime.close());
  const publishAt=new Date(Date.now()+86400000);publishAt.setUTCSeconds(0,0);
  const attempt:SocialPublisherAttempt={binding,attemptId:randomUUID(),fingerprint:'a'.repeat(64),text:'Fictional fixture-only founder update.',publishAt:publishAt.toISOString(),image:null};
  return {fixture,runtime,attempt,sessions,disconnect:()=>{available=false;}};
@@ -35,7 +35,7 @@ describe('real isolated Chromium publisher against controlled native DOM',()=>{
   const result=await runtime.submit(attempt,authority,async()=>{expect(fixture.state.writes).toBe(0);marked=true;return true;});
   expect(marked).toBe(true);expect(result.state).toBe('scheduled');expect(result.receiptId).toBe('urn:li:activity:123456');expect(result.permalink).toBeNull();
   await runtime.close();
-  const restarted=new SocialBrowserPublisher({sessions,executionSide:'worker',browser:{kind:'local'}},{origin:fixture.origin});resources.push(()=>restarted.close());
+  const restarted=new SocialBrowserPublisher({sessions,executionSide:'worker',browser:publisherFixtureBrowser()},{origin:fixture.origin});resources.push(()=>restarted.close());
   expect((await restarted.inspect(attempt,result.receiptId,authority)).state).toBe('scheduled');
   expect((await restarted.cancel(attempt,result.receiptId!,authority)).state).toBe('cancelled');
   expect(fixture.state.writes).toBe(1);expect(fixture.state.cancelled).toBe(1);
@@ -92,7 +92,10 @@ describe('real isolated Chromium publisher against controlled native DOM',()=>{
   const waiting=Promise.withResolvers<void>(),release=Promise.withResolvers<void>();let checks=0,revoked=false;
   const check=async()=>{if(++checks===4){waiting.resolve();await release.promise;}if(revoked)throw new Error('revoked');};
   const pending=runtime.submit(attempt,check,async()=>true);
-  await waiting.promise;revoked=true;release.resolve();
+  try{
+   await Promise.race([waiting.promise,pending.then(()=>{throw new Error('submission_completed_before_post_marker_wait');})]);
+   revoked=true;
+  }finally{release.resolve();}
   expect((await pending).state).toBe('unknown');expect(fixture.state.writes).toBe(0);expect(fixture.state.uploads).toBe(0);
  },60000);
  it('inspects and cancels by opaque digest after source prose is erased',async()=>{
