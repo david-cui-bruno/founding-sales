@@ -35,6 +35,7 @@ The default `workerDueWorkSources()` registry contains exactly the following nam
 | `crm-processing-recovery` | Financial recovery of interrupted extraction, not another external dispatch. |
 | `crm-mail-backfill` | Explicitly enabled, authorized CRM backfill work. |
 | `social-drafts` | Manual requests/explicit weekly draft opt-ins and expiry, when configured; no posting authority. |
+| `social-standing` | Current explicit founder plans prepare at most3 owner-local-week slots. Guarded generation/publication requires current scoped grants, source/calibration/account and budgets; marked attempts remain inspect/cancel-only across pause, missing configuration and restart. Historical recurring authority stays inert. |
 | `outreach-replies` | Email attribution/expiry and enabled routine-reply work; registration is not sending consent. |
 | `meeting-analysis` | Eligible retained meeting analysis, when configured. |
 | `meeting-follow-through` | Follow-through from retained meeting business state. |
@@ -47,7 +48,7 @@ The default `workerDueWorkSources()` registry contains exactly the following nam
 | `send-day-close` | Closing due sender-day accounting. |
 | `retention-batch` | Due bounded retention/privacy batches. |
 | `prospect-phone-discovery-expiry` | Terminalizes pending/running phone-discovery runs whose deadline or evidence lifetime has elapsed, visiting at most 25 workspaces per pass. Enqueues no capture and grants no new authority; physical erasure remains with retention. |
-| `social-assets-cleanup` | Cleanup of eligible social assets. |
+| `social-assets-cleanup` | Durable private-object deletion/quota release, quarantined upload expiry and physical ciphertext erasure for expired publisher sessions; worker-owned, without restoring publication authority. |
 | `research-sweep` | Daily research scheduling and abandoned-run recovery. |
 | `sourcing-monitor` | Eligible sourcing-monitor work when that composition is enabled. |
 | `sourcing-callable-rank` | One `sourcing.callable_rank` per workspace per minute while a candidate with retained first-party research has no current advisory rank row (ADR0034). Database reads only: it projects up to fifty candidates per batch and upserts a rank and company host, never source text, and starts no fetch, model call or contact. |

@@ -26,11 +26,16 @@ function check(value: Policy, stage: string) {
 function candidate(stage: string): Policy {
   const value = policy(stage); value.Statement = value.Statement.filter(s => s.Sid !== SID); value.Statement.push(decrypt()); return value;
 }
-// Public source-rendered historical-shape projection, never private role readback.
-function syntheticBaseline() {
-  const rendered = spawnSync('bash', [repositoryPath('infra/scripts/policy.sh'), 'render', 'fss-prod', '--compact'], { encoding: 'utf8', env: process.env });
-  expect(rendered.status, rendered.stderr).toBe(0);
-  return { roleArn: 'arn:aws:iam::326255650484:role/fss-prod-deploy', policyName: 'fss-prod-deploy-scope', lockKeyNamePrefix: null as string | null, maxSessionDuration: 3600, policy: JSON.parse(rendered.stdout) as Policy };
+// Supplied policy fixture, deliberately independent of the prospective source template.
+function suppliedBaseline() {
+  const policy: Policy = { Version: '2012-10-17', Statement: [
+    { Sid: 'SuppliedHostLaunch', Effect: 'Allow', Action: ['ec2:RunInstances'], Resource: ['arn:aws:ec2:us-east-1:326255650484:instance/*'], Condition: { StringEquals: { 'aws:RequestTag/NamePrefix': 'fss-prod-reviewed-host', 'ec2:InstanceType': 't4g.small' } } },
+    { Sid: 'SuppliedHostResizeDeny', Effect: 'Deny', Action: 'ec2:ModifyInstanceAttribute', Resource: '*' },
+    { Sid: 'SuppliedUnrelatedRead', Effect: 'Allow', Action: 'sns:GetTopicAttributes', Resource: 'arn:aws:sns:us-east-1:326255650484:independent-topic' },
+    { Sid: 'ManageTaggedKmsKeysInThisNamespace', Effect: 'Allow', Action: 'kms:*', Resource: '*', Condition: { StringLike: { 'aws:ResourceTag/NamePrefix': 'fss-prod*' } } },
+    { Sid: 'NoDeploymentDataAccess', Effect: 'Deny', Action: ['s3:GetObject*', 'secretsmanager:GetSecretValue'], Resource: '*' },
+  ] };
+  return { roleArn: 'arn:aws:iam::326255650484:role/fss-prod-deploy', policyName: 'fss-prod-deploy-scope', lockKeyNamePrefix: null as string | null, maxSessionDuration: 3600, policy };
 }
 
 describe.each(['prepare', 'execute'])('%s existing S3 state bucket-key read contract', stage => {
@@ -181,10 +186,10 @@ describe('ordinary backend CLI existing DynamoDB lock-table CMK contract', () =>
     expect(check(value, 'execute').stderr).toContain('backend_unsupported_relevant_condition');
   });
 
-  it('preserves all eighteen supplied historical-shape statements except the existing object-read deny carveout', () => {
+  it('conserves supplied host and unrelated rights and adds only the exact backend proposal', () => {
     const directory = mkdtempSync(join(tmpdir(), 'backend-kms-baseline-'));
     try {
-      const original = syntheticBaseline(); expect(original.policy.Statement).toHaveLength(18);
+      const original = suppliedBaseline();
       const file = join(directory, 'baseline.json'); const bytes = JSON.stringify(original); writeFileSync(file, bytes);
       const result = cli(['backend-proposal', file]); expect(result.status, result.stderr).toBe(0);
       const proposal = JSON.parse(result.stdout) as { baseline: typeof original; proposed: typeof original };
@@ -192,6 +197,18 @@ describe('ordinary backend CLI existing DynamoDB lock-table CMK contract', () =>
       for (const statement of original.policy.Statement.filter(s => s.Sid !== 'NoDeploymentDataAccess')) {
         expect(proposal.proposed.policy.Statement.find(s => s.Sid === statement.Sid)).toEqual(statement);
       }
+      const deny = original.policy.Statement.find(s => s.Sid === 'NoDeploymentDataAccess')!;
+      const expected = structuredClone(original);
+      expected.policy.Statement = original.policy.Statement.flatMap<Statement>(statement => statement.Sid === deny.Sid ? [
+        { ...deny, Action: ['secretsmanager:GetSecretValue'] },
+        { Sid: 'BackendReadDenyOutsideExactObjects', Effect: 'Deny', Action: ['s3:GetObject*'], NotResource: [
+          'arn:aws:s3:::callie-sourcing-tfstate-326255650484/fss/greenfield/production/terraform.tfstate',
+          'arn:aws:s3:::callie-sourcing-tfstate-326255650484/fss/greenfield/production/terraform.tfstate.tflock',
+        ] },
+      ] : [statement]).concat(policy('execute').Statement);
+      // Full equality forbids additional host grants, removed denies, metadata changes,
+      // or a source-template replacement disguised as a backend-only proposal.
+      expect(proposal.proposed).toEqual(expected);
       expect(proposal.proposed.policy.Statement.find(s => s.Sid === SID)).toEqual(decrypt());
       expect(check(proposal.proposed.policy, 'execute').stderr).toContain('backend_lock_key_tag_required');
       const proposedFile = join(directory, 'proposed.json'); writeFileSync(proposedFile, JSON.stringify(proposal.proposed.policy));
@@ -203,12 +220,12 @@ describe('ordinary backend CLI existing DynamoDB lock-table CMK contract', () =>
       // Preserve every existing statement, including the independent S3 bucket
       // decrypt, when adding the separate DynamoDB lock-table decrypt.
       const current = structuredClone(proposal.proposed.policy); current.Statement = current.Statement.filter(s => s.Sid !== SID);
-      expect(current.Statement).toHaveLength(26); const preserved = structuredClone(current.Statement);
+      const preserved = structuredClone(current.Statement);
       writeFileSync(proposedFile, JSON.stringify(current));
       expect(validateWithMetadata({ lockKeyNamePrefix: null }).stderr).toContain('backend_required_permission_denied');
       current.Statement.push(decrypt()); writeFileSync(proposedFile, JSON.stringify(current));
       expect(validateWithMetadata({ lockKeyNamePrefix: null }).status).toBe(0);
-      expect(current.Statement.slice(0, 26)).toEqual(preserved);
+      expect(current.Statement.slice(0, preserved.length)).toEqual(preserved);
       Reflect.deleteProperty(original, 'lockKeyNamePrefix'); writeFileSync(file, JSON.stringify(original));
       expect(cli(['backend-proposal', file]).stderr).toContain('backend_lock_key_tag_required');
       for (const tag of ['fss-prod', 'fss-prod-locks', '*']) {

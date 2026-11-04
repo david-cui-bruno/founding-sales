@@ -29,3 +29,14 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "browser_origins" {
+  description = "Exact owner web origins allowed to use private signed image grants; never wildcards."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = length(var.browser_origins) <= 1 && alltrue([for origin in var.browser_origins : can(regex("^https://[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]+)?$", origin))])
+    error_message = "At most one exact HTTPS browser origin is supported."
+  }
+}

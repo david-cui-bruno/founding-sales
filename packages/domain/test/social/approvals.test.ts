@@ -5,6 +5,8 @@ import {seedTwoWorkspaces,type TwoWorkspaces} from '../db/support/fixtures.ts';
 import {repositoryContext,workspaceScope} from '../../db/workspaceScope.ts';
 import {withTransaction} from '../../db/queryable.ts';
 import {saveSocialPost,approveSocialPost,requestSocialCancellation,readSocialPost} from '../../social/posts.ts';
+import {registerSocialAsset,deleteSocialAsset} from '../../social/assets.ts';
+import {approveSanitizedMediaFixture} from './mediaFixture.ts';
 let db:TestDatabase,seed:TwoWorkspaces,accountId:string;
 const ctx=(beta=false)=>{const s=beta?seed.beta:seed.alpha;return repositoryContext(workspaceScope(s.workspaceId,{kind:'user',userId:s.admin.userId,role:'admin'}),db.session);};
 const tx=<T>(fn:()=>Promise<T>)=>withTransaction(db.session,fn);
@@ -37,12 +39,11 @@ it('keeps the actual schedule while cancellation is pending and never calls a pu
  expect(await tx(()=>requestSocialCancellation(ctx(),{postId:p.value.postId,expectedRevision:1}))).toEqual({ok:false,reason:'already_published'});
 });
 it('rejects originals, removed images, and content beyond ordinary free-account limits',async()=>{
- const {registerSocialAsset,completeSocialAsset,deleteSocialAsset}=await import('../../social/assets.ts');
  const original={sha256:'a'.repeat(64),bytes:100,mime:'image/png' as const,origin:{kind:'screenshot' as const,sourceUrl:null,usageNote:null}};
- const a=await tx(()=>registerSocialAsset(ctx(),original));if(!a.ok)throw new Error(a.reason);await tx(()=>completeSocialAsset(ctx(),{...a.value,verified:original}));
+ const a=await tx(()=>registerSocialAsset(ctx(),original));if(!a.ok)throw new Error(a.reason);
  const p=await tx(()=>saveSocialPost(ctx(),{...draft(),images:[{assetId:a.value.assetId,version:1,altText:'Test screenshot'}]}));if(!p.ok)throw new Error(p.reason);
  expect(await tx(()=>approveSocialPost(ctx(),{postId:p.value.postId,expectedRevision:1}))).toEqual({ok:false,reason:'image_unavailable'});
- const d=await tx(()=>registerSocialAsset(ctx(),{...original,assetId:a.value.assetId,expectedVersion:1,width:10,height:10}));if(!d.ok)throw new Error(d.reason);await tx(()=>completeSocialAsset(ctx(),{...d.value,verified:original}));
+ await tx(()=>approveSanitizedMediaFixture(ctx(),a.value.assetId,original.sha256,'Test screenshot'));
  const e=await tx(()=>saveSocialPost(ctx(),{...draft(),postId:p.value.postId,expectedRevision:1,images:[{assetId:a.value.assetId,version:2,altText:'Test screenshot'}]}));expect(e.ok).toBe(true);
  expect((await tx(()=>approveSocialPost(ctx(),{postId:p.value.postId,expectedRevision:2}))).ok).toBe(true);
  await tx(()=>deleteSocialAsset(ctx(),a.value.assetId));expect(await tx(()=>approveSocialPost(ctx(),{postId:p.value.postId,expectedRevision:2}))).toEqual({ok:false,reason:'image_unavailable'});

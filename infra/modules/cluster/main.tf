@@ -82,8 +82,8 @@ locals {
   # Slice BR1: the Claude models the worker may reach on Bedrock, as each US system-defined
   # inference profile and the foundation model it routes to — only the models this account
   # can call (Haiku 4.5; review BR1R, finding 1). The same pairs as
-  # `BEDROCK_MODEL_TABLE` in packages/domain/classification/modelTransport.ts
-  # (test/ops/terraformCrossChecks.check.ts holds them equal). A US profile routes to its
+  # `BEDROCK_MODEL_TABLE` in packages/domain/classification/modelTransport.ts.
+  # A US profile routes to its
   # model in us-east-1, us-east-2 and us-west-2 (`aws bedrock list-inference-profiles`),
   # and a call through it is authorized against the profile in this region AND the
   # foundation model in whichever region serves it, so the model is granted in all three
@@ -130,84 +130,6 @@ locals {
     },
   ] : statement if var.worker_model_transport == "bedrock"]
 
-  # Each task definition carries the application secrets its own process reads, by
-  # the name it reads them under, and no others (lane g81, audit S17). Until then one
-  # map went to every runtime definition, so processes that never sign anybody in
-  # held the session-signing key, the device-credential pepper and the sign-in
-  # client — the API's authentication material, which none of them reads.
-  #
-  #   * the API reads `google-gmail-oauth-client` (the Gmail callback),
-  #     `google-oidc-client` (sign-in) and `session-signing-key`
-  #     (`apps/api/src/bootstrap/deployment.ts`). `device-credential-pepper` is the
-  #     API's too: nothing reads it yet, and if anything ever does it is sign-in.
-  #   * the worker reads `google-gmail-oauth-client` (`readGmailDeployment`) and the
-  #     reply classifier's key, which it is the only process to use
-  #     (`apps/worker/src/handlers/classify.ts`) — under `FSS_LLM_CLASSIFIER_API_KEY`,
-  #     not under its logical name (see `secret_environment_names`).
-  #   * the operations tool reads `google-gmail-oauth-client` through the same
-  #     `readWorkerDeployment` the worker does, and nothing else.
-  #
-  # The database entries are not in these lists: they arrive through the two named
-  # inputs, as before, and the runtime one is added to each map below.
-  #   * the API also reads `twilio-voice` and `calcom` (call-to-booking slice W,
-  #     `apps/api/src/integrations/providers.ts`). ECS refuses to start a task whose
-  #     `secrets` block names an entry with no value, so both entries must hold a value
-  #     (`{}` is enough: the API reads an incomplete entry as "not configured") before
-  #     the apply that adds them here.
-  #   * the worker reads `calcom` too (slice M1): its optional `api_key` is the Cal.com
-  #     reconciliation's (`apps/worker/src/calcom/bookingsClient.ts`); without one the
-  #     worker reconciles nothing. The entry already holds a value in production.
-  #   * call transcription (slice C2): the worker reads `transcription` — the Deepgram key
-  #     the `call.transcribe` job uses — and `twilio-voice`, whose API key reads the call's
-  #     recording from Twilio (`packages/domain/calls/twilioRecording.ts`, the same read
-  #     the API's playback proxy makes). The API is NOT given `transcription`: it learns
-  #     whether a worker can transcribe from that worker's heartbeat (`call_transcribe`
-  #     in its detail), so the Deepgram key reaches the worker's process and no other.
-  #     `transcription` must hold a value (`{}`) before the apply that adds it, as above;
-  #     `twilio-voice` already does.
-  #   * guessed-address verification (ADR0038): the worker reads `millionverifier-api-key` — the
-  #     MillionVerifier key (`apps/worker/src/providers/millionVerifier.ts`) — as
-  #     `FSS_MILLIONVERIFIER_API_KEY`, and the API is NOT given it. Two stages: the entry is
-  #     always created (empty), but the worker is handed it only when
-  #     `worker_reads_millionverifier_api_key` is true, which is a separate change made after
-  #     the real key (a bare string) has been put in; ECS refuses a task whose secret has no value.
-  api_secret_names        = ["calcom", "device-credential-pepper", "google-gmail-oauth-client", "google-oidc-client", "session-signing-key", "twilio-voice"]
-  worker_secret_names     = ["sourcing-search", "zoom-meetings", "millionverifier-api-key", "calcom", "google-gmail-oauth-client", "llm-classifier-api-key", "transcription", "twilio-voice"]
-  operations_secret_names = ["google-gmail-oauth-client"]
-
-  # The environment variable a process reads a secret under, where that is not the
-  # secret's logical name (lane g81). The ECS `secrets` block names the variable, and
-  # until this lane the classifier's key arrived as `llm-classifier-api-key` while
-  # `CLASSIFIER_SECRET_ENVIRONMENT_VARIABLES` in
-  # `packages/domain/classification/anthropicClient.ts` reads
-  # `FSS_LLM_CLASSIFIER_API_KEY`, so the deployed worker never had a classifier.
-  secret_environment_names = {
-    "llm-classifier-api-key"  = "FSS_LLM_CLASSIFIER_API_KEY"
-    "millionverifier-api-key" = "FSS_MILLIONVERIFIER_API_KEY"
-    "sourcing-search"         = "FSS_TAVILY_API_KEY"
-  }
-
-  # The classifier has no recorded seam: handed a key, the worker calls the
-  # provider. A rehearsal fills the entry with a fixture, so only an environment that
-  # says so is handed it (`worker_reads_classifier_key`); elsewhere `classify.reply`
-  # stays unclaimed, which is what a worker with no key does by design. The MillionVerifier key
-  # has its own switch (`worker_reads_millionverifier_api_key`): it is injected only once it holds
-  # a value, whatever the classifier flag says.
-  worker_injected_secret_names = [
-    for name in local.worker_secret_names : name
-    if(name != "millionverifier-api-key" || var.worker_reads_millionverifier_api_key)
-    && (!contains(["llm-classifier-api-key", "sourcing-search"], name) || var.worker_reads_classifier_key)
-  ]
-
-  runtime_database_secret = { DATABASE_SECRET_ARN = var.app_runtime_database_secret_arn }
-
-  api_task_secrets        = merge({ for name, arn in var.secret_arns : lookup(local.secret_environment_names, name, name) => arn if contains(local.api_secret_names, name) }, local.runtime_database_secret, local.browser_task_secrets)
-  worker_task_secrets     = merge({ for name, arn in var.secret_arns : lookup(local.secret_environment_names, name, name) => arn if contains(local.worker_injected_secret_names, name) }, local.runtime_database_secret)
-  operations_task_secrets = merge({ for name, arn in var.secret_arns : lookup(local.secret_environment_names, name, name) => arn if contains(local.operations_secret_names, name) }, local.runtime_database_secret)
-
-  # An application secret no list names would be one nobody gets; a new entry in
-  # `infra/modules/secrets` must be given to the process that reads it.
-  unassigned_secret_names = sort(setsubtract(keys(var.secret_arns), concat(local.api_secret_names, local.worker_secret_names, local.operations_secret_names)))
 
   # The migration task's two references, with the names the tool reads
   # (`apps/worker/src/tools/fss/config.ts`, `TOOL_ENVIRONMENT_VARIABLES`, and
@@ -661,9 +583,10 @@ resource "aws_ecs_task_definition" "api" {
 
   container_definitions = jsonencode([
     {
-      name      = "api"
-      image     = var.api_image
-      essential = true
+      name            = "api"
+      image           = var.api_image
+      essential       = true
+      linuxParameters = { initProcessEnabled = true }
 
       portMappings = [{
         containerPort = var.container_port
@@ -683,8 +606,7 @@ resource "aws_ecs_task_definition" "api" {
       healthCheck = {
         # Liveness, never readiness (lane g81): a database outage must drain this
         # task at the target group, not restart the container. The path is
-        # LIVENESS_PATH in apps/api/src/bootstrap/readiness.ts, which
-        # test/ops/terraformCrossChecks.check.ts compares with this line.
+        # LIVENESS_PATH in apps/api/src/bootstrap/readiness.ts.
         command     = ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:' + (process.env.PORT || '8080') + '/healthz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\""]
         interval    = 15
         timeout     = 5
@@ -737,9 +659,10 @@ resource "aws_ecs_task_definition" "worker" {
 
   container_definitions = jsonencode([
     {
-      name      = "worker"
-      image     = var.worker_image
-      essential = true
+      name            = "worker"
+      image           = var.worker_image
+      essential       = true
+      linuxParameters = { initProcessEnabled = true }
 
       environment = [for name in sort(keys(local.worker_environment)) : {
         name  = name
@@ -995,7 +918,7 @@ resource "aws_iam_role_policy" "social_assets_worker" {
   count  = var.enable_social_assets ? 1 : 0
   name   = "social-assets-cleanup"
   role   = aws_iam_role.worker_task.id
-  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Action = ["s3:DeleteObject"], Resource = ["${var.social_assets_bucket_arn}/*"] }] })
+  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Action = ["s3:GetObject", "s3:DeleteObject"], Resource = ["${var.social_assets_bucket_arn}/*"] }] })
 }
 
 # AWS DescribeTaskDefinition supports no resource ARN or action-specific keys;

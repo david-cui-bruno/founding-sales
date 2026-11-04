@@ -3,7 +3,7 @@ import {createHash,randomUUID} from 'node:crypto';
 import {saveSocialPostSchema,type SaveSocialPost,type PostRevision,type SocialWorkspace} from '@fss/contracts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {recordCrmAuditEvent} from '../crm/audit.ts';
-import {socialAssetObject} from './assets.ts';
+import {socialApprovalImages} from './standingImageSnapshot.ts';
 export type SocialResult<T>={ok:true;value:T}|{ok:false;reason:string};
 export type SocialAccount={id:string;platform:'linkedin'|'facebook'|'x';external_id:string;display_name:string;account_kind:'profile'|'page';state:string;revision:number;adapter_version:string|null;verified_at:Date|string|null;max_schedule_days:number|null};
 type Row={post_id:string;revision:number;account_id:string;text:string;images:PostRevision['images'];publish_at:Date|string|null;zone:string;state:PostRevision['state'];reason:string|null};
@@ -14,6 +14,7 @@ export async function readSocialPost(ctx:RepositoryContext,id:string):Promise<Po
 export async function saveSocialPost(ctx:RepositoryContext,raw:SaveSocialPost):Promise<SocialResult<PostRevision>>{
  const user=owner(ctx);if(!user)return {ok:false,reason:'user_required'};const parsed=saveSocialPostSchema.safeParse(raw);if(!parsed.success)return {ok:false,reason:'invalid_input'};
  const input=parsed.data;const account=await readSocialAccount(ctx,input.accountId);if(!account)return {ok:false,reason:'account_not_found'};
+ if(input.postId&&(await ctx.db.query('SELECT 1 FROM social_standing_slots WHERE workspace_id=$1 AND post_id=$2 AND owner_user_id=$3',[ctx.scope.workspaceId,input.postId,user])).rows.length)return {ok:false,reason:'standing_slot_command_required'};
  let id=input.postId,revision=1;
  if(id){const current=await lockSocialPost(ctx,id);if(current===null)return {ok:false,reason:'not_found'};if(current!==input.expectedRevision)return {ok:false,reason:'stale_revision'};const post=await readSocialPost(ctx,id);if(!post)return {ok:false,reason:'not_found'};if(post.state==='published')return {ok:false,reason:'create_new_post'};if(['submitting','scheduled','unknown','cancellation_pending'].includes(post.state))return {ok:false,reason:'cancel_before_edit'};revision=current+1;
  await ctx.db.query("UPDATE social_deliveries SET state='cancelled',reason='revision_changed' WHERE workspace_id=$1 AND post_id=$2 AND revision=$3 AND state IN ('pending','preparing')",[ctx.scope.workspaceId,id,current]);
@@ -29,9 +30,8 @@ export async function socialApprovalSnapshot(ctx:RepositoryContext,post:PostRevi
 export async function socialApprovalSnapshotForWorker(ctx:RepositoryContext,post:PostRevision,ownerUserId:string):Promise<SocialResult<{account:SocialAccount;fingerprint:string;snapshot:Record<string,unknown>}>>{
  if(ctx.scope.actor.kind!=='system'||ctx.scope.actor.component!=='worker')return {ok:false,reason:'worker_required'};
  if(!(await ctx.db.query('SELECT 1 FROM social_posts WHERE workspace_id=$1 AND id=$2 AND owner_user_id=$3',[ctx.scope.workspaceId,post.postId,ownerUserId])).rows.length)return {ok:false,reason:'post_owner_mismatch'};
- if(post.images.length)return {ok:false,reason:'posting_scope_mismatch'};
  const result=await snapshotForOwner(ctx,post,ownerUserId);
- return result.ok&&(result.value.account.platform!=='linkedin'||result.value.account.account_kind!=='profile'||result.value.account.external_id!=='david-cui-589a20228')?{ok:false,reason:'posting_scope_mismatch'}:result;
+ return result.ok&&(result.value.account.platform!=='linkedin'||result.value.account.account_kind!=='profile')?{ok:false,reason:'posting_scope_mismatch'}:result;
 }
 async function snapshotForOwner(ctx:RepositoryContext,post:PostRevision,ownerUserId:string|null):Promise<SocialResult<{account:SocialAccount;fingerprint:string;snapshot:Record<string,unknown>}>>{
  const account=(await ctx.db.query<SocialAccount>('SELECT * FROM social_accounts WHERE workspace_id=$1 AND id=$2 AND owner_user_id=$3 FOR SHARE',[ctx.scope.workspaceId,post.accountId,ownerUserId])).rows[0];if(!account)return {ok:false,reason:'account_not_found'};
@@ -41,12 +41,12 @@ async function snapshotForOwner(ctx:RepositoryContext,post:PostRevision,ownerUse
  const textLimit=account.platform==='x'?280:account.platform==='linkedin'?3000:10000;
  // Official X weighted validation does not replace destination/submission authority.
  if((account.platform==='x'?!inspectXPostText(post.text).valid:[...post.text].length>textLimit)||post.images.length>(account.platform==='x'?4:account.platform==='linkedin'?1:10))return {ok:false,reason:'content_needs_edit'};
- const images:Record<string,unknown>[]=[];const seen=new Set<string>();
- for(const image of post.images){const key=`${image.assetId}:${image.version}`;if(seen.has(key))return {ok:false,reason:'duplicate_image'};seen.add(key);const object=await socialAssetObject(ctx,{assetId:image.assetId,version:image.version},'download');if(!object||object.kind!=='derivative')return {ok:false,reason:'image_unavailable'};images.push({...image,sha256:object.sha256,mime:object.mime,width:object.width,height:object.height});}
- const snapshot={account:{id:account.id,platform:account.platform,externalId:account.external_id,revision:account.revision,adapterVersion:account.adapter_version},text:post.text,images,publishAt:new Date(at).toISOString(),zone:post.zone};
+ const checkedImages=await socialApprovalImages(ctx,post,ownerUserId);if(!checkedImages.ok)return checkedImages;
+ const snapshot={account:{id:account.id,platform:account.platform,externalId:account.external_id,revision:account.revision,adapterVersion:account.adapter_version},text:post.text,images:checkedImages.value,publishAt:new Date(at).toISOString(),zone:post.zone};
  return {ok:true,value:{account,snapshot,fingerprint:createHash('sha256').update(JSON.stringify(snapshot)).digest('hex')}};
 }
 export async function approveSocialPost(ctx:RepositoryContext,input:{postId:string;expectedRevision:number}):Promise<SocialResult<{approvalId:string;fingerprint:string}>>{
+ if((await ctx.db.query('SELECT 1 FROM social_standing_slots WHERE workspace_id=$1 AND post_id=$2 AND owner_user_id=$3',[ctx.scope.workspaceId,input.postId,owner(ctx)])).rows.length)return {ok:false,reason:'standing_slot_command_required'};
  const current=await lockSocialPost(ctx,input.postId);if(current===null)return {ok:false,reason:'not_found'};if(current!==input.expectedRevision)return {ok:false,reason:'stale_revision'};
  const post=(await readSocialPost(ctx,input.postId))!;if(!['draft','approved'].includes(post.state))return {ok:false,reason:'post_not_draft'};
  const checked=await socialApprovalSnapshot(ctx,post);if(!checked.ok)return checked;
@@ -58,6 +58,7 @@ export async function approveSocialPost(ctx:RepositoryContext,input:{postId:stri
  await recordCrmAuditEvent(ctx,{action:'social.post_approved',subjectKind:'social_post',subjectId:input.postId,detail:{revision:current}});return {ok:true,value:{approvalId:id,fingerprint:checked.value.fingerprint}};
 }
 export async function requestSocialCancellation(ctx:RepositoryContext,input:{postId:string;expectedRevision:number}):Promise<SocialResult<PostRevision>>{
+ if((await ctx.db.query('SELECT 1 FROM social_standing_slots WHERE workspace_id=$1 AND post_id=$2 AND owner_user_id=$3',[ctx.scope.workspaceId,input.postId,owner(ctx)])).rows.length)return {ok:false,reason:'standing_slot_command_required'};
  const current=await lockSocialPost(ctx,input.postId);if(current===null)return {ok:false,reason:'not_found'};if(current!==input.expectedRevision)return {ok:false,reason:'stale_revision'};const post=(await readSocialPost(ctx,input.postId))!;
  if(post.state==='published')return {ok:false,reason:'already_published'};const state=['submitting','scheduled','unknown','cancellation_pending'].includes(post.state)?'cancellation_pending':'cancelled';
  await ctx.db.query('UPDATE social_post_revisions SET state=$4 WHERE workspace_id=$1 AND post_id=$2 AND revision=$3',[ctx.scope.workspaceId,input.postId,current,state]);await ctx.db.query("UPDATE social_deliveries SET state=$4,next_inspection_at=CASE WHEN $4='cancellation_pending' AND state<>'cancellation_pending' THEN now() ELSE next_inspection_at END,inspection_deadline=CASE WHEN $4='cancellation_pending' AND state<>'cancellation_pending' THEN now()+interval '24 hours' ELSE inspection_deadline END WHERE workspace_id=$1 AND post_id=$2 AND revision=$3",[ctx.scope.workspaceId,input.postId,current,state]);

@@ -1,7 +1,7 @@
 import { readFileSync, appendFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 const selection = JSON.parse(readFileSync(process.argv[2], 'utf8'));
-const allowed = new Set(['contracts', 'telemetry', 'domain', 'api', 'worker', 'web', 'ops']);
+const allowed = new Set(['contracts', 'telemetry', 'domain', 'social-publisher', 'api', 'worker', 'web', 'ops']);
 if (!Array.isArray(selection.suites) || !selection.suites.includes('ops') || selection.suites.some(suite => !allowed.has(suite))) throw new Error('Invalid required gate selection');
 function run(args, label) {
   const start = performance.now();

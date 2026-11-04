@@ -1,16 +1,15 @@
 import {z} from 'zod';
 import {commandIdSchema} from './auth.ts';
 import {uuid} from './foundationRows.ts';
-import {socialDraftRequestSchema,socialVoiceGuideRefSchema} from './social.ts';
+import {socialDraftRequestSchema} from './social.ts';
 
 /** Browser selection contains only current approved references, never guidance
  * or source prose. Native legacy request modes keep their existing contract. */
 export const socialGuidedRequestInputSchema=socialDraftRequestSchema.safeExtend({
- mode:z.literal('linkedin_grounded'),
+ mode:z.enum(['linkedin_grounded','linkedin_founder']),
  sourceRefs:z.array(z.strictObject({kind:z.literal('public'),id:uuid,revision:z.number().int().positive()})).max(10),
- factBlocks:socialDraftRequestSchema.shape.factBlocks.min(1),
- voiceGuideRef:socialVoiceGuideRefSchema,
-});
+ standingPlanRef:z.never().optional(),
+}).refine(value=>value.mode!=='linkedin_grounded'||(value.factBlocks.length>0&&value.voiceGuideRef!==undefined),'Grounded generation requires approved facts and current guide');
 export const socialGuidedRequestSavedSchema=z.strictObject({requestId:uuid});
 export const socialGuidedRequestReceiptInputSchema=z.strictObject({
  commandId:commandIdSchema,payloadSHA256:z.string().regex(/^[a-f0-9]{64}$/u),

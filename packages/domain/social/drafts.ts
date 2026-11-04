@@ -7,7 +7,6 @@ import {recordCrmAuditEvent} from '../crm/audit.ts';
 import {SOCIAL_DRAFT_MODEL,socialDraftPromptVersion,type SocialDraftConcept} from './draftPolicy.ts';
 import {readSocialDraftSources,readSocialDraftSourcesForWorker} from './draftSources.ts';
 import type {SocialResult} from './posts.ts';
-import {readPrivateVoiceGuide} from './voiceGeneration.ts';
 import {requirePrivateDraftAuthority,type PrivateDraftAuthority} from './privateDrafts.ts';
 export interface SocialDraftRow {
  [key:string]:unknown;
@@ -19,8 +18,9 @@ export interface SocialDraftRow {
 /** Called within the command transaction; the request contains no transcript text. */
 export async function requestSocialDrafts(ctx:RepositoryContext,input:SocialDraftRequest,authority?:PrivateDraftAuthority):Promise<SocialResult<{requestId:string}>>{
  if(ctx.scope.actor.kind!=='user')return {ok:false,reason:'user_required'};
- if(input.voiceGuideRef&&!authority)return {ok:false,reason:'current_principal_required'};
- const check=async()=>{if(input.voiceGuideRef&&authority)await requirePrivateDraftAuthority(authority);};
+ if(input.standingPlanRef)return {ok:false,reason:'standing_request_server_only'};
+ if((input.voiceGuideRef||input.mode==='linkedin_founder')&&!authority)return {ok:false,reason:'current_principal_required'};
+ const check=async()=>{if((input.voiceGuideRef||input.mode==='linkedin_founder')&&authority)await requirePrivateDraftAuthority(authority);};
  const owner=ctx.scope.actor.userId;
  await ctx.db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`social-drafts:${ctx.scope.workspaceId}:${owner}`]);
  const prepared=await readSocialDraftSources(ctx,input,authority);if(!prepared.ok)return prepared;
@@ -44,7 +44,8 @@ export async function readSocialDraftRequest(ctx:RepositoryContext,id:string):Pr
 export async function refreshGroundedDraftRead(ctx:RepositoryContext,row:SocialDraftRow):Promise<SocialDraftRow>{
  // Source/guide lifecycle locks precede the request row. The immutable selection
  // comes from the owner-scoped row, not an actor rewritten to impersonate them.
- await readPrivateVoiceGuide(ctx,row.owner_user_id,row.source_selection);
+ if(ctx.scope.actor.kind==='user')await readSocialDraftSources(ctx,row.source_selection);
+ else await readSocialDraftSourcesForWorker(ctx,row.owner_user_id,row.source_selection);
  // Always acquire the current request after waits, not a workspace scan snapshot.
  const locked=(await ctx.db.query<SocialDraftRow>('SELECT * FROM social_draft_requests WHERE workspace_id=$1 AND id=$2 AND owner_user_id=$3 FOR UPDATE',[ctx.scope.workspaceId,row.id,row.owner_user_id])).rows[0];
  if(!locked)return {...row,state:'review',concepts:null,reason:'source_changed_or_unavailable'};
@@ -71,7 +72,7 @@ export async function expireSocialDraftRequests(ctx:RepositoryContext):Promise<n
  if(ctx.scope.actor.kind!=='system'||!['worker','scheduler'].includes(ctx.scope.actor.component))throw new Error('system_required');
  if(!await tryLockResearchBudget(ctx))return 0;
  const at=await databaseNow(ctx);
- const pending=(await ctx.db.query<{id:string}>("SELECT id FROM social_draft_requests r WHERE workspace_id=$1 AND deadline_at<=now() AND (state IN ('queued','calling') OR (state='review' AND source_selection ? 'voiceGuideRef' AND EXISTS(SELECT 1 FROM provider_reservations p WHERE p.workspace_id=r.workspace_id AND p.subject_kind='social_draft' AND p.subject_id=r.id AND p.state IN ('reserved','calling')))) ORDER BY deadline_at,id LIMIT 100 FOR UPDATE",[ctx.scope.workspaceId])).rows;
+ const pending=(await ctx.db.query<{id:string}>("SELECT id FROM social_draft_requests r WHERE workspace_id=$1 AND deadline_at<=clock_timestamp() AND (state IN ('queued','calling') OR (state='review' AND (source_selection ? 'voiceGuideRef' OR source_selection ? 'founderInputRefs') AND EXISTS(SELECT 1 FROM provider_reservations p WHERE p.workspace_id=r.workspace_id AND p.subject_kind='social_draft' AND p.subject_id=r.id AND p.state IN ('reserved','calling')))) ORDER BY deadline_at,id LIMIT 100 FOR UPDATE",[ctx.scope.workspaceId])).rows;
  for(const row of pending)await finaliseSubjectReservations(ctx,{subjectKind:'social_draft',subjectId:row.id,at});
  if(!pending.length)return 0;
  await ctx.db.query("UPDATE social_draft_requests SET state='expired',reason='deadline_expired',updated_at=now() WHERE workspace_id=$1 AND state IN ('queued','calling') AND id=ANY($2::uuid[]) RETURNING id",[ctx.scope.workspaceId,pending.map(row=>row.id)]);

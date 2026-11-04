@@ -17,7 +17,7 @@ import {
   researchSweepJobHandler,
   researchSweepSource,
 } from '../src/handlers/research.ts';
-import { composeResearch, describeResearch } from '../src/bootstrap/main.ts';
+import { composeResearch, describeResearch } from '../src/bootstrap/researchComposition.ts';
 import { anthropicExtraction } from '../src/research/anthropicExtraction.ts';
 import { withTransaction } from '@fss/domain/db/queryable.ts';
 import { openHold, releaseHold } from '@fss/domain/policy/holds.ts';

@@ -34,9 +34,6 @@ test('signed web list/open reads actual retained owner originals without acquisi
  await expect(panel(page)).not.toContainText(input.snapshot.messages[0]!.text);await panel(page).getByRole('button',{name:`Open snapshot ${input.threadId}`,exact:true}).click();
  await expect(panel(page)).toContainText(input.snapshot.messages[0]!.text);await expect(panel(page)).toContainText('Author unknown');await expect(panel(page)).toContainText('Text coverage truncated');
  await expect(panel(page)).toContainText(input.snapshot.url);expect(routes).toEqual(['/browser/api/social/threads/list','/browser/api/social/threads/read']);
- const readiness=page.getByRole('region',{name:'Publishing readiness',exact:true});
- await readiness.getByRole('button',{name:'Read publishing readiness',exact:true}).click();
- await expect(readiness).toContainText('Publishing remains unavailable.');await expect(readiness).toContainText('No saved accounts are available in this read.');expect(await counts()).toEqual(before);
  await page.setViewportSize({width:1440,height:1000});await page.screenshot({path:testInfo.outputPath('public-thread-desktop.png'),fullPage:true});
  await page.setViewportSize({width:390,height:844});await page.screenshot({path:testInfo.outputPath('public-thread-mobile.png'),fullPage:true});await page.setViewportSize({width:1440,height:1000});
  expect((await browserRequest(page,'/social/threads/capture',{body:input})).status).toBe(404);

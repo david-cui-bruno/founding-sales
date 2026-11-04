@@ -86,6 +86,7 @@
         "arn:aws:elasticloadbalancing:${aws_region}:${aws_account_id}:listener/app/${name_prefix}*/*/*",
         "arn:aws:elasticloadbalancing:${aws_region}:${aws_account_id}:listener-rule/app/${name_prefix}*/*/*/*",
         "arn:aws:iam::${aws_account_id}:role/${name_prefix}*",
+        "arn:aws:iam::${aws_account_id}:instance-profile/${name_prefix}*",
         "arn:aws:logs:${aws_region}:${aws_account_id}:log-group:/fss/${name_prefix}*",
         "arn:aws:logs:${aws_region}:${aws_account_id}:log-group:/fss/${name_prefix}*:log-stream:*",
         "arn:aws:rds:${aws_region}:${aws_account_id}:db:${name_prefix}*",
@@ -139,6 +140,41 @@
           "aws:RequestTag/NamePrefix": "${name_prefix}*"
         }
       }
+    },
+    {
+      "Sid": "LaunchTaggedSmallSocialPublisherInstance",
+      "Effect": "Allow",
+      "Action": "ec2:RunInstances",
+      "Resource": "arn:aws:ec2:${aws_region}:${aws_account_id}:instance/*",
+      "Condition": {
+        "StringLike": { "aws:RequestTag/NamePrefix": "${name_prefix}*" },
+        "StringEquals": {
+          "aws:RequestTag/CalliePurpose": "social-publisher",
+          "ec2:InstanceType": "t4g.small"
+        }
+      }
+    },
+    {
+      "Sid": "LaunchTaggedSocialPublisherVolume",
+      "Effect": "Allow",
+      "Action": "ec2:RunInstances",
+      "Resource": "arn:aws:ec2:${aws_region}:${aws_account_id}:volume/*",
+      "Condition": {
+        "StringLike": { "aws:RequestTag/NamePrefix": "${name_prefix}*" },
+        "StringEquals": { "aws:RequestTag/CalliePurpose": "social-publisher" }
+      }
+    },
+    {
+      "Sid": "UseReviewedSocialPublisherAmi",
+      "Effect": "Allow",
+      "Action": "ec2:RunInstances",
+      "Resource": "arn:aws:ec2:${aws_region}::image/ami-0f11e0e04ccb60d0a"
+    },
+    {
+      "Sid": "CreateSocialPublisherPrimaryNetworkInterface",
+      "Effect": "Allow",
+      "Action": "ec2:RunInstances",
+      "Resource": "arn:aws:ec2:${aws_region}:${aws_account_id}:network-interface/*"
     },
     {
       "Sid": "ManageTaggedEc2ResourcesInThisNamespace",
@@ -272,7 +308,8 @@
       "Condition": {
         "ArnNotEquals": {
           "iam:PolicyARN": [
-            "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+            "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy",
+            "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
           ]
         }
       }

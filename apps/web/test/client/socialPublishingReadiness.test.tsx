@@ -30,8 +30,8 @@ const read=()=>fireEvent.click(screen.getByRole('button',{name:'Read publishing 
 it('explicit metadata read distinguishes historical connected from runner/account proof and exposes no write control',async()=>{
  const f=setup();await f.client.refresh();render(<BrowserSocialPublishingReadiness client={f.client}/>);
  expect(f.requests).toEqual([]);read();await screen.findByText('Fictional saved profile');
- expect(f.requests).toEqual([{}]);expect(screen.getByText(/Saved status: connected \(historical record\)/u)).toBeTruthy();
- expect(screen.getByText(/LinkedIn personal-profile text post is a potential target only/u)).toBeTruthy();
+ expect(f.requests).toEqual([{}]);expect(screen.getByText(/Saved status: connected\. Current intended account not verified/u)).toBeTruthy();
+ expect(screen.getByText(/Personal LinkedIn text or one approved image/u)).toBeTruthy();
  expect(screen.getAllByText('Publishing runner unavailable')).toHaveLength(2);
  expect(screen.getAllByRole('button').map(button=>button.textContent)).toEqual(['Read publishing readiness']);expect(f.storage.setItem).not.toHaveBeenCalled();
 });
@@ -49,7 +49,14 @@ it('unmount never resurrects a late account projection or sends another request'
  await waitFor(()=>expect(f.requests).toHaveLength(1));view.unmount();await act(async()=>pending.resolve(json(metadata)));
  expect(screen.queryByText('Fictional saved profile')).toBeNull();expect(f.requests).toHaveLength(1);
 });
-it.each([{}, {...metadata,publishingActivated:true},{...metadata,token:'PRIVATE'},null])('malformed or activation-shaped read refuses without retaining old metadata %#',async answer=>{
+it.each([{}, {...metadata,publishingActivated:'yes'},{...metadata,token:'PRIVATE'},null])('malformed readiness refuses without retaining old metadata %#',async answer=>{
  const f=setup();await f.client.refresh();render(<BrowserSocialPublishingReadiness client={f.client}/>);read();await screen.findByText('Fictional saved profile');
  f.answer(answer);read();await screen.findByRole('alert');expect(screen.queryByText('Fictional saved profile')).toBeNull();expect(screen.queryByText('PRIVATE')).toBeNull();expect(f.requests).toHaveLength(2);
+});
+it('renders actual current readiness instead of a hardcoded unavailable state',async()=>{
+ const f=setup();await f.client.refresh();
+ f.answer({...metadata,runnerAvailable:true,publishingActivated:true,holds:[],accounts:[{...metadata.accounts[0],currentAccountVerified:true,holds:[]}]});
+ render(<BrowserSocialPublishingReadiness client={f.client}/>);read();
+ await screen.findByText(/Runner available · Publishing activated under the current plan/u);
+ expect(screen.getByText(/Current intended account independently verified/u)).toBeTruthy();
 });

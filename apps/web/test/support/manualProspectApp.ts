@@ -10,6 +10,7 @@ import type {Server} from 'node:https';
 import pg from 'pg';
 import {asSession,CLUSTER_URL_ENVIRONMENT_VARIABLE,TEMPLATE_DATABASE_ENVIRONMENT_VARIABLE} from '@fss/domain/db/testing/testDatabase.ts';
 import {createAuthFixture,CURRENT_CLIENT_VERSION,type SeededMember} from '../../../api/test/support/authFixture.ts';
+import type {SocialMediaStore} from '../../../api/src/social/mediaStore.ts';
 import {createBrowserServer} from '../../src/server/server.ts';
 import {buildBrowserAssets} from '../../src/server/assets.ts';
 import {readBrowserHostSettings} from '../../src/server/settings.ts';
@@ -22,7 +23,7 @@ async function port():Promise<number>{const server=reserveServer();await new Pro
 /** Exclusive local manual/review harness. All actual API/auth requests SET ROLE app_runtime.
  * Signed provider navigation alone is synthetic. No bypass, workers or paid ports.
  */
-export async function startManualProspectApp(ticket:'764'|'767'|'769'|'771'|'773'|'775'|'777'|'779'|'848'='764'){
+export async function startManualProspectApp(ticket:'764'|'767'|'769'|'771'|'773'|'775'|'777'|'779'|'848'='764',media?:{store:SocialMediaStore;bucket:string;region:string}){
  assert.equal(process.env['FSS_MANUAL_PROSPECT_EXCLUSIVE_LANE'],ticket);
  const executable=process.env['FSS_LOCAL_BROWSER_EXECUTABLE'];assert(executable);await access(executable);
  const postgres=execFileSync('ps',['-axo','pid,ppid,command'],{encoding:'utf8'}).split('\n').filter(line=>/(?:^|\s)(?:\S*\/)?postgres(?:\s|$)/u.test(line)&&!/postgres: /u.test(line));
@@ -37,7 +38,7 @@ export async function startManualProspectApp(ticket:'764'|'767'|'769'|'771'|'773
   const tlsPaths=await Promise.all((await readdir(tmpdir())).filter(name=>name.startsWith('fss-browser-tls-')).map(async name=>{const path=join(tmpdir(),name);try{return (await readFile(join(path,'cert.pem'))).equals(certificate.cert)?path:null;}catch{return null;}}));
   const tlsPath=tlsPaths.find(value=>value!==null);assert(tlsPath);
   const origin=`https://localhost:${await port()}`,assets=await buildBrowserAssets();
-  const settings=readBrowserHostSettings({FSS_BROWSER_ORIGIN:origin,FSS_BROWSER_CLIENT_VERSION:CURRENT_CLIENT_VERSION,FSS_BROWSER_COOKIE_KEY_HEX:randomBytes(32).toString('hex')});
+  const settings=readBrowserHostSettings({FSS_BROWSER_ORIGIN:origin,FSS_BROWSER_CLIENT_VERSION:CURRENT_CLIENT_VERSION,FSS_BROWSER_COOKIE_KEY_HEX:randomBytes(32).toString('hex'),...(media?{FSS_SOCIAL_ASSETS_BUCKET:media.bucket,AWS_REGION:media.region}:{})});
   const config={...fixture.deps.config,oidc:{...fixture.deps.config.oidc,redirectUri:`${origin}/browser/callback`}};
   let identity:SeededMember=fixture.alpha.admin,runtimeRequests=0;
   const runtime:BrowserRuntime={...settings,withRequest:async work=>{
@@ -45,7 +46,7 @@ export async function startManualProspectApp(ticket:'764'|'767'|'769'|'771'|'773
    try{
     await client.query('SET ROLE app_runtime');assert.equal((await client.query('SELECT current_user')).rows[0]?.['current_user'],'app_runtime');runtimeRequests++;
     const db=asSession({query:async(text,values)=>client.query(text,values),connect:async()=>{},end:async()=>{}}),auth={...fixture.deps,config,db};
-    return await work({auth,api:{session:db,auth,supportedClientVersions:config.supportedClientVersions,sendingEnabled:false,production:false}});
+    return await work({auth,api:{session:db,auth,supportedClientVersions:config.supportedClientVersions,sendingEnabled:false,production:false,...(media?{socialMedia:media.store}:{})}});
    }finally{await client.end();}
   }};
   server=await createBrowserServer({settings,withRequest:runtime.withRequest,tls:certificate,assets,bodyTimeoutMs:150});

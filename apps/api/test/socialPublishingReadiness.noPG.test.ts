@@ -32,7 +32,7 @@ beforeEach(()=>{
 it('passes only the exact private-principal context into a read transaction with no command receipt',async()=>{
  expect(await routeSocialPublishingReadiness(deps)).toEqual({status:200,body:value});
  expect(db.query.mock.calls.map(call=>call[0])).toEqual(['BEGIN','COMMIT']);
- expect(mocks.read).toHaveBeenCalledWith(expect.objectContaining({scope:expect.objectContaining({workspaceId:id})}),mocks.authority);
+ expect(mocks.read).toHaveBeenCalledWith(expect.objectContaining({scope:expect.objectContaining({workspaceId:id})}),mocks.authority,undefined);
  expect(mocks.principal).toHaveBeenCalledTimes(2);
 });
 it.each(['userId','deviceId','sessionId','workspaceId','role'] as const)('withholds an assembled read when %s changes before final publication',async key=>{

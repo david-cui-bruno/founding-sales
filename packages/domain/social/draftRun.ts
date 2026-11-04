@@ -17,16 +17,18 @@ export async function postingSpend(ctx:RepositoryContext,at:string):Promise<{tod
 import type {SocialDraftRow} from './drafts.ts';
 import {readSocialDraftSourcesForWorker} from './draftSources.ts';
 import {SOCIAL_DRAFT_MODEL,socialDraftPromptVersion,SOCIAL_DRAFT_LIMITS,validateSocialDrafts,type SocialDraftInput} from './draftPolicy.ts';
-import {socialVoicePortAllowed,readPrivateVoiceGuide,type PRIVATE_VOICE_GUIDE_VERSION} from './voiceGeneration.ts';
+import {socialVoicePortAllowed,type PRIVATE_VOICE_GUIDE_VERSION} from './voiceGeneration.ts';
 import type {SocialVoiceGuideProcessingScope} from '@fss/contracts';
 export interface SocialDraftPort {
  readonly providerKey:'aws_bedrock.social_draft';
  readonly privateVoiceGuideVersion?:typeof PRIVATE_VOICE_GUIDE_VERSION;
  readonly privateVoiceGuideProcessingScope?:SocialVoiceGuideProcessingScope;
+ readonly founderInputProcessingScope?:'bedrock_haiku_founder_inputs_v1';
  countInputTokens(input:SocialDraftInput):Promise<number>;
  generate(input:SocialDraftInput):Promise<{raw:string;costCents:number;costEstimated:boolean}>;
 }
-/** No user impersonation, external call in a transaction, or automatic approval. */
+/** No impersonation or automatic approval. Standing calls retain the actual
+ * owner/plan/source fence through provider awaits so committed stops win egress. */
 export async function runSocialDraft(ctx:RepositoryContext,id:string,port:SocialDraftPort|null):Promise<void>{
  if(ctx.scope.actor.kind!=='system'||ctx.scope.actor.component!=='worker')throw new Error('worker_required');
  if(!port||port.providerKey!=='aws_bedrock.social_draft')return;
@@ -36,12 +38,22 @@ export async function runSocialDraft(ctx:RepositoryContext,id:string,port:Social
  const initial=await read();if(!initial||initial.state!=='queued')return;
  const review=async(reason:string)=>{await db.query("UPDATE social_draft_requests SET state='review',concepts=NULL,reason=$3,updated_at=now() WHERE workspace_id=$1 AND id=$2 AND state IN ('queued','calling')",[ctx.scope.workspaceId,id,reason]);};
  if(!socialVoicePortAllowed(initial.source_selection,port)){await review('voice_guide_port_unavailable');return;}
+ if(initial.source_selection.mode==='linkedin_founder'&&port.founderInputProcessingScope!=='bedrock_haiku_founder_inputs_v1'){await review('founder_input_port_unavailable');return;}
  const standing=async()=>{const reason=await retiredPostingDraftReason(ctx,id);if(reason)await review(reason);return reason===null;};
  if(!await withTransaction(db,standing))return;
  if(!await socialWeeklyRequestAllowed(ctx,initial.owner_user_id,initial.weekly_revision)){await review('weekly_setting_changed');return;}
  const source=await withTransaction(db,()=>readSocialDraftSourcesForWorker(ctx,initial.owner_user_id,initial.source_selection));
  if(!source.ok||source.value.hash!==initial.source_hash){await review('source_changed_or_unavailable');return;}
- let tokens:number;try{tokens=await port.countInputTokens(source.value.input);}catch{await review('token_count_unavailable');return;}
+ const countTokens=(input:SocialDraftInput)=>port.countInputTokens(input);
+ let tokens:number|null;
+ try{
+  tokens=initial.source_selection.standingPlanRef?await withTransaction(db,async()=>{
+   const current=await readSocialDraftSourcesForWorker(ctx,initial.owner_user_id,initial.source_selection),row=await read(true);
+   if(!current.ok||current.value.hash!==initial.source_hash||row?.state!=='queued'||row.deadline_at.getTime()<=Date.parse(await wallclock()))return null;
+   return countTokens(current.value.input);
+  }):await countTokens(source.value.input);
+ }catch{await review('token_count_unavailable');return;}
+ if(tokens===null){await review('source_changed_or_unavailable');return;}
  if(!await withTransaction(db,standing))return;
  if(!Number.isSafeInteger(tokens)||tokens<=0||tokens>100000){await review('input_over_budget');return;}
  let cents:number;try{cents=centsOf(SOCIAL_DRAFT_MODEL,{inputTokens:tokens,outputTokens:SOCIAL_DRAFT_LIMITS.maxOutputTokens},'bedrock');}catch{await review('cost_bound_unavailable');return;}
@@ -49,8 +61,8 @@ export async function runSocialDraft(ctx:RepositoryContext,id:string,port:Social
  const claim=await withTransaction(db,async()=>{
   // Guide lifecycle writers own membership/guide before request rows. Acquire
   // those same locks first, never a guide lock from beneath a request lock.
-  const guide=await readPrivateVoiceGuide(ctx,initial.owner_user_id,initial.source_selection);
-  if(!guide.ok){await review('source_changed_or_unavailable');return null;}
+  const sourceLocks=await readSocialDraftSourcesForWorker(ctx,initial.owner_user_id,initial.source_selection);
+  if(!sourceLocks.ok){await review('source_changed_or_unavailable');return null;}
   if(!await standing())return null;
   await lockResearchBudget(ctx);
   const row=await read(true),at=await wallclock();
@@ -79,7 +91,7 @@ export async function runSocialDraft(ctx:RepositoryContext,id:string,port:Social
  if(!claim)return;
  // Reservation/standing/budget waits above cannot authorize stale style. This
  // claim alone knows no generation call has happened, so it can release here.
- const handoff=await withTransaction(db,async()=>{
+ const prepareHandoff=async()=>{
   const current=await readSocialDraftSourcesForWorker(ctx,initial.owner_user_id,initial.source_selection);
   await lockResearchBudget(ctx);
   const row=await read(true);
@@ -99,14 +111,21 @@ export async function runSocialDraft(ctx:RepositoryContext,id:string,port:Social
   if(!fresh.ok||fresh.value.hash!==row.source_hash||fresh.value.hash!==source.value.hash){await review('source_changed_or_unavailable');return null;}
   if(row.deadline_at.getTime()<=Date.parse(await wallclock())){await review('deadline_expired');return null;}
   return fresh.value.input;
- });
- if(!handoff){await withTransaction(db,()=>settleAttempt(ctx,{reservationId:claim.id,at:new Date().toISOString(),outcome:{kind:'released_not_called'}}));return;}
- let outcome:{raw:string;costCents:number;costEstimated:boolean};
- try{outcome=await port.generate(handoff);}catch{outcome={raw:'',costCents:claim.cents,costEstimated:true};}
+ };
+ const invoke=async(input:SocialDraftInput)=>{
+  try{return await port.generate(input);}catch{return {raw:'',costCents:claim.cents,costEstimated:true};}
+ };
+ // The paid reservation above is already committed. Ordinary click work keeps
+ // its established transport boundary; standing authority orders pause/withdrawal
+ // with the real provider await, not merely a prepared snapshot before it.
+ const outcome=initial.source_selection.standingPlanRef
+  ?await withTransaction(db,async()=>{const input=await prepareHandoff();return input?invoke(input):null;})
+  :await (async()=>{const input=await withTransaction(db,prepareHandoff);return input?invoke(input):null;})();
+ if(!outcome){await withTransaction(db,()=>settleAttempt(ctx,{reservationId:claim.id,at:new Date().toISOString(),outcome:{kind:'released_not_called'}}));return;}
  await withTransaction(db,async()=>{await settleAttempt(ctx,{reservationId:claim.id,at:await databaseNow(ctx),outcome:outcome.costEstimated||!Number.isSafeInteger(outcome.costCents)||outcome.costCents<0?{kind:'estimated'}:{kind:'settled',cents:outcome.costCents}});});
  await withTransaction(db,async()=>{
-  const guide=await readPrivateVoiceGuide(ctx,initial.owner_user_id,initial.source_selection);
-  if(!guide.ok){await review('source_changed_or_unavailable');return;}
+  const sourceLocks=await readSocialDraftSourcesForWorker(ctx,initial.owner_user_id,initial.source_selection);
+  if(!sourceLocks.ok){await review('source_changed_or_unavailable');return;}
   if(!await standing())return;
   await lockResearchBudget(ctx);
   const row=await read(true);if(!row||row.state!=='calling')return;

@@ -31,8 +31,7 @@ locals {
   topic_name = "${var.name_prefix}-alerts"
 
   # The spec 13.3 values, versioned with the release (a change is a pull request
-  # and a plan). test/ops/terraformCrossChecks.check.ts compares the two the
-  # application code shares, canary_stale and mailbox_coverage_stale, with it.
+  # and a plan). Canary and mailbox coverage freshness are shared with runtime gates.
   #
   # severity: critical rolls into the critical composite, warning into the
   # warning composite. treat_missing_data is chosen per metric: "breaching"

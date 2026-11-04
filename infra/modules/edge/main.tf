@@ -158,7 +158,7 @@ resource "aws_lb_target_group" "api" {
   # and must not; it needs no authentication and touches no business state.
   # `/healthz` stays the container health check, so a database outage drains
   # traffic rather than restarting tasks. The matcher is 200 alone, so the 503 is
-  # unhealthy. test/ops/terraformCrossChecks.check.ts ties the path to the API. Two
+  # unhealthy. Two
   # passes fifteen seconds apart put a new task in service in about thirty seconds,
   # inside the service's sixty-second grace; three failures take it out in
   # forty-five. docs/archive/decisions/g81-the-load-balancer-asks-readiness.md.
@@ -173,9 +173,12 @@ resource "aws_lb_target_group" "api" {
     unhealthy_threshold = 3
   }
 
+  # Interactive account connection stays on its owning API process. Losing a
+  # target expires the connection; it never reconstructs or replays credentials.
   stickiness {
-    enabled = false
-    type    = "lb_cookie"
+    enabled         = true
+    type            = "lb_cookie"
+    cookie_duration = 600
   }
 
   lifecycle {

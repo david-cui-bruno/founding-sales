@@ -28,6 +28,12 @@ locals {
         Resource = ["arn:aws:iam::${local.aws_account_id}:role/${local.name_prefix}-*"]
       },
       {
+        Sid      = "ReadSocialPublisherInstanceProfile"
+        Effect   = "Allow"
+        Action   = ["iam:GetInstanceProfile"]
+        Resource = ["arn:aws:iam::${local.aws_account_id}:instance-profile/${local.name_prefix}-social-publisher"]
+      },
+      {
         Sid      = "ReadProductionSecretMetadata"
         Effect   = "Allow"
         Action   = ["secretsmanager:DescribeSecret", "secretsmanager:GetResourcePolicy"]

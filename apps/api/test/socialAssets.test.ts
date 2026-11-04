@@ -24,15 +24,15 @@ it('does not turn an authorization or network error into proof of absence',async
 it('the authenticated API does not trust browser completion metadata, and deleted/replayed registrations cannot yield URLs',async()=>{
  const {randomUUID}=await import('node:crypto');const {createAuthFixture,CURRENT_CLIENT_VERSION}=await import('./support/authFixture.ts');const {issueSessionFor}=await import('./support/sessionFixture.ts');const {dispatch}=await import('../src/server.ts');
  const f=await createAuthFixture();try{
- const token=(await issueSessionFor(f,f.alpha,f.alpha.admin)).accessToken;let headCalls=0;
- const media={presignPut:async()=>({url:'https://fixture.invalid/private',headers:{},expiresAt:new Date().toISOString()}),presignGet:async()=>({url:'https://fixture.invalid/private',expiresAt:new Date().toISOString()}),head:async()=>{headCalls++;return {found:false as const};},delete:async()=>{}};
+ const token=(await issueSessionFor(f,f.alpha,f.alpha.admin)).accessToken;let readCalls=0;
+ const media={presignPut:async()=>({url:'https://fixture.invalid/private',headers:{},expiresAt:new Date().toISOString()}),presignGet:async()=>({url:'https://fixture.invalid/private',expiresAt:new Date().toISOString()}),read:async()=>{readCalls++;return Buffer.from('not image bytes');},put:async()=>{throw Error('Malformed bytes must not produce derivative');},head:async()=>{throw Error('HEAD must never establish image validity');},delete:async()=>{}};
  const call=(path:string,body:unknown)=>dispatch({method:'POST',path,query:new URLSearchParams(),headers:{authorization:`Bearer ${token}`},body},{session:f.db,auth:f.deps,socialMedia:media,supportedClientVersions:f.deps.config.supportedClientVersions,sendingEnabled:false,upgradeUrl:'https://fixture.invalid/update'});
  const body={sha256:'a'.repeat(64),bytes:100,mime:'image/png',origin:{kind:'upload',sourceUrl:null,usageNote:null},commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION};
  const r=await call('/social/assets/register',body);expect(r.status).toBe(200);const ids=(r.body as {result:{assetId:string;uploadId:string}}).result;
  expect((await call('/social/assets/read',{assetId:ids.assetId})).body).toMatchObject({asset:{id:ids.assetId,state:'uploading'}});
  expect((await call('/social/assets/upload-url',ids)).status).toBe(200);
- expect((await call('/social/assets/complete',{...ids,commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,verified:{bytes:100,sha256:body.sha256,mime:'image/png'}})).status).toBe(400);expect(headCalls).toBe(0);
- expect((await call('/social/assets/complete',{...ids,commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION})).status).toBe(409);expect(headCalls).toBe(1);
+ expect((await call('/social/media/complete',{...ids,commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,verified:{bytes:100,sha256:body.sha256,mime:'image/png'}})).status).toBe(400);expect(readCalls).toBe(0);
+ expect((await call('/social/media/complete',{...ids,commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION})).status).toBe(409);expect(readCalls).toBe(1);
  expect((await call('/social/assets/delete',{assetId:ids.assetId,commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION})).status).toBe(200);
  expect((await call('/social/assets/register',body)).body).toMatchObject({replayed:true});
  expect((await call('/social/assets/upload-url',ids)).status).toBe(404);
@@ -61,4 +61,18 @@ it('the real S3 presigner binds upload bytes, checksum, identity and overwrite r
  expect(result.headers['if-none-match']).toBe('*');
  const download=new URL((await store.presignGet('workspace/asset/1/upload')).url);
  expect(download.searchParams.get('response-content-disposition')).toBe('attachment');
+});
+it('reads bounded actual private object bytes and writes server-computed derivative metadata',async()=>{
+ const commands:Record<string,unknown>[]=[];let response:{ContentLength:number;Body:AsyncIterable<Uint8Array>};
+ class Command{constructor(readonly input:Record<string,unknown>){commands.push(input);}}
+ const sdk:SocialMediaSdk={S3Client:class{async send(){return response;}},PutObjectCommand:Command,HeadObjectCommand:Command,GetObjectCommand:Command,DeleteObjectCommand:Command,getSignedUrl:async()=>''};
+ const store=await loadSocialMediaStore({bucket:'private',region:'us-east-1',sdk});
+ response={ContentLength:4,Body:(async function*(){yield Buffer.from('ab');yield Buffer.from('cd');})()};
+ expect(await store.read('quarantined',4)).toEqual(Buffer.from('abcd'));
+ response={ContentLength:4,Body:(async function*(){yield Buffer.from('abcde');})()};
+ await expect(store.read('quarantined',4)).rejects.toThrow('media_store_unavailable');
+ response={ContentLength:5,Body:(async function*(){yield Buffer.from('abcde');})()};
+ await expect(store.read('quarantined',4)).rejects.toThrow('media_store_unavailable');
+ await store.put({key:'sanitized',body:Buffer.from('final'),mime:'image/jpeg',sha256:'b'.repeat(64)});
+ expect(commands.at(-1)).toMatchObject({Bucket:'private',Key:'sanitized',ContentType:'image/jpeg',ContentLength:5,ChecksumSHA256:Buffer.from('b'.repeat(64),'hex').toString('base64')});
 });

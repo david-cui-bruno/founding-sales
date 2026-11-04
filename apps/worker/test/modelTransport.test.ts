@@ -14,7 +14,7 @@ import {
 } from '../src/handlers/classify.ts';
 import { readCallSummaryComposition } from '../src/handlers/callSummarize.ts';
 import { routeOfTransport } from '@fss/domain/classification/routedTransport.ts';
-import { composeResearch } from '../src/bootstrap/main.ts';
+import { composeResearch } from '../src/bootstrap/researchComposition.ts';
 import { anthropicExtraction } from '../src/research/anthropicExtraction.ts';
 
 /**

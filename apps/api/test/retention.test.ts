@@ -193,11 +193,8 @@ describe('the deletion request routes', () => {
       headers: { authorization: `Bearer ${adminToken}` },
       body: command({ requestId: shown['requestId'], previewHash: shown['previewHash'] }),
     };
-    const answer = await Promise.race([
-      dispatch(request, { ...options(), session, callAudio }),
-      new Promise<'held'>(resolve => setTimeout(() => resolve('held'), 3_000)),
-    ]);
-    expect(answer === 'held' ? 'held' : answer.status).toBe(200);
+    const answer = await dispatch(request, { ...options(), session, callAudio });
+    expect(answer.status).toBe(200);
     expect(asked).toEqual([[`calls/${gone}/attempt-1.mp3`, `calls/${gone}/attempt-1.json`]]);
     const after = queries;
     await new Promise(resolve => setTimeout(resolve, 50));

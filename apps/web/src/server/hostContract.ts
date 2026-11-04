@@ -8,7 +8,7 @@ export interface BrowserStaticAsset {
 export type BrowserAssets = ReadonlyMap<string, BrowserStaticAsset>;
 
 /** All credentials/configuration enter through the server composition, never the bundle. */
-export type BrowserHostSettings = Pick<BrowserRuntime, 'origin' | 'clientVersion' | 'cookieKey' | 'telemetry'>;
+export type BrowserHostSettings = Pick<BrowserRuntime, 'origin' | 'clientVersion' | 'cookieKey' | 'telemetry' | 'socialStorageOrigin'>;
 
 export interface BrowserHostOptions {
   readonly runtime: BrowserRuntime;

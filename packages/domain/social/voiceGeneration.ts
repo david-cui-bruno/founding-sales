@@ -24,7 +24,7 @@ export function exactPrivateVoiceGuide(ref:NonNullable<SocialDraftRequest['voice
 export async function readPrivateVoiceGuide(ctx:RepositoryContext,ownerUserId:string,selection:SocialDraftRequest,authority?:PrivateDraftAuthority):Promise<SocialResult<PrivateVoiceGuide|null>> {
  if(!selection.voiceGuideRef)return {ok:true,value:null};
  const actor=ctx.scope.actor;
- if(selection.mode!=='linkedin_grounded'||(actor.kind==='user'?actor.userId!==ownerUserId:!['worker','scheduler'].includes(actor.component)))return {ok:false,reason:'voice_guide_unavailable'};
+ if(!['linkedin_grounded','linkedin_founder'].includes(selection.mode??'')||(actor.kind==='user'?actor.userId!==ownerUserId:!['worker','scheduler'].includes(actor.component)))return {ok:false,reason:'voice_guide_unavailable'};
  const active=(await ctx.db.query("SELECT 1 FROM workspace_memberships WHERE workspace_id=$1 AND user_id=$2 AND status='active' AND role='admin' FOR SHARE",[ctx.scope.workspaceId,ownerUserId])).rows.length===1;
  if(!active)return {ok:false,reason:'owner_unavailable'};
  // Request authority is checked after ownership/guide waits but before entries

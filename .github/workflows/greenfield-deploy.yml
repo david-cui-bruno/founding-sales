@@ -262,9 +262,10 @@ jobs:
               .github/workflows/*) why='a workflow' ;;
               scripts/productionSmoke.mjs) why='the production smoke this deploy is judged by' ;;
               scripts/*[Rr]elease*) why='a release script' ;;
+              packages/social-publisher/* | Dockerfile.api | Dockerfile.api.dockerignore | package-lock.json) why='the isolated browser-host image requires a reviewed saved-plan rollout' ;;
               apps/* | packages/* | scripts/* | docs/* | test/* | tests/*) why='' ;;
-              Dockerfile.api | Dockerfile.worker | Dockerfile.api.dockerignore | Dockerfile.worker.dockerignore) why='' ;;
-              package.json | package-lock.json | certs/* | .github/dependabot.yml) why='' ;; # dependabot only opens update PRs
+              Dockerfile.worker | Dockerfile.worker.dockerignore) why='' ;;
+              package.json | certs/* | .github/dependabot.yml) why='' ;; # dependabot only opens update PRs
               tsconfig*.json | eslint*.mjs | README.md | AGENTS.md | CLAUDE.md) why='' ;;
               *) why='not an application path this deploy knows' ;;
             esac
@@ -434,6 +435,7 @@ jobs:
       - name: Save the exact plan and encrypt it for the protected application job
         env:
           FSS_PRODUCTION_FOUNDER_BROWSER_JSON: ${{ vars.FSS_PRODUCTION_FOUNDER_BROWSER_JSON }}
+          FSS_PRODUCTION_SOCIAL_PUBLISHER_JSON: ${{ vars.FSS_PRODUCTION_SOCIAL_PUBLISHER_JSON }}
         run: |
           set -euo pipefail
           node infra/scripts/reviewed-release.mjs prepare "$RUNNER_TEMP/image-digests.json" "$RUNNER_TEMP/plan-recipient.pem" \

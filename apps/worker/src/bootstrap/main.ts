@@ -26,6 +26,10 @@ import {humanReplySendJobHandler} from '../handlers/humanReply.ts';
 import {socialDraftHandler,socialDraftSource} from '../social/draftJobs.ts';
 import {socialDraftModel} from '../social/draftModel.ts';
 import {socialAssetsHandler,socialAssetsSource,socialDeletionPort,type SocialDeletionPort} from '../social/cleanup.ts';
+import {socialStandingHandler,socialStandingSource,type StandingWorkerDeps} from '../social/standingJobs.ts';
+import {createStandingDraftRequest} from '../social/standingDraftRequest.ts';
+import {socialImageReader} from '../social/mediaRead.ts';
+import {startSocialPublisher} from '@fss/social-publisher/startup';
 import {outreachReplySource} from '../handlers/outreach.ts';
 import {sourcingQualificationHandler,sourcingQualificationSource} from '../handlers/sourcingQualification.ts';
 import {prospectPhoneDiscoveryHandler,prospectPhoneDiscoverySource} from '../handlers/prospectPhoneDiscovery.ts';
@@ -82,8 +86,7 @@ import { sendDayCloseJobHandler, sendDayCloseSource } from '../handlers/sendDayC
 import { sequenceActionJobHandler, sequenceActionSource } from '../handlers/sequenceAction.ts';
 import { retentionBatchJobHandler, retentionSource } from '../handlers/retention.ts';
 import { researchHandlers, researchSweepSource, type ResearchWorkerOptions } from '../handlers/research.ts';
-import { anthropicExtraction } from '../research/anthropicExtraction.ts';
-import { researchPageFetch } from '../research/companyPageFetch.ts';
+import {composeResearch,describeResearch} from './researchComposition.ts';
 import { suppressionFinalizeJobHandler } from '../handlers/suppressionFinalize.ts';
 import { terminalStopJobHandler, terminalStopSource } from '../handlers/terminalStop.ts';
 import { telephonySweepJobHandler, telephonySweepSource } from '../handlers/telephonySweep.ts';
@@ -149,6 +152,7 @@ export interface HandlerComposition extends CaptureReadComposition {
   readonly crmExtraction?: Parameters<typeof crmExtractJobHandler>[0];
   readonly crmMailCapture?: Parameters<typeof businessMailCaptureHandler>[0] | undefined;
   readonly socialAssets?:SocialDeletionPort|null;
+  readonly socialStanding?:Omit<StandingWorkerDeps,'admitGeneration'>;
   readonly apolloDiscovery?: ApolloDiscoveryDependencies;
   /** The people source (ADR0036/0037): `own_site`, which reads the retained captures and needs no key. */
   readonly peopleProvider?: PeopleProvider;
@@ -188,39 +192,6 @@ export interface HandlerComposition extends CaptureReadComposition {
   readonly analysis?: CallAnalyzeOptions | undefined;
 }
 
-/**
- * Lane R's two ports (`docs/greenfield/research.md`).
- *
- * The page fetch is always present: it needs no credential, and a run with nothing
- * else still records the firm's own pages as evidence. The extraction is present only
- * when the classifier transport is — the **same** transport, from the same
- * `classifyWorkerOptions` call, so the key is read once per process and this file
- * never sees a value.
- *
- * The model is `DEFAULT_RESEARCH_SETTINGS.modelName` rather than a per-workspace read,
- * because `research_settings_model_known` admits exactly one model in v1 and
- * `pricing.ts` has exactly one price row. The day a second model is added, this
- * becomes a per-run construction and the CHECK, the price table and this line move
- * together.
- */
-export function composeResearch(classifier: ClassifyWorkerOptions | undefined): ResearchWorkerOptions {
-  const pageFetch = researchPageFetch();
-  if (classifier === undefined) return { pageFetch };
-  return {
-    pageFetch,
-    // No model here: the model and the output bound travel with each request, from the
-    // `provider_reservations` row that priced it. A model fixed at composition was a
-    // second answer to "what is this call?" that the money did not know about.
-    extraction: anthropicExtraction({ transport: classifier.transport }),
-  };
-}
-
-/** The startup line. Says whether the extraction port is configured, never with what. */
-export function describeResearch(options: ResearchWorkerOptions | undefined): {
-  readonly research_extraction_configured: boolean;
-} {
-  return { research_extraction_configured: options?.extraction !== undefined };
-}
 
 /**
  * Exported for the upgrade test (`npm run upgrade:test`), which builds the registry
@@ -301,6 +272,7 @@ export function registerHandlers(
   // the opposite of `classify.reply`, and the difference is that a classification
   // with no model has nothing at all to record.
   registry.register(socialDraftHandler(composition.classifier?.processEnabled?socialDraftModel(composition.classifier.transport):null));
+  registry.register(socialStandingHandler({...composition.socialStanding??{publisher:null,readImage:socialImageReader({})},admitGeneration:createStandingDraftRequest}));
   // Tavily discovery reads list pages through the same research fetcher as qualification.
   const search=composition.discovery&&composition.research?{provider:composition.discovery,pageFetch:composition.research.pageFetch}:undefined;
   if(search||composition.apolloDiscovery)registry.register(sourcingDiscoveryHandler(search,composition.apolloDiscovery));
@@ -495,9 +467,10 @@ export function readTranscriptionComposition(
 }
 
 /** Which optional sources materialize work, from what this worker composed. */
-export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom' | 'transcription' | 'summary' | 'analysis' | 'meetingTranscription' | 'meetingAnalysis' | 'meetingAutoRecording'> & Partial<Pick<HandlerComposition,'research'|'discovery'|'apolloDiscovery'|'peopleProvider'|'classifier'|'crmExtraction'|'crmCaptureRead'>>): {
+export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom' | 'transcription' | 'summary' | 'analysis' | 'meetingTranscription' | 'meetingAnalysis' | 'meetingAutoRecording'> & Partial<Pick<HandlerComposition,'research'|'discovery'|'apolloDiscovery'|'peopleProvider'|'classifier'|'crmExtraction'|'crmCaptureRead'|'socialStanding'>>): {
   readonly crmMailProcessing?:CrmMailEvidencePort; readonly crmCaptureRead?:boolean;
   readonly socialDraft: boolean;
+  readonly socialStanding: boolean;
   readonly qualification: boolean;
   readonly discovery: boolean;
   readonly apolloDiscovery?: ApolloBinding;
@@ -515,6 +488,7 @@ export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom'
   return {
     ...composition.crmExtraction?.mailEvidence===undefined?{}:{crmMailProcessing:composition.crmExtraction.mailEvidence},
     socialDraft: composition.classifier?.processEnabled===true, crmCaptureRead:composition.crmCaptureRead!==undefined,
+    socialStanding:composition.socialStanding?.publisher!=null&&composition.classifier?.processEnabled===true,
     qualification: composition.research !== undefined && composition.classifier?.processEnabled===true,
     discovery: composition.discovery !== undefined && composition.research !== undefined,
     ...composition.apolloDiscovery?{apolloDiscovery:{accountRef:composition.apolloDiscovery.accountRef,keyRef:composition.apolloDiscovery.keyRef}}:{},
@@ -549,6 +523,7 @@ export function workerDueWorkSources(
     readonly crmMailProcessing?:CrmMailEvidencePort; readonly crmCaptureRead?:boolean;
     readonly crmMailBackfill?:boolean;
     readonly socialDraft?: boolean;
+    readonly socialStanding?: boolean;
     readonly qualification?: boolean;
     readonly discovery?: boolean;
     readonly apolloDiscovery?: ApolloBinding;
@@ -571,6 +546,7 @@ export function workerDueWorkSources(
     crmMailBackfillSource(options.crmMailBackfill===true),
     ...options.crmMailProcessing===undefined?[]:[crmMailIntentSource(options.crmMailProcessing)],
     socialDraftSource(options.socialDraft===true),
+    socialStandingSource(options.socialStanding===true),
     outreachReplySource(),
     meetingAnalysesSource(options.meetingAnalysis === true),
     meetingFollowThroughSource(),
@@ -701,11 +677,18 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
   const crmRuntime=createCrmCapabilityRuntime(crmConfiguration,{implementationCommit:buildCommit(environment),imageDigest:identity.digest,side:'worker',schemaVersion:REQUIRED_SCHEMA,gmailAvailable:deployment.gmail!==undefined});
   const crm=await composeCrmCapabilities({configuration:crmConfiguration,runtime:crmRuntime,openSession:async()=>{const client=new pg.Client({connectionString:config.database.connectionString,application_name:'fss-crm-authority'});await client.connect();return {session:asSession(client),close:()=>client.end()};},...deployment.gmail?{gmail:{...deployment.gmail,openSession:async()=>{const client=new pg.Client({connectionString:config.database.connectionString,application_name:'fss-crm-oauth'});await client.connect();return {session:asSession(client),close:()=>client.end()};}}}:{}});
   const apolloDiscovery=apolloFromEnvironment(environment),addressVerifier=millionVerifierFromEnvironment(environment);
+  const publisherRuntime=await startSocialPublisher({
+    environment,
+    executionSide:'worker',
+    openSession:async()=>{const client=new pg.Client({connectionString:config.database.connectionString,application_name:'fss-social-publisher'});await client.connect();return {session:asSession(client),close:()=>client.end()};},
+    onHeartbeatError:()=>log.log('error','social_publisher_heartbeat_failed',{}),
+  });
   const composition: HandlerComposition = {
     ...composed,
     ...crm.handlers,
     ...composed.mail&&crmConfiguration.capture?{mail:{...composed.mail,businessMailObserver:crm.observer}}:{},
     socialAssets:await socialDeletionPort(environment),
+    socialStanding:{publisher:publisherRuntime?.publisher??null,readImage:socialImageReader(environment)},
     ...apolloDiscovery?{apolloDiscovery}:{},
     peopleProvider:ownSitePeople(),
     ...addressVerifier?{addressVerifier}:{},
@@ -782,6 +765,7 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
     log.log('error', 'worker_failed', errorFields(error));
     return WORKER_EXIT_CODES.databaseUnreachable;
   } finally {
+    await publisherRuntime?.stop();
     for (const client of clients) await client.end().catch(() => undefined);
     await flushTechnicalErrors();
   }

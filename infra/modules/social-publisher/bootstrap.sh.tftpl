@@ -1,0 +1,85 @@
+#!/bin/bash
+set -euo pipefail
+umask 077
+
+dnf install -y docker
+systemctl enable --now docker
+install -d -m 0700 /etc/fss-social-publisher /run/fss-social-publisher
+printf '%s' '${seccomp_base64}' | base64 --decode > /etc/fss-social-publisher/seccomp.json
+
+cat > /usr/local/sbin/fss-social-publisher-network <<'NETWORK'
+#!/bin/bash
+set -euo pipefail
+# Only browser-container egress is filtered. Established load-balancer replies
+# remain valid; new connections to IMDS, the host and private services do not.
+iptables -N FSS-SOCIAL-EGRESS 2>/dev/null || true
+iptables -F FSS-SOCIAL-EGRESS
+iptables -A FSS-SOCIAL-EGRESS -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+iptables -A FSS-SOCIAL-EGRESS -d 169.254.169.253/32 -p udp --dport 53 -j RETURN
+iptables -A FSS-SOCIAL-EGRESS -d 169.254.169.253/32 -p tcp --dport 53 -j RETURN
+for cidr in 0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16 224.0.0.0/4 240.0.0.0/4; do
+  iptables -A FSS-SOCIAL-EGRESS -d "$cidr" -j DROP
+done
+iptables -A FSS-SOCIAL-EGRESS -j RETURN
+iptables -C DOCKER-USER -i docker0 -j FSS-SOCIAL-EGRESS 2>/dev/null || iptables -I DOCKER-USER 1 -i docker0 -j FSS-SOCIAL-EGRESS
+iptables -N FSS-SOCIAL-HOST 2>/dev/null || true
+iptables -F FSS-SOCIAL-HOST
+iptables -A FSS-SOCIAL-HOST -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+iptables -A FSS-SOCIAL-HOST -j DROP
+iptables -C INPUT -i docker0 -j FSS-SOCIAL-HOST 2>/dev/null || iptables -I INPUT 1 -i docker0 -j FSS-SOCIAL-HOST
+NETWORK
+chmod 0700 /usr/local/sbin/fss-social-publisher-network
+
+cat > /usr/local/sbin/fss-social-publisher-prepare <<'PREPARE'
+#!/bin/bash
+set -euo pipefail
+umask 077
+install -d -m 0700 /run/fss-social-publisher
+/usr/local/sbin/fss-social-publisher-network
+control=$(aws secretsmanager get-secret-value --region '${region}' --secret-id '${control_secret_arn}' --query SecretString --output text)
+[[ "$control" =~ ^[A-Za-z0-9+/]{43}=$ ]]
+printf 'FSS_SOCIAL_PUBLISHER_TOKEN=%s\n' "$control" > /run/fss-social-publisher/runtime.env
+unset control
+export DOCKER_CONFIG=/run/fss-social-publisher/ecr
+trap 'rm -rf /run/fss-social-publisher/ecr' EXIT
+aws ecr get-login-password --region '${region}' | docker login --username AWS --password-stdin '${registry}' >/dev/null 2>&1
+docker pull '${image}' >/dev/null
+PREPARE
+chmod 0700 /usr/local/sbin/fss-social-publisher-prepare
+
+cat > /etc/systemd/system/fss-social-publisher.service <<'UNIT'
+[Unit]
+Description=Isolated Social browser runtime
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStartPre=/usr/local/sbin/fss-social-publisher-prepare
+ExecStart=/usr/bin/docker run --rm --name fss-social-publisher --init \
+  --user 1000:1000 --read-only --cap-drop ALL --network bridge \
+  --security-opt no-new-privileges --security-opt seccomp=/etc/fss-social-publisher/seccomp.json \
+  --pids-limit 512 --memory 1280m --memory-swap 1280m --cpus 1.5 --shm-size 256m \
+  --tmpfs /tmp:rw,noexec,nosuid,nodev,size=256m,mode=1777 --ulimit nofile=4096:4096 \
+  --dns 169.254.169.253 --publish 8080:8080 --env-file /run/fss-social-publisher/runtime.env \
+  --env FSS_SOCIAL_PUBLISHER_CHROMIUM_PATH=/usr/bin/chromium \
+  --health-cmd 'node -e "fetch(\"http://127.0.0.1:8080/health\").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"' \
+  --log-driver awslogs --log-opt awslogs-region=${region} \
+  --log-opt awslogs-group=${log_group} --log-opt awslogs-stream=runtime \
+  --entrypoint /usr/bin/env ${image} \
+  -u FSS_ROLE -u PGSSLMODE -u FSS_BUILD_COMMIT -u FSS_SENTRY_DSN -u FSS_SENTRY_BROWSER_DSN \
+  node --experimental-transform-types --disable-warning=ExperimentalWarning packages/social-publisher/src/hostMain.ts
+ExecStop=/usr/bin/docker stop --time 20 fss-social-publisher
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=300
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+systemctl daemon-reload
+systemctl enable --now fss-social-publisher.service

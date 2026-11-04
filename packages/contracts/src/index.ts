@@ -129,3 +129,7 @@ export * from './socialPublicThreads.ts';
 
 export * from './prospectPriority.ts';
 export * from './preparedProspects.ts';
+export * from './socialFounderInputs.ts';
+export * from './socialApprovedMedia.ts';
+export * from './socialPublisher.ts';
+export * from './socialStandingPlan.ts';

@@ -1,8 +1,6 @@
 # Mocked attributes stay unknown for the whole plan phase, as a real provider's
 # are. Nothing below may compare one; the plan runs read declared arguments.
-# The threshold values themselves are literals in main.tf's alarm map (spec 13.3);
-# canary_stale and mailbox_coverage_stale are compared with the code by
-# test/ops/terraformCrossChecks.check.ts.
+# Threshold values are declared in main.tf's alarm map (spec 13.3).
 mock_provider "aws" {
   override_during = apply
 

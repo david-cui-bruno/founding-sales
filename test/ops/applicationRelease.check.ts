@@ -354,6 +354,11 @@ describe('additive protected application release', () => {
     expect((await h.run()).reason).toBe('oneoff_baseline_image_changed');
     expect(h.calls.some(c => c.args[1] === 'register-task-definition')).toBe(false);
   });
+  it('refuses a reviewed browser-host image change before any application write', async () => {
+    const h = harness({ fault: 'host-image-review' }); const result = await h.run();
+    expect(result).toMatchObject({ outcome: 'refused', reason: 'reviewed_infrastructure_required', writesStarted: false, migrationStarted: false });
+    expect(h.calls.some(c => c.args[1] === 'register-task-definition' || c.args[1] === 'run-task' || c.args[1] === 'update-service')).toBe(false);
+  });
   it.each(['true', '', 'FALSE'])('refuses process-local hold %s without any write', async hold => {
     const h = harness(); h.env['FSS_RELEASE_HOLD'] = hold;
     expect((await release.runRelease(h.io, h.env)).outcome).toBe('refused'); expect(h.calls).toHaveLength(0);
