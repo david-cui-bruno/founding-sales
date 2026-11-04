@@ -65,6 +65,12 @@ export function postgresPublisherSessions(db:Queryable,key:Buffer):PublisherSess
    await db.query("UPDATE social_publisher_sessions SET state='disconnected',encrypted_state=NULL,revision=revision+1 WHERE workspace_id=$1 AND account_id=$2 AND owner_user_id=$3",[owner.workspaceId,accountId,owner.ownerUserId]);
    await authority();
   });},
-  async heartbeat(executionSide,version){await db.query(`INSERT INTO social_publisher_runtime(id,execution_side,observed_at,expires_at,chromium_version) VALUES($1,$2,clock_timestamp(),clock_timestamp()+interval '90 seconds',$3) ON CONFLICT(id,execution_side) DO UPDATE SET observed_at=clock_timestamp(),expires_at=clock_timestamp()+interval '90 seconds',chromium_version=$3`,[SOCIAL_BROWSER_ADAPTER,executionSide,version]);},
+  async heartbeat(executionSide,version){
+   // Saving an observation must not extend its ninety-second freshness window.
+   await db.query(`WITH instant AS MATERIALIZED(SELECT clock_timestamp() AS at)
+    INSERT INTO social_publisher_runtime(id,execution_side,observed_at,expires_at,chromium_version)
+    SELECT $1,$2,at,at+interval '90 seconds',$3 FROM instant WHERE true
+    ON CONFLICT(id,execution_side) DO UPDATE SET observed_at=EXCLUDED.observed_at,expires_at=EXCLUDED.expires_at,chromium_version=EXCLUDED.chromium_version`,[SOCIAL_BROWSER_ADAPTER,executionSide,version]);
+  },
  };
 }
