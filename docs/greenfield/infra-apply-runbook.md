@@ -437,46 +437,31 @@ The RDS instance takes 10-20 minutes to become available with Multi-AZ. The ECS 
 
 ### 3.3 Put the secret values in
 
-```bash
-aws secretsmanager put-secret-value --secret-id fss-prod/google-oidc-client --secret-string file:///dev/stdin
-# paste, then Ctrl-D. Repeat for each entry in 1.4.
-```
+Keep secret values in memory or a mode0600 regular file inside a private directory. Give the AWS CLI a `file://` reference, never the value as an argument or console output, and remove the payload after verified storage. `file:///dev/stdin` is not reliable in every launcher; a failed parameter-file read is not a successful secret write. Retain prior immutable versions before replacement.
 
-Use `file:///dev/stdin` rather than `--secret-string '<value>'` so the value never reaches shell history or the process table.
-
-**Two of the seven entries are database identities, and they come first — before 3.2a, because the migration task cannot start without them.**
+**The two database identities come first, before any protected migration/authentication task.**
 
 | Entry | What goes in it | Who reads it |
 |---|---|---|
 | `fss-prod/migration-database` | the RDS-managed master user's `username` and `password`, with this instance's `host`, `port` and `dbname` (the master JSON carries only the first two; `fss migrate` needs all five) | the migration execution role, and nothing else in the cluster |
 | `fss-prod/app-runtime-database` | `{"username":"app_runtime_login","password":"<48 random bytes>","host":"<db endpoint host>","port":5432,"dbname":"<db name>"}` | the two services' execution roles, as `DATABASE_SECRET_ARN`; and the migration task, which is what creates the login user |
 
-```bash
-# The master credentials, copied from the entry RDS manages into the one the
-# migration task reads. Neither value is echoed and neither reaches the process table.
-aws secretsmanager get-secret-value \
-  --secret-id "$(terraform -chdir=infra/roots/production output -raw database_master_secret_arn)" \
-  --query SecretString --output text \
-| aws secretsmanager put-secret-value \
-    --secret-id fss-prod/migration-database --secret-string file:///dev/stdin
+For the initial migration entry, combine the authoritative RDS-managed `username` and `password` with the current instance's `host`, `port` and `dbname`. Do not copy the two-field master JSON over the required five-field entry. Generate the runtime identity's password without displaying it and store its separate five-field tuple; migration-mirror maintenance never replaces a working runtime credential.
 
-# The runtime user. You choose the password; nothing else ever sees it.
-openssl rand -base64 48        # copy this
-aws secretsmanager put-secret-value --secret-id fss-prod/app-runtime-database \
-  --secret-string file:///dev/stdin
-# paste {"username":"app_runtime_login","password":"…","host":"…","port":5432,"dbname":"…"}, then Ctrl-D.
-```
+RDS-managed master rotation does not synchronize the migration mirror. If the unchanged native authentication guard reports PostgreSQL28P01, compare the canonical and mirror versions/identity/endpoint without reflecting values. A reviewed mirror-only refresh:
+
+1. Rechecks both current versions and retains the old mirror version under a unique restore label. Its stale password is historical custody, not a working database rollback.
+2. Preserves the mirror's username, host, port and database; replaces only its password from the current canonical RDS-managed secret.
+3. Stages one uniquely identified noncurrent candidate, verifies its exact value/version, rechecks the canonical current version, then moves `AWSCURRENT` with the observed old mirror version as `RemoveFromVersionId`. A concurrent change refuses; no unconditional retry.
+4. Verifies current/version/value and retained-old-version custody, removes only its temporary candidate label and private payload, then passes the unchanged fresh native read-only authentication guard before stopping services.
+
+This repairs the existing mirror contract; it neither resets the database password nor provides ongoing rotation synchronization. It grants no task direct access to the RDS-managed master secret and changes no runtime credential.
 
 Why the master credentials, and why this is not a permanent exception: migration 0001 creates `app_runtime` and `migration` as `NOLOGIN` **group** roles, so on a database that has never been migrated there is no login user that can run DDL and none can be created — the database is private and nothing can reach it. The master is the one credential that exists. `fss migrate` runs as it once, creating the group roles; `fss admin database-users ensure` then creates the `app_runtime_login` user the services connect as and grants `migration` to the master, so every later `fss migrate` passes its membership check for a reason rather than by the absence of one.
 
 What this buys is the boundary David asked for on 21 September: **nothing in the cluster can read the RDS-managed master secret.** The two services resolve `app-runtime-database` and cannot resolve `migration-database`; the migration task resolves `migration-database` and holds no journal, no bucket and no KMS key beyond the one that decrypts its own entry. `infra/modules/cluster/tests/migration_identity.tftest.hcl` asserts all four halves offline.
 
-Then force a new deployment so the tasks pick the values up:
-
-```bash
-aws ecs update-service --cluster fss-prod-cluster --service fss-prod-api --force-new-deployment
-aws ecs update-service --cluster fss-prod-cluster --service fss-prod-worker --force-new-deployment
-```
+A mirror-only password refresh requires **no API/worker restart**: their runtime credential did not change. Fresh native authentication/migration tasks resolve the updated mirror. Any subsequent production rollout follows the existing hosted release workflow and its current guards, not a direct ECS restart.
 
 ### 3.4 DNS
 
