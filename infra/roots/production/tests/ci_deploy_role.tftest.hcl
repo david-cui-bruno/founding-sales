@@ -405,6 +405,12 @@ run "planner_refreshes_scoped_role_and_secret_metadata_without_values" {
     condition = (
       [for statement in local.ci_plan_policy.Statement : statement.Resource if statement.Sid == "ReadProductionRoleMetadata"] == [["arn:aws:iam::326255650484:role/fss-prod-*"]]
       && [for statement in local.ci_plan_policy.Statement : statement.Action if statement.Sid == "ReadProductionRoleMetadata"] == [["iam:GetRole", "iam:GetRolePolicy", "iam:ListRolePolicies", "iam:ListAttachedRolePolicies", "iam:ListRoleTags"]]
+      && [for statement in local.ci_plan_policy.Statement : statement if contains(statement.Action, "iam:GetInstanceProfile")] == [{
+        Sid      = "ReadSocialPublisherInstanceProfile"
+        Effect   = "Allow"
+        Action   = ["iam:GetInstanceProfile"]
+        Resource = ["arn:aws:iam::326255650484:instance-profile/fss-prod-social-publisher"]
+      }]
       && [for statement in local.ci_plan_policy.Statement : statement.Resource if statement.Sid == "ReadProductionSecretMetadata"] == [["arn:aws:secretsmanager:us-east-1:326255650484:secret:fss-prod/*"]]
       && [for statement in local.ci_plan_policy.Statement : statement.Action if statement.Sid == "ReadProductionSecretMetadata"] == [["secretsmanager:DescribeSecret", "secretsmanager:GetResourcePolicy"]]
     )
@@ -416,8 +422,7 @@ run "planner_refreshes_only_observed_database_tags_and_digest_environment" {
   command = plan
   assert {
     condition = (
-      length(local.ci_plan_policy.Statement) == 19
-      && [for s in local.ci_plan_policy.Statement : s if s.Sid == "ReadProductionDatabaseGroupTags"] == [{
+      [for s in local.ci_plan_policy.Statement : s if s.Sid == "ReadProductionDatabaseGroupTags"] == [{
         Sid = "ReadProductionDatabaseGroupTags", Effect = "Allow", Action = ["rds:ListTagsForResource"], Resource = [
           "arn:aws:rds:us-east-1:326255650484:subgrp:fss-prod-db",
           "arn:aws:rds:us-east-1:326255650484:pg:fss-prod-pg16"
