@@ -6,6 +6,9 @@ import { QualificationCustody } from './QualificationPending.ts';
 import { saveMeetingNotesSchema, qualifiedResearchSelectionSchema, uuid, type QualifiedResearchSelection, type SaveMeetingNotes } from '@fss/contracts';
 import { RESEARCH_PENDING_KEY, researchPendingSchema, type PendingResearch } from './ResearchPending.ts';
 import { BROWSER_CSRF_HEADER, BROWSER_PATHS, BROWSER_REVISION_HEADER, browserApiPathAllowed, browserSessionSchema, browserSignInSchema, type BrowserSession } from '../shared/browserContract.ts';
+import {socialFounderInputListSchema,socialFounderInputViewSchema,socialCalibrationReadSchema,socialFounderReceiptSchema,socialFounderInputListInputSchema,socialFounderInputReadInputSchema,socialFounderReceiptInputSchema} from '@fss/contracts';
+import {founderSaveResultSchema,calibrationFinishResultSchema,founderSaveBrowserInputSchema,calibrationFinishBrowserInputSchema} from '../shared/socialBrowserContract.ts';
+import {socialMediaUploadUrlSchema} from '../shared/socialMediaBrowserContract.ts';
 
 export const PENDING_KEY = 'callie.browser.pending-notes.v1';
 const pendingSchema = z.strictObject({ identity: z.string(), commandId: uuid, draft: saveMeetingNotesSchema });
@@ -83,11 +86,21 @@ export class BrowserClient {
     try { this.options.storage.removeItem(PENDING_KEY); } catch { /* Fail closed: no persisted value is trusted without current identity. */ }
   }
   invalidate(broadcast = true): void {
+    const previous=this.session;
+    if(previous?.status==='signed_in'){
+      for(const kind of ['input','calibration']){
+        const key=`callie.social-founder.${kind}:`+JSON.stringify([previous.workspaceId,previous.userId,previous.deviceId]);
+        try{this.options.storage.removeItem(key);}catch{/* Invalidated owner cannot reuse receipt custody. */}
+      }
+    }
     clearTimeout(this.expiryTimer);
     this.generation += 1;
     this.session = null;
     this.manualProspects.clear(); this.manualActivity.clear(); this.qualification.clear(); this.priority.clear();
     try { this.options.storage.removeItem(RESEARCH_PENDING_KEY); } catch { /* Invalid identity cannot use retained custody. */ }
+    for(const key of ['callie.browser.pending-social-media.v1','callie.browser.pending-social-standing.v1']){
+      try{this.options.storage.removeItem(key);}catch{/* Invalid identity cannot use retained opaque custody. */}
+    }
     this.removePending();
     this.emit();
     if (broadcast) this.options.channel?.postMessage({ type: 'invalidate' });
@@ -189,6 +202,45 @@ export class BrowserClient {
     const result = schema.safeParse(raw);
     if (!result.success) throw new BrowserBoundaryError('invalid_response');
     return result.data;
+  }
+  socialFounderInputs(input:z.input<typeof socialFounderInputListInputSchema>={}){
+    return this.request('/social/inputs/list',socialFounderInputListSchema,socialFounderInputListInputSchema.parse(input));
+  }
+  socialFounderInput(input:z.input<typeof socialFounderInputReadInputSchema>){
+    return this.request('/social/inputs/read',z.strictObject({input:socialFounderInputViewSchema}),socialFounderInputReadInputSchema.parse(input));
+  }
+  saveSocialFounderInput(command:z.input<typeof founderSaveBrowserInputSchema>){
+    return this.request('/social/inputs/save',founderSaveResultSchema,founderSaveBrowserInputSchema.parse(command));
+  }
+  socialCalibration(){return this.request('/social/calibration/read',socialCalibrationReadSchema,{});}
+  finishSocialCalibration(command:z.input<typeof calibrationFinishBrowserInputSchema>){
+    return this.request('/social/calibration/finish',calibrationFinishResultSchema,calibrationFinishBrowserInputSchema.parse(command));
+  }
+  socialFounderReceipt(input:z.input<typeof socialFounderReceiptInputSchema>){
+    return this.request('/social/founder/receipt',socialFounderReceiptSchema,socialFounderReceiptInputSchema.parse(input));
+  }
+  /** The URL is acquired from the signed gateway, never admitted from a renderer argument. */
+  async uploadSocialAsset(input:{assetId:string;uploadId:string},file:File,beforeDispatch:()=>void):Promise<void>{
+    const epoch=this.generation;
+    const grant=await this.request('/social/assets/upload-url',socialMediaUploadUrlSchema,input,beforeDispatch);
+    this.check(epoch);
+    const url=new URL(grant.url);
+    if(url.protocol!=='https:'||url.username||url.password||url.hash||Date.parse(grant.expiresAt)<=Date.now())throw new BrowserBoundaryError('invalid_response');
+    const headers:Record<string,string>={};
+    const allowed:Readonly<Record<string,true>>={'content-type':true,'content-length':true,'x-amz-checksum-sha256':true,'x-amz-meta-callie-upload':true,'if-none-match':true};
+    for(const [name,value] of Object.entries(grant.headers)){
+      if(!allowed[name])throw new BrowserBoundaryError('invalid_response');
+      if(name!=='content-length')headers[name]=value;
+    }
+    if(grant.headers['content-length']!==String(file.size)||grant.headers['content-type']!==file.type)throw new BrowserBoundaryError('refused');
+    // Refresh current authority immediately before the sole external upload.
+    await this.refresh();this.check(epoch);beforeDispatch();this.check(epoch);
+    if(Date.parse(grant.expiresAt)<=Date.now())throw new BrowserBoundaryError('refused');
+    let response:Response;
+    try{response=await this.options.fetch(grant.url,{method:'PUT',body:file,headers,credentials:'omit',cache:'no-store',redirect:'error',referrerPolicy:'no-referrer'});}
+    catch{this.check(epoch);throw new BrowserBoundaryError('unavailable');}
+    this.check(epoch);
+    if(!response.ok)throw new BrowserBoundaryError('refused');
   }
   pendingResearch(): PendingResearch | null {
     const epoch = this.generation;

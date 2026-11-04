@@ -12,8 +12,11 @@
     "@aws-sdk/s3-request-presigner": "^3.1149.0",
     "@fss/contracts": "*",
     "@fss/domain": "*",
+    "@fss/social-publisher": "*",
     "@fss/telemetry": "*",
+    "heic-decode": "2.1.0",
     "pg": "^8.23.1",
+    "sharp": "0.35.5",
     "zod": "^4.6.5"
   },
   "devDependencies": {

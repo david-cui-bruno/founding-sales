@@ -20,5 +20,10 @@ export function readBrowserHostSettings(values: Readonly<Record<string, string |
   const release = buildCommit(values) ?? '';
   const telemetry = browserErrorConfigurationSchema.safeParse({ ...(dsn === undefined ? {} : { dsn }), release });
   if (!telemetry.success || (dsn !== undefined && release === '')) return refuse();
-  return { origin, clientVersion, cookieKey: Buffer.from(key, 'hex'), ...(dsn === undefined && release === '' ? {} : { telemetry: telemetry.data }) };
+  const bucket=values['FSS_SOCIAL_ASSETS_BUCKET'],region=values['AWS_REGION'];
+  // Dotted buckets trigger path-style SDK URLs; this transport intentionally
+  // supports one exact virtual-host origin, never a wildcard or path fallback.
+  if(bucket!==undefined&&(!/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/u.test(bucket)||!region||!/^[a-z]{2}(?:-gov)?-[a-z]+-\d$/u.test(region)))return refuse();
+  const socialStorageOrigin=bucket===undefined?undefined:`https://${bucket}.s3.${region}.amazonaws.com`;
+  return { origin, clientVersion, cookieKey: Buffer.from(key, 'hex'), ...(dsn === undefined && release === '' ? {} : { telemetry: telemetry.data }),...(socialStorageOrigin===undefined?{}:{socialStorageOrigin}) };
 }

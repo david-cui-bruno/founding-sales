@@ -29,3 +29,28 @@ export function founderBrowserConfiguration(raw, baselineDefinition) {
       (Object.hasOwn(value, 'certificateArn') && !/^arn:aws:acm:us-east-1:326255650484:certificate\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(value.certificateArn))) invalid();
   return value;
 }
+
+// Bind host provisioning to the reviewed plan without putting credential values
+// in Terraform. Missing metadata must not destroy a staged or active host.
+export function socialPublisherConfiguration(raw, baselineDefinition, state) {
+  const invalidPublisher = () => { throw new Error('social_publisher_configuration_invalid'); };
+  if (!Array.isArray(baselineDefinition?.containerDefinitions) || baselineDefinition.containerDefinitions.length === 0 ||
+      !Array.isArray(state?.resources)) invalidPublisher();
+  const deployed = state.resources.some(resource => resource.mode === 'managed' &&
+    resource.module === 'module.stack.module.social_publisher[0]') ||
+    baselineDefinition.containerDefinitions.some(container =>
+      [...(container.environment || []), ...(container.secrets || [])].some(entry =>
+        typeof entry.name === 'string' && entry.name.startsWith('FSS_SOCIAL_PUBLISHER_')));
+  if (raw === undefined || raw === '') {
+    if (deployed) throw new Error('social_publisher_configuration_required');
+    return { social_publisher_host: null, social_publisher_runtime_ready: false };
+  }
+  if (typeof raw !== 'string' || Buffer.byteLength(raw, 'utf8') > 2048) invalidPublisher();
+  let value;
+  try { value = JSON.parse(raw); } catch { invalidPublisher(); }
+  if (!value || Array.isArray(value) || typeof value !== 'object' ||
+      Object.keys(value).some(key => !['amiId', 'runtimeReady'].includes(key)) ||
+      typeof value.amiId !== 'string' || !/^ami-[0-9a-f]{17}$/u.test(value.amiId) ||
+      typeof value.runtimeReady !== 'boolean') invalidPublisher();
+  return { social_publisher_host: { ami_id: value.amiId }, social_publisher_runtime_ready: value.runtimeReady };
+}

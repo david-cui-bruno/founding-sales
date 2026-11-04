@@ -225,6 +225,9 @@ export async function runRelease(io, environment) {
     requireThat(state.targetSchema >= state.fromSchema, 'schema_downgrade_refused');
     const plan = JSON.parse(await io.run('node', ['--experimental-transform-types', '--disable-warning=ExperimentalWarning', 'tools/ci/release-plan.ts', '--repository', '.', '--from', health.build.commit, '--to', e.COMMIT]));
     requireThat(plan.fromSchema === state.fromSchema && plan.toSchema === state.targetSchema && !plan.reasons.some(reason => /deployed migration|missing or duplicate|unknown migration|schema rollback/u.test(reason)), 'migration_history_changed');
+    // Only the existing explicit migration-review exception belongs to ECS-only
+    // delivery. Host-image or infrastructure review requires the saved-plan path.
+    requireThat(plan.reasons.every(reason => reason.startsWith('reviewed migration: ')), 'reviewed_infrastructure_required');
     if (state.targetSchema !== state.fromSchema) {
       const binding = io.read('upgradeBinding');
       const evidence = io.read('upgradeEvidence');

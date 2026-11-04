@@ -92,7 +92,9 @@ function cloud(fault = '', onWrite: (action: string) => void = () => {}, artifac
     }
     if (program === 'gh' && args.slice(0, 3).join(' ') === 'api --method GET') {
       const path = args[3]!.replace('repos/david-cui-bruno/founding-sales/', '');
-      const files = [{ filename: 'packages/domain/sourcing/discoveryIdentity.ts', status: 'modified' }, ...(fault === 'schema' ? [{ filename: 'packages/domain/db/migrations/154_change.sql', status: 'added' }] : []), ...(target > 153 ? [{ filename: 'packages/domain/db/schemaRange.ts', status: 'modified' }, { filename: `packages/domain/db/migrations/${MIGRATION}`, status: 'added' }] : [])];
+      const files: { filename: string; status: string; previous_filename?: string }[] = [{ filename: 'packages/domain/sourcing/discoveryIdentity.ts', status: 'modified' }, ...(fault === 'schema' ? [{ filename: 'packages/domain/db/migrations/154_change.sql', status: 'added' }] : []), ...(target > 153 ? [{ filename: 'packages/domain/db/schemaRange.ts', status: 'modified' }, { filename: `packages/domain/db/migrations/${MIGRATION}`, status: 'added' }] : [])];
+      if (fault === 'host-image') files.push({ filename: 'packages/social-publisher/src/hostMain.ts', status: 'modified' });
+      if (fault === 'host-image-rename') files.push({ filename: 'apps/api/oldHost.ts', status: 'renamed', previous_filename: 'packages/social-publisher/src/hostMain.ts' });
       if (path.startsWith(`compare/${PRODUCTION}...${CANDIDATE}`)) return JSON.stringify({ base_commit: { sha: PRODUCTION }, merge_base_commit: { sha: PRODUCTION }, status: 'ahead', behind_by: 0, total_commits: 1, ahead_by: 1, commits: [{ sha: CANDIDATE }], files });
       if (path.startsWith('contents/packages/domain/db/schemaRange.ts?ref=')) return JSON.stringify({ encoding: 'base64', content: Buffer.from(`export const REQUIRED_SCHEMA = ${path.endsWith(PRODUCTION) ? 153 : target};\n`).toString('base64') });
       if (path.startsWith('contents/packages/domain/db/migrations?ref=')) return JSON.stringify(migrations(path.split('=')[1]!));
@@ -207,6 +209,12 @@ describe('preflight', () => {
     for (const [fault, reason] of [['schema', 'same_schema_source_changed'], ['candidate-live', 'candidate_already_production'], ['mixed-digest', 'runtime_digest_changed']]) {
       const directory = runDirectory({ 'release-bindings.json': bindings() });
       await refused(directory, 'preflight', reason!, fault);
+      expect(existsSync(join(directory, 'release-preflight.json'))).toBe(false);
+    }
+    for (const fault of ['host-image', 'host-image-rename']) {
+      const directory = runDirectory({ 'release-bindings.json': bindings() });
+      const calls = await refused(directory, 'preflight', 'publisher_host_image_requires_reviewed_plan', fault);
+      expect(calls.some(c => ['register-task-definition', 'run-task', 'update-service'].includes(c[2] ?? ''))).toBe(false);
       expect(existsSync(join(directory, 'release-preflight.json'))).toBe(false);
     }
   });

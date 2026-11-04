@@ -7,7 +7,8 @@ import {withTransaction} from '../../db/queryable.ts';
 import {saveSocialConnection} from '../../social/accounts.ts';
 import {saveSocialPost,readSocialWorkspace,approveSocialPost} from '../../social/posts.ts';
 import {claimSocialDelivery,beginSocialSubmission} from '../../social/delivery.ts';
-import {registerSocialAsset,completeSocialAsset,deleteSocialAsset} from '../../social/assets.ts';
+import {registerSocialAsset,deleteSocialAsset} from '../../social/assets.ts';
+import {approveSanitizedMediaFixture} from './mediaFixture.ts';
 import {previewSocialManualHandoff,confirmSocialManualHandoff,readSocialManualHandoff} from '../../social/manualHandoff.ts';
 let db:TestDatabase,seed:TwoWorkspaces;
 const ctx=(beta=false)=>{const s=beta?seed.beta:seed.alpha;return repositoryContext(workspaceScope(s.workspaceId,{kind:'user',userId:s.admin.userId,role:'admin'}),db.session);};
@@ -62,8 +63,8 @@ it('refuses overweight X text and elapsed time instead of offering late publicat
 
 it('binds derivative digest and alt text and fences a concurrent deletion until review commits',async()=>{
  const original={sha256:'a'.repeat(64),bytes:100,mime:'image/png' as const,origin:{kind:'screenshot' as const,sourceUrl:null,usageNote:null}};
- const asset=await tx(()=>registerSocialAsset(ctx(),original));if(!asset.ok)throw new Error(asset.reason);await tx(()=>completeSocialAsset(ctx(),{...asset.value,verified:original}));
- const derivative=await tx(()=>registerSocialAsset(ctx(),{...original,assetId:asset.value.assetId,expectedVersion:1,width:10,height:10}));if(!derivative.ok)throw new Error(derivative.reason);await tx(()=>completeSocialAsset(ctx(),{...derivative.value,verified:original}));
+ const asset=await tx(()=>registerSocialAsset(ctx(),original));if(!asset.ok)throw new Error(asset.reason);
+ await tx(()=>approveSanitizedMediaFixture(ctx(),asset.value.assetId,original.sha256,'Reviewed image'));
  const post=await draft();await tx(()=>saveSocialPost(ctx(),{postId:post.postId,accountId:post.accountId,text:post.text,images:[{assetId:asset.value.assetId,version:2,altText:'Reviewed image'}],publishAt:post.publishAt,zone:post.zone,expectedRevision:1}));
  const input={postId:post.postId,expectedRevision:2};const preview=await tx(()=>previewSocialManualHandoff(ctx(),input));if(!preview.ok)throw new Error(preview.reason);
  expect(preview.value.snapshot.images).toMatchObject([{version:2,sha256:original.sha256,altText:'Reviewed image'}]);
@@ -75,9 +76,12 @@ it('binds derivative digest and alt text and fences a concurrent deletion until 
 
 it('refuses replacement when any earlier revision has an ambiguous submission marker',async()=>{
  const accountId=randomUUID();await tx(()=>saveSocialConnection(ctx(),{accountId,platform:'linkedin',externalId:`native-${accountId}`,displayName:'Founder',accountKind:'profile'}));
+ // Historical native identity is fixture-owned, not authorized by today's
+ // manual connection command (which intentionally remains unsupported).
+ await db.session.query("UPDATE social_accounts SET state='connected',adapter_version='historical-fixture-v1',verified_at=clock_timestamp(),max_schedule_days=30 WHERE workspace_id=$1 AND id=$2",[seed.alpha.workspaceId,accountId]);
  const saved=await tx(()=>saveSocialPost(ctx(),{accountId,text:'Original native post',images:[],publishAt:new Date(Date.now()+86400000).toISOString(),zone:'America/New_York'}));if(!saved.ok)throw new Error(saved.reason);
  const post=saved.value,deviceId=randomUUID();await db.session.query('INSERT INTO devices(workspace_id,id,user_id,device_label,secret_hash) VALUES($1,$2,$3,$4,$5)',[seed.alpha.workspaceId,deviceId,seed.alpha.admin.userId,'Fixture','a'.repeat(64)]);
- await tx(()=>approveSocialPost(ctx(),{postId:post.postId,expectedRevision:1}));
+ const approved=await tx(()=>approveSocialPost(ctx(),{postId:post.postId,expectedRevision:1}));if(!approved.ok)throw new Error(approved.reason);
  const claim=await tx(()=>claimSocialDelivery(ctx(),{deviceId,postId:post.postId,expectedRevision:1}));if(!claim.ok)throw new Error(claim.reason);
  const begun=await tx(()=>beginSocialSubmission(ctx(),{deviceId,claimId:claim.value.claimId,approvalId:claim.value.approvalId,fingerprint:claim.value.fingerprint}));expect(begun.ok).toBe(true);
  // Historical inconsistent current revision fixture: original ambiguity must still fence handoff.

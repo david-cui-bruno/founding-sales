@@ -3,7 +3,7 @@
   "// Purpose": "Shared strict TypeScript settings for the workspace (apps/*, packages/*, test/ops). There is no root tsconfig.json: each package and test/ops extends this file.",
   "compilerOptions": {
     "target": "ES2023",
-    "lib": ["ES2023"],
+    "lib": ["ES2024", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "moduleDetection": "force",

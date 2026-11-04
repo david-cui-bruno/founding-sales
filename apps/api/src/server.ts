@@ -8,6 +8,7 @@ import type { MailCaptureReadiness } from '@fss/domain/mail/crmCaptureReadiness.
 import type { CrmMailEvidencePort } from '@fss/domain/crm/mailEvidence.ts';
 import type {BookingCapacityDeps} from './routes/bookingCapacity.ts';
 import type {SocialMediaStore} from './social/mediaStore.ts';
+import type {SocialBrowserPublisher} from '@fss/social-publisher';
 import type { CallAudioRemover } from './integrations/callAudio.ts';
 import type { MeetingAudioStore } from './integrations/meetingAudio.ts';
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
@@ -128,6 +129,7 @@ export interface ApiOptions {
   /** Lane M4: a meeting recording's upload URL and HEAD. Absent: the upload routes are 404. */
   readonly meetingAudio?: MeetingAudioStore | undefined;
   readonly socialMedia?: SocialMediaStore | undefined;
+  readonly socialPublisher?: SocialBrowserPublisher | undefined;
   /** Extra route modules, so a lane mounts without editing this file. */
   readonly extraRoutes?: readonly RouteModule[] | undefined;
   /** The structured log; the safety metric filters read it. Absent in unit tests. */
@@ -191,6 +193,7 @@ function routingOptions(options: ApiOptions): RoutingOptions {
     suppressionJournal: options.suppressionJournal ?? localNoopSuppressionJournal(),
     ...(options.callAudio === undefined ? {} : { callAudio: options.callAudio }),
     ...(options.socialMedia === undefined ? {} : {socialMedia:options.socialMedia}),
+    ...(options.socialPublisher === undefined ? {} : {socialPublisher:options.socialPublisher}),
     ...(options.meetingAudio === undefined ? {} : { meetingAudio: options.meetingAudio }),
     ...(options.imageDigest === undefined ? {} : { imageDigest: options.imageDigest }),
     ...(options.production === undefined ? {} : { production: options.production }),

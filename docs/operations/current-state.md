@@ -1,6 +1,6 @@
 # Current operating state
 
-## November 3, 2026: bounded initial-email campaign active
+## November 4, 2026: bounded Email active; Social implementing
 
 Root owns integration/interfaces/production. Broad coverage, soft ranking, buying-role evidence and learning from outcomes remain David's direction. Parent783/supply797/Email838/Social843 retain scope; paused chat follow-ups and older schedules stay paused.
 
@@ -28,7 +28,7 @@ Root owns integration/interfaces/production. Broad coverage, soft ranking, buyin
 
 **Prioritization848 deployed:** [requirements](../greenfield/prospect-prioritization.md)/[audit](../greenfield/prospect-priority-interface-audit.md); hosted priority/fit saves accepted, no conversion claim. PR852 dated phone/person/office originals remain context, not canonical authority. Step1.3–1.5 software complete.
 
-**Social #925 SPEC AGREED, not activated:** [personal-brand workflow](../greenfield/founder-social-publishing.md): college founder/AI builder; Pavan Kumar of Clean primary, Ayaan secondary;3 posts/week, rough real bullets, approved media pool and three private calibration drafts before automation. Existing guide/drafts/disclosed generation and readiness/thread-reader software remain deployed148; private factual inputs, sanitized/publishable media and real web-owned publisher require implementation. Fictional diagnostics do not prove voice quality. Browser-platform permission is settled; actual account/calibration/content/cadence activation and public-thread capture remain separate. No photo access or LinkedIn action followed the interview.
+**Social #925 IMPLEMENTED, delivery active; not deployed/activated:** [workflow](../greenfield/founder-social-publishing.md)/[ADR0039](../adr/0039-founder-standing-social-and-isolated-runtime.md). Signed controlled notes→three private drafts→exact calibration and media approval/withdrawal passed. Controlled-storage original/derivative deletion, partial-failure quota retention and idempotent retry passed. Actual app_runtime standing worker preserved one create/attempt through lost-response, restart, pause, receipt recovery and cancellation. API1696/publisher68/worker999/web1152/ops1189 tests, offline Terraform, types/lint and populated162→166 upgrade passed. Approved ~$20/month isolated EC2 authenticated six-client/native-confinement/firewall/shutdown acceptance passed; temporary resources removed. Host-image release guard passed; CI/merge and protected host/TLS delivery remain. Credits offset EC2; balance/expiry access-blocked, not assumed free. Fixtures prove neither genuine voice nor live publication. Production/sending controls unchanged; no LinkedIn actions.
 
 ## Preserved completed work and controls
 

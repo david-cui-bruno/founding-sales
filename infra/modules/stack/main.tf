@@ -214,11 +214,12 @@ module "recordings" {
 }
 
 module "social_assets" {
-  source         = "../social-assets"
-  name_prefix    = var.name_prefix
-  aws_account_id = var.aws_account_id
-  force_destroy  = var.destroyable
-  tags           = merge(local.tags, var.display_name == null ? {} : { DisplayName = "${var.display_name}-social-assets" })
+  source          = "../social-assets"
+  name_prefix     = var.name_prefix
+  aws_account_id  = var.aws_account_id
+  force_destroy   = var.destroyable
+  browser_origins = var.founder_browser == null ? [] : [var.founder_browser.origin]
+  tags            = merge(local.tags, var.display_name == null ? {} : { DisplayName = "${var.display_name}-social-assets" })
 }
 
 module "database" {
@@ -298,14 +299,15 @@ module "cluster" {
   app_runtime_database_secret_arn = module.secrets.app_runtime_database_secret_arn
   migration_database_secret_arn   = module.secrets.migration_database_secret_arn
 
-  journal_bucket_arn       = module.journal.bucket_arn
-  call_audio_bucket_arn    = module.recordings.bucket_arn
-  social_assets_bucket_arn = module.social_assets.bucket_arn
-  enable_social_assets     = true
-  aws_account_id           = var.aws_account_id
-  journal_kms_key_arn      = module.journal.kms_key_arn
-  envelope_kms_key_arn     = module.secrets.envelope_kms_key_arn
-  secrets_kms_key_arn      = module.secrets.secrets_kms_key_arn
+  journal_bucket_arn             = module.journal.bucket_arn
+  call_audio_bucket_arn          = module.recordings.bucket_arn
+  social_assets_bucket_arn       = module.social_assets.bucket_arn
+  enable_social_assets           = true
+  social_publisher_runtime_ready = var.social_publisher_runtime_ready
+  aws_account_id                 = var.aws_account_id
+  journal_kms_key_arn            = module.journal.kms_key_arn
+  envelope_kms_key_arn           = module.secrets.envelope_kms_key_arn
+  secrets_kms_key_arn            = module.secrets.secrets_kms_key_arn
 
   # Lane g81: the reply classifier's key reaches the worker in production only. A
   # rehearsal's entry holds a fixture and the classifier has no recorded seam, so a
@@ -327,6 +329,7 @@ module "cluster" {
   # than empty when unset, so the API's own rule decides what an unset one means.
   api_environment = merge(
     { FSS_SOCIAL_ASSETS_BUCKET = module.social_assets.bucket_name },
+    local.publisher_environment,
     var.desktop_upgrade_url == null ? {} : {
       FSS_DESKTOP_UPGRADE_URL = var.desktop_upgrade_url
     }
@@ -334,14 +337,14 @@ module "cluster" {
 
   # The worker's alone. The operations task definition is built from the worker's
   # environment and ignores a variable it does not read.
-  worker_environment = {
+  worker_environment = merge({
     FSS_WORKER_CONCURRENCY = tostring(var.worker_concurrency)
     # Slice C3a: Amazon Transcribe is the transcription engine, its audio staged in the
     # call-audio bucket. No secret: the worker task role is the credential.
     FSS_TRANSCRIPTION_PROVIDER = "aws_transcribe"
     FSS_CALL_AUDIO_BUCKET      = module.recordings.bucket_name
     FSS_SOCIAL_ASSETS_BUCKET   = module.social_assets.bucket_name
-  }
+  }, local.publisher_environment)
 
   environment = merge({
     FSS_ENVIRONMENT = var.environment

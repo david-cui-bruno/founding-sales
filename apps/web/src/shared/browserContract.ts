@@ -62,6 +62,10 @@ export const BROWSER_POST_READ_PATHS = Object.freeze([
   '/social/drafts', '/social/drafts/read', '/social/drafts/request/receipt',
   '/social/private-drafts/list', '/social/private-drafts/read', '/social/private-drafts/receipt',
   '/social/voice-preferences/read', '/social/voice-preferences/receipt',
+  '/social/inputs/list','/social/inputs/read','/social/calibration/read','/social/founder/receipt',
+  '/social/media/list','/social/media/preview','/social/assets/upload-url',
+  '/social/media/receipt',
+  '/social/standing-plan/read','/social/standing-plan/options','/social/standing-plan/activity','/social/standing-plan/receipt',
   '/calling/follow-ups/list', '/calling/follow-ups/read', '/calling/follow-ups/receipt',
   '/calling/execution/receipt', '/calling/setup/receipt','/calling/setup/budget-receipt','/calling/audio-test/receipt',
   '/calling/preparation/read','/calling/preparation/receipt',
@@ -83,10 +87,15 @@ export const BROWSER_COMMAND_PATHS = Object.freeze([
   '/replies/composer/generate',
   '/social/private-drafts/save', '/social/voice-preferences/save',
   '/social/drafts/request',
+  '/social/inputs/save','/social/calibration/finish',
+  '/social/assets/register','/social/assets/delete','/social/media/complete','/social/media/approve','/social/media/withdraw',
+  '/social/standing-plan/command',
   '/calling/wrap', '/calling/follow-ups/save',
   '/calls/session', '/calling/setup/provider','/calling/setup/budget','/calling/audio-test/session',
   '/calling/preparation/confirm',
 ] as const);
+/** Interactive account login is ephemeral: never a persisted command or receipt. */
+export const BROWSER_SOCIAL_EPHEMERAL_PATHS=Object.freeze(['/social/publisher/connection'] as const);
 
 export const browserSignInSchema = z.strictObject({
   workspaceId: uuid,
@@ -98,5 +107,5 @@ export function browserApiPathAllowed(method: string, path: string): boolean {
   if (method === 'GET') {
     return BROWSER_READ_PATHS.some(value => value === path) || /^\/firms\/[0-9a-f-]{36}$/iu.test(path);
   }
-  return method === 'POST' && [...BROWSER_POST_READ_PATHS, ...BROWSER_COMMAND_PATHS, ...BROWSER_VOICE_POST_PATHS].some(value => value === path);
+  return method === 'POST' && [...BROWSER_POST_READ_PATHS, ...BROWSER_COMMAND_PATHS, ...BROWSER_VOICE_POST_PATHS,...BROWSER_SOCIAL_EPHEMERAL_PATHS].some(value => value === path);
 }

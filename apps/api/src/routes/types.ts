@@ -4,6 +4,7 @@ import type { MailCaptureReadiness } from '@fss/domain/mail/crmCaptureReadiness.
 import type { CrmMailEvidencePort } from '@fss/domain/crm/mailEvidence.ts';
 import type {BookingCapacityDeps} from './bookingCapacity.ts';
 import type {SocialMediaStore} from '../social/mediaStore.ts';
+import type {SocialBrowserPublisher} from '@fss/social-publisher';
 import type { ClientVersionPolicy } from '@fss/contracts';
 import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
 import type { SuppressionJournal } from '@fss/domain/suppression/journal.ts';
@@ -91,6 +92,7 @@ export interface RoutingOptions {
    */
   readonly meetingAudio?: MeetingAudioStore | undefined;
   readonly socialMedia?: SocialMediaStore | undefined;
+  readonly socialPublisher?: SocialBrowserPublisher | undefined;
   /**
    * Everything the Gmail grant, the webhook and the message view need (12.1 to 12.3).
    *

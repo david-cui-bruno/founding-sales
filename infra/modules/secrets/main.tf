@@ -15,13 +15,17 @@
 locals {
   # Every environment's entries, each created empty. Terraform never writes, reads
   # or plans a value: the values are entered once by hand under the apply runbook.
-  # test/ops/terraformCrossChecks.check.ts compares this list with the cluster's.
   secret_names = [
     "google-oidc-client",
     "google-gmail-oauth-client",
     "session-signing-key",
     "device-credential-pepper",
     "llm-classifier-api-key",
+    # Dedicated encryption for owner-connected LinkedIn sessions. Never an auth
+    # signing key; API/worker injection waits for the operator-installed value.
+    "social-publisher-session-key",
+    # Separate browser-host control credential; never the PG session encryption key.
+    "social-publisher-control-token",
     # Call-to-booking (slice W): Twilio Voice (account, API key, TwiML app, auth token,
     # caller id) and Cal.com (webhook secret, API key), each a JSON object the API reads
     # (`apps/api/src/integrations/providers.ts`). Only read once a workspace turns its

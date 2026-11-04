@@ -1,9 +1,10 @@
 import {z} from 'zod';
 import {uuid} from './foundationRows.ts';
 import {socialFactInputSchema} from './outreach.ts';
+import {socialFounderInputRefSchema,socialFounderInputProcessingScopeSchema,socialFounderFormatSchema} from './socialFounderInputs.ts';
 export const socialPlatformSchema=z.enum(['linkedin','facebook','x']);
 export const socialAssetOriginSchema=z.strictObject({kind:z.enum(['upload','phone','web','screenshot']),sourceUrl:z.string().url().max(2048).refine(v=>new URL(v).protocol==='https:','HTTPS required').nullable(),usageNote:z.string().trim().max(1000).nullable()});
-export const registerSocialAssetSchema=z.strictObject({assetId:uuid.optional(),expectedVersion:z.number().int().positive().optional(),sha256:z.string().regex(/^[a-f0-9]{64}$/u),bytes:z.number().int().positive().max(20*1024*1024),mime:z.enum(['image/png','image/jpeg','image/webp','image/heic']),origin:socialAssetOriginSchema,width:z.number().int().positive().max(4096).optional(),height:z.number().int().positive().max(4096).optional()}).refine(v=>v.assetId===undefined?v.expectedVersion===undefined:v.expectedVersion!==undefined&&v.width!==undefined&&v.height!==undefined&&v.bytes<=5*1024*1024&&['image/png','image/jpeg'].includes(v.mime),'Invalid derivative');
+export const registerSocialAssetSchema=z.strictObject({sha256:z.string().regex(/^[a-f0-9]{64}$/u),bytes:z.number().int().positive().max(20*1024*1024),mime:z.enum(['image/png','image/jpeg','image/webp','image/heic']),origin:socialAssetOriginSchema});
 export type RegisterSocialAsset=z.infer<typeof registerSocialAssetSchema>;
 export type AssetOrigin=z.infer<typeof socialAssetOriginSchema>;
 export interface SocialAssetView{id:string;state:'uploading'|'ready'|'deleted';version:number;origin:AssetOrigin;objects:{version:number;kind:'original'|'derivative';state:'uploading'|'ready'|'deleted';sha256:string;bytes:number;mime:string;width:number|null;height:number|null}[]}
@@ -11,7 +12,6 @@ export interface SocialAssetView{id:string;state:'uploading'|'ready'|'deleted';v
 import {commandIdSchema} from './auth.ts';
 import {semanticVersionSchema} from './clientVersion.ts';
 export const socialAssetRegisterCommandSchema=registerSocialAssetSchema.safeExtend({commandId:commandIdSchema,clientVersion:semanticVersionSchema});
-export const socialAssetCompleteCommandSchema=z.strictObject({assetId:uuid,uploadId:uuid,commandId:commandIdSchema,clientVersion:semanticVersionSchema});
 export const socialAssetDeleteCommandSchema=z.strictObject({assetId:uuid,commandId:commandIdSchema,clientVersion:semanticVersionSchema});
 export const socialPostStateSchema=z.enum(['draft','approved','submitting','scheduled','published','cancellation_pending','cancelled','failed','unknown']);
 export const socialPostImageSchema=z.strictObject({assetId:uuid,version:z.number().int().positive(),altText:z.string().trim().min(1).max(1000)});
@@ -68,14 +68,27 @@ export const socialVoiceGuideRefSchema=z.strictObject({guideId:uuid,revision:z.n
 export const SOCIAL_VOICE_GUIDE_PROCESSING_SCOPE='bedrock_haiku_private_draft_v1' as const;
 export const socialVoiceGuideProcessingScopeSchema=z.literal(SOCIAL_VOICE_GUIDE_PROCESSING_SCOPE);
 export type SocialVoiceGuideProcessingScope=z.infer<typeof socialVoiceGuideProcessingScopeSchema>;
-export const socialDraftRequestSchema=z.strictObject({mode:z.literal('linkedin_grounded').optional(),sourceRefs:z.array(z.strictObject({kind:z.enum(['call','meeting','public']),id:uuid,revision:z.number().int().positive()})).max(10),factBlocks:z.array(z.strictObject({id:uuid,version:z.number().int().positive()})).max(20),voiceGuideRef:socialVoiceGuideRefSchema.optional(),voiceGuideProcessingScope:socialVoiceGuideProcessingScopeSchema.optional()})
- .refine(value=>value.voiceGuideRef===undefined||value.mode==='linkedin_grounded','Voice guide requires grounded mode')
- .refine(value=>value.voiceGuideProcessingScope===undefined||(value.mode==='linkedin_grounded'&&value.voiceGuideRef!==undefined),'Processing scope requires grounded guide selection');
+const draftModeSchema=z.enum(['linkedin_grounded','linkedin_founder']);
+const founderSelection={
+ founderInputRefs:z.array(socialFounderInputRefSchema).min(1).max(10).refine(refs=>new Set(refs.map(ref=>ref.inputId)).size===refs.length,'Distinct inputs required').optional(),
+ founderInputProcessingScope:socialFounderInputProcessingScopeSchema.optional(),
+ founderFormat:socialFounderFormatSchema.optional(),
+ standingPlanRef:z.strictObject({planId:uuid,revision:z.number().int().positive(),slotId:uuid}).optional(),
+};
+export const socialDraftRequestSchema=z.strictObject({mode:draftModeSchema.optional(),sourceRefs:z.array(z.strictObject({kind:z.enum(['call','meeting','public']),id:uuid,revision:z.number().int().positive()})).max(10),factBlocks:z.array(z.strictObject({id:uuid,version:z.number().int().positive()})).max(20),voiceGuideRef:socialVoiceGuideRefSchema.optional(),voiceGuideProcessingScope:socialVoiceGuideProcessingScopeSchema.optional(),...founderSelection})
+ .refine(value=>value.voiceGuideRef===undefined||value.mode!==undefined,'Voice guide requires grounded mode')
+ .refine(value=>value.voiceGuideProcessingScope===undefined||(value.mode!==undefined&&value.voiceGuideRef!==undefined),'Processing scope requires guide selection')
+ .refine(value=>value.mode==='linkedin_founder'
+  ? value.sourceRefs.length===0&&value.founderInputRefs!==undefined&&value.founderInputProcessingScope!==undefined&&value.founderFormat!==undefined
+  : value.founderInputRefs===undefined&&value.founderInputProcessingScope===undefined&&value.founderFormat===undefined&&value.standingPlanRef===undefined,'Founder inputs require explicit founder processing');
 export type SocialDraftRequest=z.infer<typeof socialDraftRequestSchema>;
 export const socialDraftRequestCommandSchema=socialDraftRequestSchema.safeExtend({commandId:commandIdSchema,clientVersion:semanticVersionSchema});
 export const socialDraftConceptSchema=z.strictObject({theme:z.enum(['after_hours','small_team','manual_entry','vendor_follow_up','tenant_phone','maintenance_coordination','founder','build','technical','maintenance','news']),factRefs:z.array(z.strictObject({id:uuid,version:z.number().int().positive()})).max(20),variants:z.array(z.strictObject({platform:socialPlatformSchema,text:z.string().min(1).max(3000)})).min(1).max(3)});
-export const socialDraftViewSchema=z.strictObject({id:uuid,mode:z.literal('linkedin_grounded').optional(),state:z.enum(['queued','calling','ready','review','expired']),sourceRefs:socialDraftRequestSchema.shape.sourceRefs,factBlocks:socialDraftRequestSchema.shape.factBlocks,voiceGuideRef:socialVoiceGuideRefSchema.optional(),voiceGuideProcessingScope:socialVoiceGuideProcessingScopeSchema.optional(),concepts:z.array(socialDraftConceptSchema).max(3).nullable(),reason:z.string().nullable(),createdAt:z.string().datetime(),deadlineAt:z.string().datetime()})
- .refine(value=>value.voiceGuideProcessingScope===undefined||(value.mode==='linkedin_grounded'&&value.voiceGuideRef!==undefined),'Processing scope requires grounded guide selection');
+export const socialDraftViewSchema=z.strictObject({id:uuid,mode:draftModeSchema.optional(),state:z.enum(['queued','calling','ready','review','expired']),sourceRefs:socialDraftRequestSchema.shape.sourceRefs,factBlocks:socialDraftRequestSchema.shape.factBlocks,voiceGuideRef:socialVoiceGuideRefSchema.optional(),voiceGuideProcessingScope:socialVoiceGuideProcessingScopeSchema.optional(),...founderSelection,concepts:z.array(socialDraftConceptSchema).max(3).nullable(),reason:z.string().nullable(),createdAt:z.string().datetime(),deadlineAt:z.string().datetime()})
+ .refine(value=>value.voiceGuideProcessingScope===undefined||(value.mode!==undefined&&value.voiceGuideRef!==undefined),'Processing scope requires guide selection')
+ .refine(value=>value.mode==='linkedin_founder'
+  ? value.sourceRefs.length===0&&value.founderInputRefs!==undefined&&value.founderInputProcessingScope!==undefined&&value.founderFormat!==undefined
+  : value.founderInputRefs===undefined&&value.founderInputProcessingScope===undefined&&value.founderFormat===undefined&&value.standingPlanRef===undefined,'Founder inputs require explicit founder processing');
 export const socialDraftWorkspaceSchema=z.strictObject({sources:z.array(z.strictObject({kind:z.enum(['call','meeting','public']),id:uuid,revision:z.number().int().positive(),label:z.string(),observedAt:z.string().datetime()})).max(60),facts:z.array(z.strictObject({id:uuid,version:z.number().int().positive(),text:z.string(),socialInput:socialFactInputSchema.optional()})).max(20),requests:z.array(socialDraftViewSchema).max(20)});
 export type SocialDraftWorkspace=z.infer<typeof socialDraftWorkspaceSchema>;
 export type SocialDraftView=z.infer<typeof socialDraftViewSchema>;

@@ -30,15 +30,15 @@ export function BrowserSocialPublishingReadiness({client}:{client:BrowserClient}
  if(client.current?.status!=='signed_in'||client.current.role!=='admin')return null;
  return <section aria-label="Publishing readiness" className="social-details">
   <h3>Publishing readiness</h3>
-  <p>Publishing is not activated. Saved account records do not prove current account verification or a working publishing runner.</p>
-  <p>A LinkedIn personal-profile text post is a potential target only. Facebook profiles and groups are unsupported here.</p>
+  <p>Read current runner availability, intended account verification and standing-policy status. Connecting an account does not activate publication.</p>
+  <p>Personal LinkedIn text or one approved image is supported by the browser route. Facebook profiles and groups are unsupported here.</p>
   <button type="button" disabled={busy} onClick={()=>{void read();}}>Read publishing readiness</button>
-  {busy?<p role="status">Reading saved account metadata.</p>:null}{error?<p role="alert">{error}</p>:null}
-  {view?<div><p>Observed {view.observedAt} · Publishing remains unavailable.</p>
+  {busy?<p role="status">Reading current account and browser capability.</p>:null}{error?<p role="alert">{error}</p>:null}
+  {view?<div><p>Observed {view.observedAt} · Runner {view.runnerAvailable?'available':'unavailable'} · Publishing {view.publishingActivated?'activated under the current plan':'not activated'}.</p>
    <ul>{view.holds.map(reason=><li key={reason}>{labels[reason]}</li>)}</ul>
    {view.accounts.length?<ul>{view.accounts.map(account=><li key={account.accountId}>
     <strong>{account.displayName}</strong> · {account.platform} {account.accountKind} · Revision {account.revision}
-    <p>Saved status: {account.historicalState} (historical record). Current account verification is unavailable.</p>
+    <p>Saved status: {account.historicalState}. Current intended account {account.currentAccountVerified?'independently verified':'not verified; reconnect or inspect the runner'}.</p>
     <ul>{account.holds.map(reason=><li key={reason}>{labels[reason]}</li>)}</ul>
    </li>)}</ul>:<p>No saved accounts are available in this read.</p>}
   </div>:null}

@@ -593,6 +593,8 @@ jobs:
                 value="$(printf '{"client_id":"rehearsal-%s.apps.googleusercontent.com","client_secret":"%s"}' "$prefix" "$(openssl rand -base64 36 | tr -d '\n')")" ;;
               session-signing-key|device-credential-pepper)
                 value="$(openssl rand -base64 48 | tr -d '\n')" ;;
+              social-publisher-session-key|social-publisher-control-token)
+                value="$(openssl rand -base64 32 | tr -d '\n')" ;;
               sourcing-search) value='rehearsal-not-injected' ;;
               millionverifier-api-key) value='rehearsal-not-injected' ;;
               llm-classifier-api-key)

@@ -30,11 +30,13 @@ COPY apps/worker/package.json apps/worker/
 COPY packages/domain/package.json packages/domain/
 COPY packages/contracts/package.json packages/contracts/
 COPY packages/telemetry/package.json packages/telemetry/
+COPY packages/social-publisher/package.json packages/social-publisher/
 
 RUN npm ci --ignore-scripts --omit=dev --no-audit --no-fund \
       --workspace @fss/worker \
       --workspace @fss/domain \
       --workspace @fss/contracts \
+      --workspace @fss/social-publisher \
       --workspace @fss/telemetry \
  && npm cache clean --force
 
@@ -79,6 +81,8 @@ COPY --from=dependencies /app/packages/domain ./packages/domain
 COPY --from=dependencies /app/packages/contracts ./packages/contracts
 COPY --from=dependencies /app/packages/telemetry ./packages/telemetry
 COPY packages/telemetry/src packages/telemetry/src
+COPY --from=dependencies /app/packages/social-publisher ./packages/social-publisher
+COPY packages/social-publisher/src packages/social-publisher/src
 COPY apps/worker/src apps/worker/src
 COPY packages/domain/db packages/domain/db
 COPY packages/domain/crm packages/domain/crm

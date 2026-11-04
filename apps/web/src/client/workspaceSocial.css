@@ -9,7 +9,7 @@
 .social-workspace-heading h1 {font-size:28px;letter-spacing:-.04em;margin:0}
 .social-workspace-heading p,.social-composition-toolbar p {margin:6px 0;color:var(--workspace-muted,#58677c);font-size:13px}
 .social-private-badge {padding:6px 11px;border:1px solid var(--workspace-border,#d3dce8);border-radius:30px;font-size:11px}
-.social-view-switch {display:flex;gap:4px;margin-top:24px;width:fit-content;padding:4px;background:var(--workspace-panel,#ffffffb8);border:1px solid var(--workspace-border,#d3dce8);border-radius:13px}
+.social-view-switch {display:flex;flex-wrap:wrap;gap:4px;margin-top:24px;width:fit-content;max-width:100%;padding:4px;background:var(--workspace-panel,#ffffffb8);border:1px solid var(--workspace-border,#d3dce8);border-radius:13px}
 :is(.social-workspace,.social-review,.social-composition) button {font:inherit;font-size:12px;line-height:1.5;border:1px solid var(--workspace-border,#d3dce8);border-radius:10px;padding:8px 12px;color:var(--workspace-text,#202c3e);background:var(--workspace-panel,#ffffffb8);cursor:pointer;max-width:100%;overflow-wrap:anywhere}
 :is(.social-workspace,.social-review,.social-composition) button:hover:not(:disabled) {border-color:var(--workspace-accent,#365eaa)}
 :is(.social-workspace,.social-review,.social-composition) :is(button,textarea,select,summary):focus-visible {outline:2px solid var(--workspace-accent,#365eaa);outline-offset:3px}
@@ -58,3 +58,7 @@
 @media (prefers-reduced-transparency:reduce) {
  .social-post-workspace {backdrop-filter:none;background:var(--workspace-bg,#f3f6fa)}
 }
+.social-publisher-frame,.social-workspace img {max-width:100%;height:auto}
+.social-workspace :is(input,textarea,select) {box-sizing:border-box;max-width:100%;font:inherit;color:inherit}
+.social-workspace :is(label,fieldset) {min-width:0}
+.social-workspace fieldset {border:1px solid var(--workspace-border,#d3dce8);border-radius:12px;padding:12px}

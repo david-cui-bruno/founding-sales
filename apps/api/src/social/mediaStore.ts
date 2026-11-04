@@ -2,11 +2,27 @@
 type Client={send(command:unknown,options?:{abortSignal?:AbortSignal}):Promise<unknown>};
 export interface SocialMediaSdk{S3Client:new(input:Record<string,unknown>)=>Client;PutObjectCommand:new(input:Record<string,unknown>)=>unknown;GetObjectCommand:new(input:Record<string,unknown>)=>unknown;HeadObjectCommand:new(input:Record<string,unknown>)=>unknown;DeleteObjectCommand:new(input:Record<string,unknown>)=>unknown;getSignedUrl:(client:Client,command:unknown,options:{expiresIn:number;signingDate?:Date;signableHeaders?:Set<string>;unhoistableHeaders?:Set<string>})=>Promise<string>}
 export interface SocialMediaStore{presignPut(input:{key:string;sha256:string;bytes:number;mime:string;uploadId:string;issuedAt:string}):Promise<{url:string;headers:Record<string,string>;expiresAt:string}>;presignGet(key:string):Promise<{url:string;expiresAt:string}>;head(key:string):Promise<{found:false}|{found:true;sha256:string;bytes:number;mime:string;uploadId:string}>;delete(key:string):Promise<void>}
+export interface SocialMediaStore {
+ read(key:string,maxBytes:number):Promise<Buffer>;
+ put(input:{key:string;body:Buffer;mime:string;sha256:string}):Promise<void>;
+}
 export async function loadSocialMediaStore(options:{bucket:string;region:string;sdk?:SocialMediaSdk;now?:()=>Date}):Promise<SocialMediaStore>{
  const sdk=options.sdk??await loadSdk(),now=options.now??(()=>new Date());
  const client=new sdk.S3Client({region:options.region,maxAttempts:2,requestChecksumCalculation:'WHEN_REQUIRED',responseChecksumValidation:'WHEN_REQUIRED'});
  const expiresAt=()=>new Date(now().getTime()+600_000).toISOString();
  return {
+ async read(key,maxBytes){
+  try{
+   const row=await client.send(new sdk.GetObjectCommand({Bucket:options.bucket,Key:key}),{abortSignal:AbortSignal.timeout(30_000)}) as {ContentLength?:number;Body?:AsyncIterable<Uint8Array>};
+   if(!row.Body||!row.ContentLength||row.ContentLength>maxBytes)throw new Error('invalid_object');
+   let bytes=0;const chunks:Buffer[]=[];
+   for await(const chunk of row.Body){bytes+=chunk.length;if(bytes>maxBytes)throw new Error('invalid_object');chunks.push(Buffer.from(chunk));}
+   if(bytes!==row.ContentLength)throw new Error('invalid_object');return Buffer.concat(chunks,bytes);
+  }catch{throw new Error('media_store_unavailable');}
+ },
+ async put(input){
+  try{await client.send(new sdk.PutObjectCommand({Bucket:options.bucket,Key:input.key,Body:input.body,ContentType:input.mime,ContentLength:input.body.length,ChecksumSHA256:Buffer.from(input.sha256,'hex').toString('base64')}),{abortSignal:AbortSignal.timeout(30_000)});}catch{throw new Error('media_store_unavailable');}
+ },
  async presignPut(input){const issuedAt=new Date(input.issuedAt);if(!Number.isFinite(issuedAt.getTime()))throw new Error('invalid_issue_time');const headers={'content-type':input.mime,'content-length':String(input.bytes),'x-amz-checksum-sha256':Buffer.from(input.sha256,'hex').toString('base64'),'x-amz-meta-callie-upload':input.uploadId,'if-none-match':'*'};const command=new sdk.PutObjectCommand({Bucket:options.bucket,Key:input.key,ContentType:input.mime,ContentLength:input.bytes,ChecksumSHA256:headers['x-amz-checksum-sha256'],Metadata:{'callie-upload':input.uploadId},IfNoneMatch:'*'});return {url:await sdk.getSignedUrl(client,command,{expiresIn:600,signingDate:issuedAt,signableHeaders:new Set(Object.keys(headers)),unhoistableHeaders:new Set(Object.keys(headers))}),headers,expiresAt:new Date(issuedAt.getTime()+600_000).toISOString()};},
  async presignGet(key){return {url:await sdk.getSignedUrl(client,new sdk.GetObjectCommand({Bucket:options.bucket,Key:key,ResponseContentDisposition:'attachment'}),{expiresIn:600}),expiresAt:expiresAt()};},
  async head(key){try{const row=await client.send(new sdk.HeadObjectCommand({Bucket:options.bucket,Key:key,ChecksumMode:'ENABLED'}),{abortSignal:AbortSignal.timeout(5000)}) as {ContentLength?:unknown;ContentType?:unknown;ChecksumSHA256?:unknown;Metadata?:Record<string,unknown>};const checksum=typeof row.ChecksumSHA256==='string'?Buffer.from(row.ChecksumSHA256,'base64'):null;if(!Number.isSafeInteger(row.ContentLength)||typeof row.ContentLength!=='number'||row.ContentLength<=0||typeof row.ContentType!=='string'||checksum?.length!==32||typeof row.Metadata?.['callie-upload']!=='string')throw new Error('invalid_head');return {found:true,bytes:row.ContentLength,mime:row.ContentType,sha256:checksum.toString('hex'),uploadId:row.Metadata['callie-upload']};}catch(error){if(typeof error==='object'&&error!==null&&(error as {$metadata?:{httpStatusCode?:number}}).$metadata?.httpStatusCode===404)return {found:false};throw new Error('media_store_unavailable');}},

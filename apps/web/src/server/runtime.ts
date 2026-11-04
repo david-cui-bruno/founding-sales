@@ -11,6 +11,7 @@ export class BrowserUnavailableError extends Error {
 export interface BrowserRequestContext {
   readonly auth: AuthDeps;
   readonly api: ApiOptions;
+  readonly socialStorageOrigin?: string;
 }
 
 /** Each invocation obtains its own request connection, never a shared transaction. */
@@ -19,6 +20,7 @@ export interface BrowserRuntime {
   readonly origin: string;
   readonly clientVersion: string;
   readonly telemetry?: BrowserErrorConfiguration;
+  readonly socialStorageOrigin?: string;
   /** AES-256-GCM key, server-only. Rotation invalidates browser cookies. */
   readonly cookieKey: Buffer;
   readonly withRequest: <T>(work: (context: BrowserRequestContext) => Promise<T>) => Promise<T>;

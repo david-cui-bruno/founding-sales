@@ -28,8 +28,11 @@ const commits = [...git('rev-list', '--reverse', '--no-merges', `${from}..${to}`
 const paths = new Set<string>();
 for (const commit of commits) for (const path of git('diff-tree', '--root', '--diff-merges=first-parent', '--no-commit-id', '--name-only', '-r', '--no-renames', commit).split('\n').filter(Boolean)) paths.add(path);
 const reasons: string[] = [];
+// ECS-only delivery cannot replace the separately pinned browser-host image.
+const publisherHostImagePath = /^(?:packages\/social-publisher\/|Dockerfile\.api(?:\.dockerignore)?$|package-lock\.json$)/u;
 for (const path of paths) {
   if (path === schemaFile || /^packages\/domain\/db\/migrations\/\d{4}_[a-z0-9_]+\.sql$/u.test(path)) continue;
+  if (publisherHostImagePath.test(path)) { reasons.push(`reviewed browser-host image change: ${path}`); continue; }
   if (/^(infra\/|\.github\/|tools\/ci\/|tools\/upgrade\/)/u.test(path) || path === '.gitattributes' || ['packages/domain/db/migrationRunner.ts', 'packages/domain/db/queryable.ts', 'scripts/productionSmoke.mjs'].includes(path)) reasons.push(`reviewed infrastructure/guard change: ${path}`);
   else if (!/^(apps\/|packages\/|scripts\/|docs\/|test\/|tests\/|certs\/)/u.test(path) && !/^(Dockerfile\.(api|worker)(\.dockerignore)?|package(-lock)?\.json|tsconfig.*\.json|eslint.*\.mjs|README\.md|AGENTS\.md|CLAUDE\.md)$/u.test(path)) reasons.push(`unknown release path: ${path}`);
 }

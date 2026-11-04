@@ -88,10 +88,10 @@ async function seedWorkspace(session: SessionQueryable, slug: string, sharedEmai
   };
 }
 
-export async function seedTwoWorkspaces(session: SessionQueryable): Promise<TwoWorkspaces> {
+export async function seedTwoWorkspaces(session: SessionQueryable, suffix = ''): Promise<TwoWorkspaces> {
   const sharedEmail = 'shared.display@example.test';
-  const alpha = await seedWorkspace(session, 'alpha', sharedEmail);
-  const beta = await seedWorkspace(session, 'beta', sharedEmail);
+  const alpha = await seedWorkspace(session, `alpha${suffix}`, sharedEmail);
+  const beta = await seedWorkspace(session, `beta${suffix}`, sharedEmail);
   return {
     alpha,
     beta,

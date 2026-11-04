@@ -45,6 +45,10 @@ locals {
   # first apply keeps this false; this stage-two change must not deploy before AWSCURRENT exists.
   worker_reads_millionverifier_api_key = true
 
+  # Stage one creates the dedicated empty encryption-key entry. Stage two may
+  # inject it only after its owned value and supported sandbox runtime are ready.
+  social_publisher_runtime_ready = var.social_publisher_runtime_ready
+
   # Adapter construction is separate from owner-controlled database activation.
   # David confirmed model credit coverage on 2026-10-19 at 01:35:53 UTC.
   # This 24-hour verification-freshness deadline is NOT AWS credit expiry.
@@ -67,8 +71,7 @@ locals {
   # version. Machine-facing: the signed manifest on this stack's updates
   # distribution, which the desktop reads and installs from by itself; its upgrade
   # screen shows a sentence and never this address. The API refuses to start in
-  # production without it or with the callie.example placeholder, and
-  # test/ops/terraformCrossChecks.check.ts holds this line to the channel path.
+  # production without it or with the callie.example placeholder.
   # `docs/archive/decisions/g86-the-upgrade-notice-names-the-update-channel.md`.
   desktop_upgrade_url = "https://dlcmdaeskewt5.cloudfront.net/releases/darwin-arm64/latest.json"
 
@@ -132,6 +135,8 @@ module "stack" {
 
   sending_enabled                      = local.sending_enabled
   worker_reads_millionverifier_api_key = local.worker_reads_millionverifier_api_key
+  social_publisher_runtime_ready       = local.social_publisher_runtime_ready
+  social_publisher_host                = var.social_publisher_host
   crm_capability_adapters              = local.crm_capability_adapters
 
   # Null in code: the managed instance. Set only while the restore runbook
