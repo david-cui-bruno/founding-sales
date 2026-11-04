@@ -1,0 +1,68 @@
+# LinkedIn personal-member publication: documented options
+
+Research date: 2026-11-03. Scope: an existing application's personal-member text or text-plus-one-real-image publication. Public official documentation only; no account/session access, credential/application changes, API calls, posting, or checks were performed. **Provider API capability is documented; this application's API products, granted scopes, member identity, connectivity, and API-route unattended rights are unverified.** Existing browser-route platform permission is accepted repo context, not reopened here. This note does not activate publishing.
+
+## 1. Access path and the important policy boundary
+
+- **A self-service member-create path exists:** enable **Share on LinkedIn** on the existing application's Products tab; it grants `w_member_social`. LinkedIn lists this as an open permission available without special partner approval. The member must separately authorize the app. Application ownership or an enabled product is not member consent. [Access][Share][OAuth]
+- The consumer sharing tutorial still demonstrates `/v2/ugcPosts` and legacy Assets. Current Posts documentation says **Posts API replaces ugcPosts**, and Images documentation says **Images API replaces Assets**. For new integration design use the documented `/rest/posts` and `/rest/images` contracts, subject to verifying the actual app's access; do not silently mix legacy payloads or treat the old tutorial as evidence that current reads are open. [Share][Posts][Images]
+- **Technical API create permission is not blanket permission for automatic API publishing.** The publicly served API Terms §3.1(26) explicitly prohibit “Use the Content or the APIs to automate posting on the LinkedIn Services.” §1.2 says an applicable vetted-program additional agreement or signed partnership agreement can govern/override the relevant conflicting provisions; §1.3 says the Terms control conflicting Developer Documentation. Thus self-service API documentation alone does **not** establish standing-policy unattended rights for that API route. Any API-route selection must establish which applicable agreement/permission covers that operation; an OAuth grant is not that evidence. This is an API-specific access/terms question, not evidence that the separately accepted browser grant is absent. [API Terms]
+- **Existing accepted browser route versus unsupported automation:** repo policy explicitly records that LinkedIn browser-automation platform permission is already obtained; preserve that accepted scope and do not request it again. Public policy prohibits unauthorized website automation and does not establish the scope of this particular grant; it is not grounds to invalidate the accepted grant or replace the workflow with manual-only posting. Account/content/cadence activation and actual adapter acceptance remain distinct. Cookies, password sharing, scraping, or a signed-in browser alone do not confer permission or API authorization. [Automation][User Agreement][Repo policy][Native acceptance]
+
+## 2. OAuth and creator/account identity
+
+| Need | Documented minimum / limit |
+| --- | --- |
+| Create as the authenticated personal member | Member-authorized **three-legged authorization-code OAuth**, `w_member_social`, and bearer access token. Scopes must be provisioned for that app and explicitly consented to; changed scopes require reauthentication. A client-credentials token is not a substitute for this member flow. [Access][OAuth][Posts] |
+| Identify the member when an appropriate existing identity binding is unavailable | Separately enable **Sign in with LinkedIn using OpenID Connect**; `openid` obtains the ID token and `profile` provides lite identity/profile information. `email` is not needed just to publish. Validate ID-token signature and issuer/audience/expiry using the documented discovery/JWKS metadata. `userinfo` returns `sub` and name/profile fields. [OIDC] |
+| Bind the intended author | Author is `urn:li:person:{id}`, not a profile vanity URL. The Share guide directs developers to OIDC for the Person URN; Posts schema also points to the current-member Profile API. Implementation must establish the authenticated member identifier for this same app and bind it to David before use; do not guess a URN from his public profile. Image owner must match the caller for member-owned images. [Share][Schema][Images] |
+| Verify who is operating | OIDC explicitly **does not verify real-world user identities**. These posting docs do not specify a creator-mode, verified-badge, or government-ID requirement for member posting. Owner confirmation of the intended account is a local activation safeguard, not a LinkedIn identity-verification claim. [OIDC][Share][Posts] |
+| Continue operating | Honor the returned `expires_in`; do not assume indefinite access. Programmatic refresh tokens are available only to a limited set of partners and only if enabled for the application. Reauthorization may be required. [OAuth] |
+
+## 3. Current HTTP and media contract
+
+**Headers:** current versioned calls require `Authorization: Bearer …`, `Linkedin-Version: <supported YYYYMM>`, and `X-Restli-Protocol-Version: 2.0.0`; use `Content-Type: application/json` for JSON requests. Select and configure an explicitly supported version from the official versioning/migration documentation at implementation/activation time, with its corresponding schema. No version is pinned by this note; the latest is not implicitly selected if the header is absent. [Posts][Images][Versioning]
+
+**Text:** `POST https://api.linkedin.com/rest/posts`, with the authenticated Person URN as `author`, `commentary`, intended `visibility`, `distribution` (`MAIN_FEED` for the ordinary organic feed), and `lifecycleState: PUBLISHED`. Omit `content` for text-only. An empty `thirdPartyDistributionChannels` array means no external distribution. `PUBLIC` means anyone can view; do not confuse private in-app drafts with a LinkedIn create-as-draft facility: `PUBLISHED` is the only accepted create state. [Posts][Schema]
+
+**One image:** [Images][Posts][Schema][Assets upload]
+
+1. `POST /rest/images?action=initializeUpload` with `initializeUploadRequest.owner` equal to the authenticated Person URN. Capture returned `image` (`urn:li:image:…`), `uploadUrl`, and `uploadUrlExpiresAt`.
+2. Upload the binary with **PUT** to that returned upload URL using the documented bearer authorization. The current Images page delegates binary-upload instructions to the Assets page; this does not mean using legacy asset registration or a `digitalmediaAsset` URN with the new Images flow.
+3. Reference the Image URN in `content.media.id` on the post create; optional media `title`/`altText` are separate fields. Upload success and post success are separate facts.
+
+**Restrictions and readiness gap:** Images documents JPG, PNG and GIF; **less than 36,152,320 pixels**, GIF up to 250 frames. It does not give a universal byte-size ceiling in the cited Images contract; do not import video limits or guess a photo MB limit. Real HEIC photos are not in the supported list. `SYNCHRONOUS_UPLOAD` is explicitly unsupported by Images. Asset states include `WAITING_UPLOAD`, `PROCESSING`, `PROCESSING_FAILED`, and `AVAILABLE`; **a token containing only `w_member_social` cannot GET versioned `/rest/images`**, even though it can write. Thus “upload then poll until AVAILABLE” is not an implementable assumption under the minimum scope. Establish a supported readiness strategy and actual permissions before enabling image publishing; do not assume post-read permission also grants image reads or exploit legacy calls as an automatic fallback. [Images]
+
+## 4. Success, ambiguous creates, and retries
+
+| Observation / operation | What it establishes and what it does not |
+| --- | --- |
+| Post create returns `201` and `x-restli-id` | Documented create success and provider Post ID, either `urn:li:share:…` or `urn:li:ugcPost:…`. Preserve the entire returned URN, not an inferred numeric-only ID. This is not independent proof of final visible rendering, impressions, or audience reach. Schema supports asynchronous `PUBLISH_REQUESTED` and `PUBLISH_FAILED` outcomes and processing/review state. [Posts][Schema] |
+| Known-ID lookup | `GET /rest/posts/{URL-encoded share-or-ugcPost-URN}` is documented. `viewContext=READER` is the published/general-reader view; `AUTHOR` obtains the author's latest version. The documented member-read permission is restricted `r_member_social`, available to approved users only; write-only self-service access does not establish this read capability. [Posts] |
+| Unknown ID after timeout/disconnection | With separately approved `r_member_social`, the author finder `GET /rest/posts?q=author&author={encoded PersonURN}&sortBy=CREATED` can retrieve the member's posts (paginated; default 10, maximum count 100). It is **not** a documented request-id/idempotency lookup. Matching text, image URN, author and time can inform reconciliation but does not prove uniqueness or that a missing result means create failed. Without this restricted access, automatic own-post discovery is not established; preserve the unresolved attempt for owner reconciliation, not scraping. [Posts] |
+| Repeating create | The reviewed Posts/Images create contracts document **no create idempotency key or exactly-once guarantee**. Posts explicitly describes *deletions* as idempotent; that does not extend to creates. Its error table recommends retrying some errors (409/429/500/503), but supplies no create-deduplication guarantee. A lost response or uncertain server-side outcome must not trigger blind POST retries; local uniqueness prevents concurrent local attempts but cannot undo a remotely completed create. A create is safely reconsidered only once the prior attempt's outcome is definitively resolved, not merely because a read is empty or a timeout elapsed. [Posts][Images] |
+
+## 5. Media metadata, privacy and activation evidence
+
+- LinkedIn media-library metadata is optional, account-specific advertising-library registration; it is **not** David's local approved media pool or a prerequisite for a personal image post. Returned download URLs are public media URLs and can expire even when an expiry is absent; neither an image URN nor a download URL is a private vault or durable storage guarantee. [Images]
+- Publish only media David has explicitly approved for this use and has rights to share; public sharing can expose content off LinkedIn. Local design should remove unnecessary EXIF/GPS, private filenames/captions and sensitive visible details before upload; the cited APIs do **not** promise automatic removal of sensitive metadata. Accessibility alt text must describe the actual approved image without adding personal facts. These are proposed local safeguards, not undocumented provider guarantees. [User Agreement §§2.5, 3.1][Images][Schema]
+- API Terms require minimal collection, secure credentials/data handling, an accessible privacy policy, meaningful member consent, withdrawal/deletion mechanisms, and constrained storage of API-derived Content. They distinguish user-separately-uploaded data from API-collected Content for the §4.4 deletion rule; they do not authorize indefinite storage of all readback payloads. Review applicable additional terms before selecting retained provider fields or retention periods. [API Terms §§3.1, 4, 5, 7]
+
+**Activation evidence still needed (not performed here):** existing app's enabled products and granted scopes; consented, validated David account/Person URN binding; applicable permission for unattended publication; supported configured API version; actual text-create and image-upload/readiness capability; exact own-post/image read permissions or an explicit unresolved-outcome owner process; and verified integration/calibration under the product's activation controls. Metadata saying “connected” or public documentation is not this evidence. No new paid provider, queue, authentication service, or browser workaround is proposed.
+
+[Access]: https://learn.microsoft.com/en-us/linkedin/shared/authentication/getting-access
+[Share]: https://learn.microsoft.com/en-us/linkedin/consumer/integrations/self-serve/share-on-linkedin
+[OAuth]: https://learn.microsoft.com/en-us/linkedin/shared/authentication/authorization-code-flow
+[OIDC]: https://learn.microsoft.com/en-us/linkedin/consumer/integrations/self-serve/sign-in-with-linkedin-v2
+[Posts]: https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/posts-api
+[Images]: https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/images-api
+[Schema]: https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/post-api-schema
+[Assets upload]: https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/vector-asset-api#upload-the-image
+[Versioning]: https://learn.microsoft.com/en-us/linkedin/marketing/versioning
+[API Terms]: https://www.linkedin.com/legal/l/api-terms-of-use
+[Automation]: https://www.linkedin.com/help/linkedin/answer/a1341387/prohibition-of-scraping-software?lang=en
+[User Agreement]: https://www.linkedin.com/legal/user-agreement
+[User Agreement §§2.5, 3.1]: https://www.linkedin.com/legal/user-agreement
+[API Terms §§3.1, 4, 5, 7]: https://www.linkedin.com/legal/l/api-terms-of-use
+[Repo policy]: linkedin-policy.md
+[Native acceptance]: ../sourcing/linkedin-native-acceptance-460.md

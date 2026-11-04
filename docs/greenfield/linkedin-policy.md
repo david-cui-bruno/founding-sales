@@ -6,6 +6,8 @@ Settings → LinkedIn exposes account connection only. Connecting does not autho
 
 The October26 full-build decision supersedes the October22 manual-only/review-first target with founder-voice automatic publishing on supported public platform/account/routes, without blanket per-post review. Public Conversations are not DMs. LinkedIn browser-automation platform permission is already obtained, do not ask again. See the [canonical plan](../../apps/web/PLAN.md) for the finite implementation queue and [current state](../operations/current-state.md) for actual adapters and holds. Desired scope is not a claim of live support or permission for a current LinkedIn action, new channel/contact group, provider, spend or higher limit. Manual drafting/ledger fallback remains supported.
 
+The [agreed personal-brand publishing specification](founder-social-publishing.md) (#925) defines rough owner-private inputs, an approved real-image pool, three private calibration drafts and three posts/week under explicit standing generation/publication scopes. It requires a real web-owned account/runner integration and preserves the accepted browser-platform permission; self-service API write scope is not evidence of unattended API rights or reconciliation access. This is implementation scope, not live activation, photo-library access, comments/DMs or a new platform.
+
 ## Operational authority
 
 The manual ledger lives in `packages/domain/crm/linkedinManual.ts` and its access/read/stop helpers. Preserve the actual account/profile, person/firm association, channel history, unknown activity and current actor authorization. A recorded manual action must describe what happened, not fabricate a provider receipt or imply a draft was delivered.
