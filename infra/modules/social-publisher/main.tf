@@ -17,6 +17,7 @@ resource "aws_vpc_security_group_ingress_rule" "control" {
   ip_protocol                  = "tcp"
   from_port                    = 8080
   to_port                      = 8080
+  tags                         = merge(var.tags, { NamePrefix = var.name_prefix })
 }
 resource "aws_vpc_security_group_egress_rule" "alb_control" {
   security_group_id            = var.alb_security_group_id
@@ -24,6 +25,7 @@ resource "aws_vpc_security_group_egress_rule" "alb_control" {
   ip_protocol                  = "tcp"
   from_port                    = 8080
   to_port                      = 8080
+  tags                         = merge(var.tags, { NamePrefix = var.name_prefix })
 }
 resource "aws_vpc_security_group_egress_rule" "https" {
   security_group_id = aws_security_group.browser.id
@@ -31,6 +33,7 @@ resource "aws_vpc_security_group_egress_rule" "https" {
   ip_protocol       = "tcp"
   from_port         = 443
   to_port           = 443
+  tags              = merge(var.tags, { NamePrefix = var.name_prefix })
 }
 resource "aws_vpc_security_group_egress_rule" "dns" {
   for_each          = toset(["tcp", "udp"])
@@ -39,6 +42,7 @@ resource "aws_vpc_security_group_egress_rule" "dns" {
   ip_protocol       = each.value
   from_port         = 53
   to_port           = 53
+  tags              = merge(var.tags, { NamePrefix = var.name_prefix })
 }
 
 resource "aws_iam_role" "host" {
