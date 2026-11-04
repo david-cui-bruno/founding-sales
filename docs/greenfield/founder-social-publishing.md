@@ -1,6 +1,6 @@
 # Founder-voice Social: private inputs to automatic publication
 
-Parent: #783. Implementation: #925. **Agreed product specification; not implemented or activated.** David confirmed the brief in the November3 interview. Existing email/calling controls, paid ceilings and paused schedules are unchanged. This document authorizes no account action, photo access, model call or publication.
+Parent: #783. Implementation: #925. **Agreed specification; software deployed, genuine owner activation pending.** [Current state](../operations/current-state.md) owns production acceptance and controls. David confirmed the brief in the November3 interview. This document authorizes no account action, photo access, model call or publication.
 
 ## Outcome and agreed scope
 
@@ -15,17 +15,18 @@ Build David's personal brand as a college founder building AI products. Broad fo
 - Use current approved backlog when fresh material is thin; otherwise skip visibly. Never invent experiences, beliefs, wins, numbers, customer stories, endorsements or urgency to fill a slot.
 - No automatic comments, DMs, invitations, unsolicited tagging, keyword-response promises, public-thread acquisition, cross-posting, generated proof images or new paid service. Video/carousel routes are not implied by the existing single-photo capability.
 
-## Current implementation, not inferred readiness
+## Implemented owners and readiness boundaries
 
-| Existing owner | Reuse and actual gap |
+| Existing owner | Implemented behavior and boundary |
 | --- | --- |
 | [Private guide](../../packages/domain/social/voicePreferences.ts), [guide lifecycle](../../packages/domain/social/voiceGeneration.ts), [ADR0022](../adr/0022-private-social-voice-preferences.md) | Owner-private bounded current style entries; not facts, a training corpus or consent for background processing. Guide edits currently erase dependent suggestions and corrected private drafts. |
 | [Private drafts](../../packages/domain/social/privateDrafts.ts), [source basis](../../packages/domain/social/privateDraftSources.ts), [ADR0021](../adr/0021-durable-private-social-composition.md) | Current-text CAS composition, sticky lineage and fixed90-day maximum. Not factual approval, a publication queue or a photo selection model. |
 | [Workspace facts](../../packages/domain/outreach/facts.ts) | Approved outreach blocks are workspace-level and preserve versions. Do not put private founder notes here or treat a private composition as approved evidence. |
-| [Generation](../../packages/domain/social/draftRun.ts), [source resolver](../../packages/domain/social/draftSources.ts), [real adapter](../../apps/worker/src/social/draftModel.ts) | Governed Bedrock/Haiku text generation, exact source/guide checks, reservations and uncertainty. Grounded output is currently one concept/request. Existing click-scoped processing does not authorize a scheduled request. |
-| [Assets](../../packages/domain/social/assets.ts), [storage](../../apps/api/src/social/mediaStore.ts), [cleanup](../../apps/worker/src/social/cleanup.ts) | Real owner-scoped upload/HEAD/storage/deletion machinery. Browser upload, decoded-image validation, sanitization, public-use approval and complete owner-departure erasure still need implementation. |
-| [Posts](../../packages/domain/social/posts.ts), [delivery](../../packages/domain/social/delivery.ts), [queue](../../packages/domain/social/deliveryQueue.ts) | Manual revision/approval/submission/observation and no-repeat history. No active standing publisher. The unused worker snapshot rejects images and hardcodes one profile; remove/replace it through actual consumers, not a second identity exception. |
-| [Readiness](../../packages/domain/social/publishingReadiness.ts), [retired work](../../packages/domain/social/retiredPosting.ts) | Readiness is deliberately unavailable; old recurring authority remains refused. Retained two-day cadence rows, weekly private drafts and old connected markers are not fresh consent or a three-post publisher. |
+| [Founder inputs/calibration](../../packages/domain/social/founderInputs.ts) | Owner-private current bullets, explicit public-use eligibility and three distinct private-draft reviews. Calibration does not activate publication or prove genuine voice quality. |
+| [Generation](../../packages/domain/social/draftRun.ts), [source resolver](../../packages/domain/social/draftSources.ts), [real adapter](../../apps/worker/src/social/draftModel.ts) | Governed Bedrock/Haiku generation with current source/guide checks, reservations and uncertainty. Scheduled generation additionally requires the explicit current standing grant; a click-scoped request is not that grant. |
+| [Assets](../../packages/domain/social/assets.ts), [approved media](../../packages/domain/social/approvedMedia.ts), [storage](../../apps/api/src/social/mediaStore.ts), [cleanup](../../apps/worker/src/social/cleanup.ts) | Browser upload, decoded-image validation, sanitization, preview, public-use approval and owner/lifecycle erasure use the existing asset owner. Upload alone never grants public use or whole-library access. |
+| [Posts](../../packages/domain/social/posts.ts), [delivery](../../packages/domain/social/delivery.ts), [standing jobs](../../apps/worker/src/social/standingJobs.ts) | Manual revision/approval and guarded system-worker publication share durable submission/history owners. Current owner/account/plan bindings replace the unused hardcoded worker snapshot; UNKNOWN never permits another create. |
+| [Readiness](../../packages/domain/social/publishingReadiness.ts), [retired work](../../packages/domain/social/retiredPosting.ts) | Fresh API/worker runtime observation, current intended-account verification and explicit plan prerequisites are separate. Historical cadence rows, private drafts and connected markers remain insufficient authority. |
 
 ## User journey
 
@@ -121,4 +122,4 @@ Use actual signed browser/API/app_runtime/Postgres acceptance with fictional pub
 
 Root owns contracts/schema/routes/integration/production and finite tickets. Reuse current private guide/draft, Social asset, governed model, PG scheduler and submission/history modules; add only the missing private-input/calibration/current-plan/runner seams. Keep manual composition/ledger and historical no-repeat evidence. Migrations are the next reviewed contiguous schema change at implementation, with normal privileges, source-loss/owner lifecycle and upgrade checks—not a reserved guessed schema number here.
 
-This specifies the complete agreed loop, not a shipped publisher. Real bullets, a supplied media pool and later account/calibration activation are operational inputs, not reasons to block independent implementation. Public Conversations remain roadmap4.4 and do not enter this feature. Email's active25-company/5-per-day/no-follow-up campaign, Gmail scope and newer stops are independent. No production or account controls change when this specification is published.
+This specifies the complete agreed loop. Software delivery and operational evidence belong to [current state](../operations/current-state.md); real bullets, supplied media, genuine calibration and intended-account/plan activation remain normal-product owner inputs. Fixtures prove neither voice quality nor public publication. Public Conversations remain roadmap4.4, outside this feature. Email's bounded25-company/5-per-day/no-follow-up campaign, Gmail scope and newer stops remain independent.
