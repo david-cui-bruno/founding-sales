@@ -140,6 +140,7 @@ test('Email reads current originals, expands prior history, keeps independent dr
 
 test('Social metadata stays body-free and one selected private editor saves/reopens at 388px', async ({ page }) => {
   await navigateGlass(page, 'Social');
+  await page.getByRole('navigation', { name: 'Social views' }).getByRole('button', { name: 'Drafts', exact: true }).click();
   await expect(page.getByText('No saved private drafts. Start a new manual draft.', { exact: true })).toBeVisible();
   const meta = await browserRequest(page, '/social/private-drafts/list', { body: {} });
   expect(meta.status).toBe(200);
@@ -158,6 +159,7 @@ test('Social metadata stays body-free and one selected private editor saves/reop
   await assertGlassStorage(page, [text, seed.socialText]);
   await page.reload();
   await navigateGlass(page, 'Social');
+  await page.getByRole('navigation', { name: 'Social views' }).getByRole('button', { name: 'Drafts', exact: true }).click();
   await expect(page.getByRole('textbox', { name: 'Private social text', exact: true })).toHaveValue('');
   await page.setViewportSize({ width: 388, height: 844 });
   await page.getByRole('button', { name: /^Reopen private draft /u }).click();
@@ -168,6 +170,7 @@ test('Social metadata stays body-free and one selected private editor saves/reop
   await glassScreenshot(page, '783-social-private-388');
   await page.getByRole('button', { name: 'Back to drafts', exact: true }).click();
   await expect(page.getByRole('button', { name: 'List saved private drafts', exact: true })).toBeFocused();
+  await page.getByRole('button', { name: 'Library', exact: true }).click();
   await page.getByRole('button', { name: 'Conversations', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Retained public conversations', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Read retained public threads', exact: true })).toBeEnabled();

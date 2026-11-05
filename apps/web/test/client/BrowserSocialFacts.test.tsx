@@ -49,7 +49,7 @@ beforeEach(()=>{vi.stubGlobal('crypto',webcrypto);localStorage.clear();const tai
 afterEach(()=>{cleanup();localStorage.clear();vi.unstubAllGlobals();});
 const button=(name:string)=>screen.getByRole('button',{name});
 async function read(){fireEvent.click(button('Read current facts'));await screen.findByText('Current shared facts read. Saving creates an unapproved version. Approval is a separate explicit action.');await waitFor(()=>expect(button('Read current facts')).toHaveProperty('disabled',false));}
-async function mount(){const s=setup();await s.client.refresh();const view=render(<BrowserSocialWorkspace client={s.client}/>);fireEvent.click(button('Author shared facts'));await read();return {...s,view};}
+async function mount(){const s=setup();await s.client.refresh();const view=render(<BrowserSocialWorkspace client={s.client}/>);fireEvent.click(button('Drafts'));fireEvent.click(button('Author shared facts'));await read();return {...s,view};}
 it('news exposes its unavailable source prerequisite without desktop bridge or source IO',async()=>{
  const s=await mount();typeFact();fireEvent.change(screen.getByLabelText('LinkedIn topic'),{target:{value:'news'}});
  expect(screen.getByText(/News-source selection is unavailable in this browser/u)).toBeTruthy();

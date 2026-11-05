@@ -2,7 +2,6 @@ import {useEffect,useRef,useState,type JSX} from 'react';
 import {socialDraftWorkspaceSchema,socialDraftViewSchema,type SocialDraftWorkspace,type SocialDraftView} from '@fss/contracts';
 import {z} from 'zod';
 import {BrowserPrivateComposer,type PrivateAdoption} from './BrowserPrivateComposer.tsx';
-import {BrowserVoicePreferences} from './BrowserVoicePreferences.tsx';
 import {BrowserSocialFacts} from './BrowserSocialFacts.tsx';
 import {BrowserSocialGeneration} from './BrowserSocialGeneration.tsx';
 import type {BrowserClient} from './BrowserClient.ts';
@@ -89,7 +88,6 @@ function SocialReviewSession({client}:{client:BrowserClient}):JSX.Element|null{
    </article>)}
   </div>:null}
   </details>
-  <details className="social-details"><summary>Private voice guide</summary><BrowserVoicePreferences client={client}/></details>
  </section>;
 }
 function expireWorkspace(workspace:SocialDraftWorkspace):SocialDraftWorkspace{

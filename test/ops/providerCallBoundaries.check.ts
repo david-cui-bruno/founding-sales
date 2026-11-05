@@ -127,8 +127,7 @@ const RETIRED_METHODS: Readonly<Record<string, string>> = {
 /**
  * A reference allowed somewhere else. Each entry needs a REASON that says why it cannot
  * go through the boundary and what gates it instead; "it is convenient" is not one.
- * There are none today. Adding an entry is a review decision, not a way to make this
- * check green.
+ * Adding an entry is a review decision, not a way to make this check green.
  */
 export interface Allowed {
   readonly file: string;
@@ -138,6 +137,9 @@ export interface Allowed {
 export const ALLOWED_ELSEWHERE: readonly Allowed[] = [
   {file:'apps/worker/src/sourcing/evaluateDiscovery.ts',method:'discover',reason:'Local evaluation owns a durable single-host pre-request debit; independently checked as the evaluation boundary.'},
   {file:'packages/domain/sourcing/discovery.ts',method:'discover',reason:'Production discovery owns a committed shared PostgreSQL dispatch fence; independently checked as the continuous discovery boundary.'},
+  ...['packages/contracts/src/socialPublisher.ts','apps/web/src/client/BrowserSocialPublisherConnection.tsx','packages/social-publisher/src/publisherRuntime.ts'].map(file=>({
+    file,method:'discover',reason:"The literal 'discover' selects read-only Buffer profile enumeration, not the sourcing search provider method. The retained-admin connection route and after-wait principal checks gate its fixed Buffer GraphQL account/channel reads; it cannot acquire prospects or grant publication.",
+  })),
   {
     file:'packages/domain/sourcing/sourceCheck.ts',method:'fetchPages',
     reason:'Candidate source checks cannot use firm enrichment without creating a callable CRM firm. requestSourceCheck consumes the shared daily research count before enqueue; runSourceCheck checks research settings/holds, the pending check ID, dismissal and deadline, then uses the same bounded page adapter with one URL/page. It never calls a model or search provider; tests cover limits, retries and stale results.',

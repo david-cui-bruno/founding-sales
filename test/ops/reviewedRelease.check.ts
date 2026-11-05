@@ -54,7 +54,7 @@ else if(a.startsWith('ecs describe-task-definition ')) {
 }
 else if(a.startsWith('rds describe-db-instances ')) console.log(JSON.stringify({DBInstances:[{DBInstanceIdentifier:'fss-prod-pg',DBInstanceStatus:process.env.BACKUP_MODE==='unavailable'?'backing-up':'available',BackupRetentionPeriod:process.env.BACKUP_MODE==='retention'?1:35,LatestRestorableTime:process.env.BACKUP_MODE==='invalid'?'invalid-time':process.env.BACKUP_MODE==='missing'?null:'2026-10-11T00:00:00Z'}]}));
 else process.exit(1);`);
-      const terraform = executable('terraform', `const fs=require('fs'),a=process.argv.slice(2); fs.appendFileSync(process.env.LOG,a.join(' ')+'\\n'); if(a.includes('plan')) {fs.copyFileSync(a.find(x=>x.startsWith('-var-file=')).slice(10),process.env.LOG+'.variables');fs.writeFileSync(a.find(x=>x.startsWith('-out=')).slice(5),'saved private plan bytes\\n'+fs.readFileSync(process.env.LOG+'.variables','utf8'));} else if(a.includes('show')) console.log(JSON.stringify({resource_changes:[{address:'aws_iam_role.ci_plan',change:{actions:['create']}}]})); else if(a.includes('state')) console.log(JSON.stringify({lineage:'literal-lineage',serial:7,resources:[]})); else if(!a.includes('init')) process.exit(1);`);
+      const terraform = executable('terraform', `const fs=require('fs'),a=process.argv.slice(2); fs.appendFileSync(process.env.LOG,a.join(' ')+'\\n'); if(a.includes('plan')) {fs.copyFileSync(a.find(x=>x.startsWith('-var-file=')).slice(10),process.env.LOG+'.variables');fs.writeFileSync(a.find(x=>x.startsWith('-out=')).slice(5),'saved private plan bytes\\n'+fs.readFileSync(process.env.LOG+'.variables','utf8'));} else if(a.includes('show')) console.log(JSON.stringify({resource_changes:[{address:'aws_iam_role.ci_plan',change:{actions:['create']}}]})); else if(a.includes('state')) console.log(JSON.stringify({lineage:'literal-lineage',serial:7,resources:process.env.PUBLISHER_HOST==='1'?[{mode:'managed',module:'module.stack.module.social_publisher[0]',type:'aws_instance',name:'browser'}]:[]})); else if(!a.includes('init')) process.exit(1);`);
       executable('curl', `const fs=require('fs'); const countFile=process.env.LOG+'.health'; const n=fs.existsSync(countFile)?Number(fs.readFileSync(countFile,'utf8')):0; fs.writeFileSync(countFile,String(n+1)); console.log(JSON.stringify({status:'serving',build:{commit:process.env.CHANGE_BASELINE==='1'&&n>0?'c'.repeat(40):'a'.repeat(40)},schema:{accepted:true,databaseVersion:88}}));`);
       const run = (output: string, change: boolean, backupMode = '', extra: NodeJS.ProcessEnv = {}) => spawnSync(process.execPath, [repositoryPath('infra/scripts/reviewed-release.mjs'), 'prepare', images, key, 'absent-evidence', 'absent-binding', output], { cwd: repositoryPath('.'), encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env['PATH'] ?? ''}`, FSS_REHEARSAL_AWS_COMMAND: aws, TERRAFORM: terraform, LOG: commands, BACKUP_MODE: backupMode, BASELINE_MODE: '', FSS_PRODUCTION_FOUNDER_BROWSER_JSON: '', FSS_PRODUCTION_SOCIAL_PUBLISHER_JSON: '', CHANGE_BASELINE: change ? '1' : '0', COMMIT: 'b'.repeat(40), RUN_ID: '1', RUN_ATTEMPT: '1', GATE_RUN_ID: '2', FSS_PRODUCTION_ORIGIN: 'https://controlled.invalid', AWS_REGION: 'us-east-1', ...extra } });
       const prepared = join(directory, 'prepared'); const success = run(prepared, false);
@@ -87,6 +87,31 @@ else process.exit(1);`);
       expect(opened.status, opened.stderr).toBe(0); expect(readFileSync(decrypted, 'utf8')).toBe(savedBytes);
       expect(existsSync(join(configured, 'private'))).toBe(false);
       expect(readFileSync(join(configured, 'public/manifest.json'), 'utf8')).not.toContain(configuration.cookieKeySecretArn);
+      const acceptedImage = `326255650484.dkr.ecr.us-east-1.amazonaws.com/fss-prod-api@sha256:${'a'.repeat(64)}`;
+      const preservedHost = { ami_id: 'ami-0f11e0e04ccb60d0a', image: acceptedImage };
+      for (const [phase, publisher, host, ready] of [
+        ['preserve', { hostAction: 'preserve', amiId: preservedHost.ami_id, image: acceptedImage, runtimeReady: false }, preservedHost, false],
+        ['cutover', { hostAction: 'preserve', amiId: preservedHost.ami_id, image: acceptedImage, runtimeReady: true }, preservedHost, true],
+        ['retire', { hostAction: 'retire', retirementAccepted: true, runtimeReady: true }, null, true],
+      ] as const) {
+        const destination = join(directory, `publisher-${phase}`);
+        const result = run(destination, false, '', {
+          PUBLISHER_HOST: '1', FSS_PRODUCTION_FOUNDER_BROWSER_JSON: JSON.stringify(configuration),
+          FSS_PRODUCTION_SOCIAL_PUBLISHER_JSON: JSON.stringify(publisher),
+        });
+        expect(result.status, result.stderr).toBe(0);
+        const variables = JSON.parse(readFileSync(commands + '.variables', 'utf8'));
+        expect(variables.social_publisher_host).toEqual(host);
+        expect(variables.social_publisher_runtime_ready).toBe(ready);
+        expect(variables.api_image).not.toBe(acceptedImage);
+        const bound = JSON.parse(readFileSync(join(destination, 'public/manifest.json'), 'utf8'));
+        const plan = 'saved private plan bytes\n' + readFileSync(commands + '.variables', 'utf8');
+        expect(bound.planSha256).toBe(createHash('sha256').update(plan).digest('hex'));
+        expect(existsSync(join(destination, 'private'))).toBe(false);
+      }
+      const omitted = run(join(directory, 'publisher-omitted'), false, '', { PUBLISHER_HOST: '1' });
+      expect(omitted.status).toBe(1);
+      expect(omitted.stderr).toContain('social_publisher_configuration_required');
       for (const mode of ['retention', 'invalid', 'missing', 'unavailable']) {
         const refused = join(directory, `backup-${mode}`);
         const result = run(refused, false, mode);

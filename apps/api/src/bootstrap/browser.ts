@@ -10,6 +10,7 @@ import { optionsForRequest, type ApiServerOptions } from '../server.ts';
 import { requestConnection } from './connections.ts';
 import { buildReadinessReport } from './readiness.ts';
 import type { ApiBrowserMount } from './browserContract.ts';
+import {SOCIAL_PUBLISHER_MEDIA_PREFIX} from '../routes/socialPublisherMedia.ts';
 
 export interface FounderBrowserSettings extends BrowserHostSettings {
   readonly founder: Readonly<{ workspaceId: string; userId: string }>;
@@ -73,7 +74,8 @@ export function dispatchBrowser(mount: ApiBrowserMount | undefined, request: Inc
     }
     return false;
   }
-  if (['/healthz', '/readyz', '/health'].includes(path)) return false;
+  if (['/healthz', '/readyz', '/health'].includes(path)
+    || path === SOCIAL_PUBLISHER_MEDIA_PREFIX || path.startsWith(`${SOCIAL_PUBLISHER_MEDIA_PREFIX}/`)) return false;
   mount.handler(request, response);
   return true;
 }

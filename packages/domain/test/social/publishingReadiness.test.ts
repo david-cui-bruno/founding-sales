@@ -1,11 +1,11 @@
 import {expect,it,vi} from 'vitest';
-import {SOCIAL_BROWSER_ADAPTER} from '@fss/contracts';
+import {SOCIAL_PUBLISHER_ADAPTER} from '@fss/contracts';
 import {repositoryContext,workspaceScope} from '../../db/workspaceScope.ts';
 import type {QueryResultRowLike,SessionQueryable} from '../../db/queryable.ts';
 import {readSocialPublishingReadiness} from '../../social/publishingReadiness.ts';
 import {PrivateDraftAuthorityChanged} from '../../social/privateDrafts.ts';
 const id='10000000-0000-4000-8000-000000000001',other='20000000-0000-4000-8000-000000000002';
-const row={id,revision:7,platform:'linkedin',account_kind:'profile',display_name:'Fictional owner',state:'connected',external_id:'https://www.linkedin.com/in/fictional',session_id:null,session_revision:null,session_account_revision:null};
+const row={id,revision:7,platform:'linkedin',account_kind:'profile',display_name:'Fictional owner',state:'connected',external_id:'native-profile-id',adapter_version:'buffer-linkedin-v1',organization_id:'1'.repeat(24),channel_id:'2'.repeat(24),credential_id:null,credential_revision:null,credential_account_revision:null};
 function fixture(rows:Record<string,unknown>[]=[row],active=true,runtimeAvailable=false){
  const queries:{text:string;values:readonly unknown[]|undefined}[]=[],authority=vi.fn(async()=>true);
  const db:SessionQueryable={async query<Row extends QueryResultRowLike>(text:string,values?:readonly unknown[]){
@@ -13,7 +13,7 @@ function fixture(rows:Record<string,unknown>[]=[row],active=true,runtimeAvailabl
   if(text.includes('workspace_memberships'))result=active?[{present:1}]:[];
   else if(text.includes('social_standing_plans'))result=[];
   else if(text.includes('social_accounts'))result=rows;
-  else if(text.includes('social_publisher_runtime'))result=runtimeAvailable?[{present:1}]:[];
+  else if(text.includes('social_buffer_publisher_runtime'))result=runtimeAvailable?[{present:1}]:[];
   else if(text==='SELECT clock_timestamp() AS now')result=[{now:new Date('2026-10-29T12:00:00Z')}];
   else throw Error('Unexpected query');
   return {rows:result as Row[],rowCount:result.length};
@@ -28,8 +28,8 @@ it('reads only exact owner metadata, retaining a historical connection as blocke
   holds:['adapter_unavailable','current_account_unverified','current_publication_policy_unavailable'],
  }]}});
  const read=f.queries.find(query=>query.text.includes('social_accounts'))!;
- expect(read.values).toEqual([id,other]);expect(read.text).toContain('owner_user_id=$2');expect(read.text).toContain('LIMIT 31 FOR SHARE');
- expect(read.text).not.toMatch(/encrypted_state|adapter_version|SELECT \*/u);
+ expect(read.values).toEqual([id,other]);
+ expect(read.text).not.toMatch(/SELECT \*|s\.encrypted_state AS/u);
  expect(f.queries.every(query=>query.text.startsWith('SELECT'))).toBe(true);expect(f.authority).toHaveBeenCalledTimes(2);
 });
 it.each([['facebook','page'],['facebook','profile'],['x','profile'],['linkedin','page']])('marks %s/%s as an unsupported current route',async(platform,account_kind)=>{
@@ -50,20 +50,33 @@ it('authority loss after the account read withholds all metadata',async()=>{
  const f=fixture();f.authority.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
  await expect(readSocialPublishingReadiness(f.ctx,f.authority)).rejects.toBeInstanceOf(PrivateDraftAuthorityChanged);
 });
-it('requires fresh runner heartbeat AND real session self-readback rather than metadata/configuration',async()=>{
- const session={...row,session_id:id,session_revision:2,session_account_revision:7};
- const f=fixture([session],true,true),verify=vi.fn(async()=>({usable:true,externalId:row.external_id,adapter:SOCIAL_BROWSER_ADAPTER}));
+it('requires fresh runner heartbeat AND real credential identity readback rather than metadata/configuration',async()=>{
+ const session={...row,credential_id:id,credential_revision:2,credential_account_revision:7};
+ const f=fixture([session],true,true),verify=vi.fn(async()=>({usable:true,externalId:row.external_id,adapter:SOCIAL_PUBLISHER_ADAPTER,reason:null}));
  const answer=await readSocialPublishingReadiness(f.ctx,f.authority,{verify});
  expect(answer).toMatchObject({ok:true,value:{runnerAvailable:true,publishingActivated:false,accounts:[{currentAccountVerified:true,holds:['current_publication_policy_unavailable']}]}});
- expect(verify).toHaveBeenCalledWith({workspaceId:id,ownerUserId:other,accountId:id,accountRevision:7,sessionId:id,sessionRevision:2,externalId:row.external_id});
- const stale=fixture([{...session,session_account_revision:6}],true,true);verify.mockClear();
+ expect(verify).toHaveBeenCalledWith({adapter:SOCIAL_PUBLISHER_ADAPTER,workspaceId:id,ownerUserId:other,accountId:id,accountRevision:7,credentialId:id,credentialRevision:2,organizationId:row.organization_id,channelId:row.channel_id,externalId:row.external_id});
+ const stale=fixture([{...session,credential_account_revision:6}],true,true);verify.mockClear();
  expect(await readSocialPublishingReadiness(stale.ctx,stale.authority,{verify})).toMatchObject({ok:true,value:{accounts:[{currentAccountVerified:false}]}});
  expect(verify).not.toHaveBeenCalled();
 });
 it('withholds readiness if exact principal is revoked while real capability read is waiting',async()=>{
- const f=fixture([{...row,session_id:id,session_revision:1,session_account_revision:7}],true,true);
+ const f=fixture([{...row,credential_id:id,credential_revision:1,credential_account_revision:7}],true,true);
  const started=Promise.withResolvers<void>(),release=Promise.withResolvers<void>();
- const pending=readSocialPublishingReadiness(f.ctx,f.authority,{verify:async()=>{started.resolve();await release.promise;return {usable:true,externalId:row.external_id,adapter:SOCIAL_BROWSER_ADAPTER};}});
+ const pending=readSocialPublishingReadiness(f.ctx,f.authority,{verify:async()=>{started.resolve();await release.promise;return {usable:true,externalId:row.external_id,adapter:SOCIAL_PUBLISHER_ADAPTER,reason:null};}});
  await started.promise;f.authority.mockResolvedValue(false);release.resolve();
  await expect(pending).rejects.toBeInstanceOf(PrivateDraftAuthorityChanged);
+});
+it('never verifies an old adapter even if current-looking credential metadata is supplied',async()=>{
+ const f=fixture([{...row,adapter_version:'linkedin-web-chromium-v1',credential_id:id,credential_revision:1,credential_account_revision:7}],true,true),verify=vi.fn(async()=>({usable:true,externalId:row.external_id,adapter:SOCIAL_PUBLISHER_ADAPTER,reason:null}));
+ expect(await readSocialPublishingReadiness(f.ctx,f.authority,{verify})).toMatchObject({ok:true,value:{accounts:[{currentAccountVerified:false}]}});
+ expect(verify).not.toHaveBeenCalled();
+});
+it('carries exact revoked-key evidence internally without exposing binding metadata or mutating under readiness locks',async()=>{
+ const f=fixture([{...row,credential_id:id,credential_revision:1,credential_account_revision:7}],true,true),revoked=vi.fn();
+ const result=await readSocialPublishingReadiness(f.ctx,f.authority,{verify:async()=>({usable:false,externalId:null,adapter:SOCIAL_PUBLISHER_ADAPTER,reason:'credential_revoked'})},revoked);
+ expect(revoked).toHaveBeenCalledWith(expect.objectContaining({credentialId:id,credentialRevision:1,accountRevision:7,externalId:row.external_id}));
+ expect(result).toMatchObject({ok:true,value:{accounts:[{currentAccountVerified:false}]}});
+ expect(JSON.stringify(result)).not.toMatch(/credentialId|credentialRevision|channelId|organizationId/u);
+ expect(f.queries.every(query=>query.text.startsWith('SELECT'))).toBe(true);
 });

@@ -14,7 +14,7 @@ async function login(page:Page,who:'alpha'|'beta'|'sales'='alpha'){
  const workspace=who==='beta'?app.fixture.beta:app.fixture.alpha;app.chooseIdentity(who==='sales'?workspace.salesperson:workspace.admin);
  await page.goto(app.origin);await expect(page.getByLabel('Workspace ID',{exact:true})).toBeVisible();
  await expect(page.getByText('Checking browser session…',{exact:true})).toHaveCount(0);
- await page.getByLabel('Workspace ID',{exact:true}).fill(workspace.workspaceId);await page.getByRole('button',{name:'Sign in',exact:true}).click();
+ await page.getByLabel('Workspace ID',{exact:true}).fill(workspace.workspaceId);await page.getByRole('button', { name: 'Continue with Google', exact: true }).click();
  await expect(page.getByRole('button',{name:'Sign out',exact:true})).toBeVisible();
 }
 // 848 selects the existing allocator adapter only; this new acceptance is #797.

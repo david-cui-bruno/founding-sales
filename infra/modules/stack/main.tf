@@ -295,7 +295,11 @@ module "cluster" {
   # The application secrets only. The two database entries arrive through their
   # own named inputs below, so each reaches exactly one execution role and the
   # cluster's boundary cannot be undone by a key appearing twice.
-  secret_arns                     = module.secrets.application_secret_arns
+  # The retired browser control secret remains in recovery custody, not ECS.
+  secret_arns = {
+    for name, arn in module.secrets.application_secret_arns : name => arn
+    if name != "social-publisher-control-token"
+  }
   app_runtime_database_secret_arn = module.secrets.app_runtime_database_secret_arn
   migration_database_secret_arn   = module.secrets.migration_database_secret_arn
 
@@ -335,8 +339,7 @@ module "cluster" {
     }
   )
 
-  # The worker's alone. The operations task definition is built from the worker's
-  # environment and ignores a variable it does not read.
+  # The worker's alone. Operations excludes publisher configuration.
   worker_environment = merge({
     FSS_WORKER_CONCURRENCY = tostring(var.worker_concurrency)
     # Slice C3a: Amazon Transcribe is the transcription engine, its audio staged in the

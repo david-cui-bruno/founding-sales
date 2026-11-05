@@ -30,7 +30,7 @@ export async function readSocialDraftSourcesForWorker(ctx:RepositoryContext,owne
 async function readForOwner(ctx:RepositoryContext,user:string,raw:SocialDraftRequest,authority?:PrivateDraftAuthority):Promise<SocialResult<Prepared>>{
  const parsed=socialDraftRequestSchema.safeParse(raw);if(!parsed.success)return {ok:false,reason:'invalid_input'};
  const input=parsed.data,workspace=ctx.scope.workspaceId;
- const active=(await ctx.db.query(`SELECT 1 FROM workspace_memberships WHERE workspace_id=$1 AND user_id=$2 AND status='active' FOR ${input.mode==='linkedin_founder'?'UPDATE':'SHARE'}`,[workspace,user])).rows.length>0;
+ const active=(await ctx.db.query("SELECT 1 FROM workspace_memberships WHERE workspace_id=$1 AND user_id=$2 AND status='active' FOR SHARE",[workspace,user])).rows.length>0;
  if(!active)return {ok:false,reason:'owner_unavailable'};
  if(input.mode==='linkedin_founder'){
   if(input.sourceRefs.length||input.founderInputProcessingScope!=='bedrock_haiku_founder_inputs_v1'||!input.founderFormat)return {ok:false,reason:'founder_input_scope_required'};

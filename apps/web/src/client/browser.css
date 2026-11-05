@@ -90,9 +90,6 @@ body { margin: 0; -webkit-font-smoothing: antialiased; }
 .workspace-settings dl { display: grid; grid-template-columns: 120px minmax(0,1fr); gap: 8px 14px; font-size: 12px; margin-block: 18px; }
 .workspace-settings dt { color: var(--muted); }
 .workspace-settings dd { margin: 0; }
-.workspace-signin { max-width: 480px; margin-inline: auto !important; }
-.workspace-signin > p:not(.workspace-eyebrow) { color: var(--muted); }
-.workspace-signin form { margin-top: 24px; }
 .workspace-inline-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 20px; }
 .workspace-context h2:not(:first-child) { margin-top: 24px; }
 .workspace-back { margin-bottom: 16px !important; }

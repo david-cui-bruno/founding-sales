@@ -55,6 +55,7 @@ export interface BootstrapResponse {
   readonly body: unknown;
   /** Defaults to `application/json; charset=utf-8`. The OAuth callback serves HTML. */
   readonly contentType?: string | undefined;
+  readonly contentLength?: number | undefined;
 }
 
 export interface RouteModule {

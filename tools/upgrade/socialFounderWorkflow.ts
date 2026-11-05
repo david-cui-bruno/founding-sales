@@ -6,8 +6,8 @@ import {saveSocialFounderInput,readSocialFounderInput} from '@fss/domain/social/
 import {requestSocialDrafts} from '@fss/domain/social/drafts.ts';
 import {readSocialStandingPlan,readSocialStandingActivity,saveSocialStandingPlan} from '@fss/domain/social/standingPlan.ts';
 import type {SocialDraftRequest} from '@fss/contracts';
-export const SOCIAL_FOUNDER_UPGRADE_WORKFLOW='social.founder current inputs, erasure and no implicit standing authority (0163–0166, runtime role)';
-/** Controlled post-upgrade domain reads/writes as app_runtime; no provider or browser session is opened. */
+export const SOCIAL_FOUNDER_UPGRADE_WORKFLOW='social.founder current inputs, erasure and no implicit standing authority (0163–0167, runtime role)';
+/** Controlled post-upgrade domain reads/writes as app_runtime; no provider is called. */
 export async function runSocialFounderUpgradeWorkflow(owner:RepositoryContext,otherOwner:RepositoryContext):Promise<string>{
  const db=owner.db,w=owner.scope.workspaceId,actor=owner.scope.actor;
  await db.query('SET ROLE app_runtime');
@@ -29,13 +29,13 @@ export async function runSocialFounderUpgradeWorkflow(owner:RepositoryContext,ot
  // Only the paid model output is a controlled fixture. The real request owner,
  // source selection/hash, current-use consent and erasure triggers remain in use.
  await db.query("UPDATE social_draft_requests SET state='ready',concepts=$3::jsonb WHERE workspace_id=$1 AND id=$2",[w,requested.value.requestId,JSON.stringify([{theme:'build',factRefs:[],variants:[{platform:'linkedin',text:source.bullets}]}])]);
- const refused=await withTransaction(db,()=>saveSocialStandingPlan(owner,{expectedRevision:0,binding:{workspaceId:w,ownerUserId:actor.userId,accountId:randomUUID(),accountRevision:1,sessionId:randomUUID(),sessionRevision:1,externalId:'https://www.linkedin.com/in/fictional-upgrade-owner/'},guideRef:null,calibrationId:randomUUID(),inputIds:[inputId],mediaScope:'none',timezone:'America/New_York',cadence:[{weekday:1,time:'10:00'},{weekday:3,time:'10:00'},{weekday:5,time:'10:00'}],scheduledGenerationGrant:'bedrock_haiku_founder_scheduled_v1',publicationGrant:'linkedin_personal_standing_v1',cancelRemoteOnPause:true}));
- assert.deepEqual(refused,{ok:false,reason:'standing_plan_scope_unavailable'},'even explicit grants cannot bypass real account/session/calibration prerequisites');
+ const refused=await withTransaction(db,()=>saveSocialStandingPlan(owner,{expectedRevision:0,binding:{adapter:'buffer-linkedin-v1',workspaceId:w,ownerUserId:actor.userId,accountId:randomUUID(),accountRevision:1,credentialId:randomUUID(),credentialRevision:1,organizationId:'a'.repeat(24),channelId:'b'.repeat(24),externalId:'fictional-upgrade-native-id'},guideRef:null,calibrationId:randomUUID(),inputIds:[inputId],mediaScope:'none',timezone:'America/New_York',cadence:[{weekday:1,time:'10:00'},{weekday:3,time:'10:00'},{weekday:5,time:'10:00'}],scheduledGenerationGrant:'bedrock_haiku_founder_scheduled_v1',publicationGrant:'linkedin_personal_standing_v1',cancelRemoteOnPause:true}));
+ assert.deepEqual(refused,{ok:false,reason:'standing_plan_scope_unavailable'},'even explicit grants cannot bypass real account/credential/calibration prerequisites');
  assert.equal(await withTransaction(db,()=>readSocialStandingPlan(owner)),null);assert.deepEqual((await withTransaction(db,()=>readSocialStandingActivity(owner))).items,[]);
  const removed=await withTransaction(db,()=>saveSocialFounderInput(owner,{operation:'remove',inputId,expectedRevision:2},async()=>true));assert(removed.ok);
  assert.deepEqual((await db.query('SELECT bullets,context,experience_date,public_safe,reason,revision FROM social_founder_inputs WHERE workspace_id=$1 AND id=$2',[w,inputId])).rows,[{bullets:null,context:null,experience_date:null,public_safe:false,reason:'removed',revision:3}]);
  assert.deepEqual((await db.query('SELECT concepts,state FROM social_draft_requests WHERE workspace_id=$1 AND id=$2',[w,requested.value.requestId])).rows,[{concepts:null,state:'review'}]);
  assert.equal(await withTransaction(db,()=>readSocialStandingPlan(owner)),null);assert.deepEqual((await db.query('SELECT * FROM workspace_settings WHERE workspace_id=$1 ORDER BY setting_key,version',[w])).rows,settings,'founder work must not alter existing controls or ceilings');
- return 'app_runtime saved private note, refused public processing until exact public-use revision, enforced cross-owner privacy/current CAS/fixed expiry, created one governed request with controlled model output, physically erased note and derived prose on removal, refused standing activation without current real account/session/calibration, left plans/activity absent and existing settings unchanged; zero external calls';
+ return 'app_runtime saved private note, refused public processing until exact public-use revision, enforced cross-owner privacy/current CAS/fixed expiry, created one governed request with controlled model output, physically erased note and derived prose on removal, refused standing activation without current real account/credential/calibration, left plans/activity absent and existing settings unchanged; zero external calls';
  }finally{await db.query('RESET ROLE');}
 }

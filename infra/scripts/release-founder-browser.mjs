@@ -49,8 +49,18 @@ export function socialPublisherConfiguration(raw, baselineDefinition, state) {
   let value;
   try { value = JSON.parse(raw); } catch { invalidPublisher(); }
   if (!value || Array.isArray(value) || typeof value !== 'object' ||
-      Object.keys(value).some(key => !['amiId', 'runtimeReady'].includes(key)) ||
-      typeof value.amiId !== 'string' || !/^ami-[0-9a-f]{17}$/u.test(value.amiId) ||
       typeof value.runtimeReady !== 'boolean') invalidPublisher();
-  return { social_publisher_host: { ami_id: value.amiId }, social_publisher_runtime_ready: value.runtimeReady };
+  if (value.hostAction === 'retire') {
+    // This is a deliberate reviewed destruction request, never an omission.
+    // The operator must establish Buffer acceptance and old-attempt custody first.
+    if (Object.keys(value).some(key => !['hostAction', 'runtimeReady', 'retirementAccepted'].includes(key)) ||
+        value.retirementAccepted !== true) invalidPublisher();
+    return { social_publisher_host: null, social_publisher_runtime_ready: value.runtimeReady };
+  }
+  if (value.hostAction !== 'preserve' ||
+      Object.keys(value).some(key => !['hostAction', 'amiId', 'image', 'runtimeReady'].includes(key)) ||
+      typeof value.amiId !== 'string' || !/^ami-[0-9a-f]{17}$/u.test(value.amiId) ||
+      typeof value.image !== 'string' ||
+      !/^326255650484\.dkr\.ecr\.us-east-1\.amazonaws\.com\/fss-prod-api@sha256:[0-9a-f]{64}$/u.test(value.image)) invalidPublisher();
+  return { social_publisher_host: { ami_id: value.amiId, image: value.image }, social_publisher_runtime_ready: value.runtimeReady };
 }

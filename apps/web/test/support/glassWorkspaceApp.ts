@@ -78,9 +78,9 @@ export async function signInGlass(page: Page, app: GlassWorkspaceApp, identity: 
   const initialSession = page.waitForResponse(response => new URL(response.url()).pathname === '/browser/session');
   await page.goto(app.origin);
   expect((await initialSession).status()).toBe(200);
-  await expect(page.getByRole('button', { name: 'Sign in', exact: true })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Continue with Google', exact: true })).toBeEnabled();
   await page.getByLabel('Workspace ID', { exact: true }).fill(app.fixture.alpha.workspaceId);
-  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  await page.getByRole('button', { name: 'Continue with Google', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Sign out', exact: true })).toBeVisible();
 }
 export async function navigateGlass(page: Page, name: 'Today' | 'Prospects' | 'Calling' | 'Email' | 'Social'): Promise<void> {

@@ -1,6 +1,7 @@
-import {socialPublishingReadinessInputSchema,type SocialPublisherPort} from '@fss/contracts';
+import {socialPublishingReadinessInputSchema,type SocialPublisherPort,type SocialPublisherBinding} from '@fss/contracts';
 import {withTransaction} from '@fss/domain/db/queryable.ts';
 import {readSocialPublishingReadiness} from '@fss/domain/social/publishingReadiness.ts';
+import {invalidateSocialPublisherCredential} from '@fss/domain/social/standingAuthority.ts';
 import {PrivateDraftAuthorityChanged} from '@fss/domain/social/privateDrafts.ts';
 import {contextForPrincipal,requirePrincipal,type RouteDeps} from './routeSupport.ts';
 import {retainedPrincipalAuthority} from './retainedPrincipalAuthority.ts';
@@ -19,7 +20,10 @@ export async function routeSocialPublishingReadiness(deps:RouteDeps,publisher?:P
  };
  try{
   await check();
-  const result=await withTransaction(deps.auth.db,()=>readSocialPublishingReadiness(scoped.context,retainedPrincipalAuthority(deps,scoped.context),publisher));
+  const revoked:SocialPublisherBinding[]=[],authority=retainedPrincipalAuthority(deps,scoped.context);
+  const result=await withTransaction(deps.auth.db,()=>readSocialPublishingReadiness(scoped.context,authority,publisher,binding=>revoked.push(binding)));
+  await check();
+  for(const binding of revoked)await invalidateSocialPublisherCredential(scoped.context,binding,authority);
   await check();
   return result.ok?{status:200,body:result.value}:{status:403,body:{error:'publishing_readiness_unavailable'}};
  }catch(error){if(error instanceof PrivateDraftAuthorityChanged)return {status:401,body:{error:'unauthenticated'}};throw error;}

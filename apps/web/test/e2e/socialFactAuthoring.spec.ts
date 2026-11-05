@@ -31,8 +31,8 @@ test('signed navigation authors two versions, separately approves exact v2 and p
  const guide=await withTransaction(runtime,()=>saveSocialVoicePreferences(ctx,{operation:'create',entries:[{entryId:randomUUID(),dimension:'tone',guidance:'Use precise neutral sentences.'}]},async()=>true));assert(guide.ok);
  await routeManualProvider(page,app);
  await page.goto(app.origin);await expect(page.getByLabel('Workspace ID',{exact:true})).toBeVisible();await expect(page.getByText('Checking browser session…',{exact:true})).toHaveCount(0);
- await page.getByLabel('Workspace ID',{exact:true}).fill(f.alpha.workspaceId);await page.getByRole('button',{name:'Sign in',exact:true}).click();await expect(page.getByRole('button',{name:'Sign out',exact:true})).toBeVisible();
- const social=async()=>{await page.getByRole('navigation',{name:'Workspace sections',exact:true}).getByRole('button',{name:'Social',exact:true}).click();};
+ await page.getByLabel('Workspace ID',{exact:true}).fill(f.alpha.workspaceId);await page.getByRole('button', { name: 'Continue with Google', exact: true }).click();await expect(page.getByRole('button',{name:'Sign out',exact:true})).toBeVisible();
+ const social=async()=>{await page.getByRole('navigation',{name:'Workspace sections',exact:true}).getByRole('button',{name:'Social',exact:true}).click();await page.getByRole('button',{name:'Drafts',exact:true}).click();};
  await social();await page.getByRole('button',{name:'Author shared facts',exact:true}).click();
  const facts=page.getByRole('region',{name:'Social fact authoring',exact:true}),generation=page.getByRole('region',{name:'Guided social suggestion request',exact:true});
  const read=async()=>{await facts.getByRole('button',{name:'Read current facts',exact:true}).click();await expect(facts).toContainText('Current shared facts read.');await expect(facts.getByRole('button',{name:'Read current facts',exact:true})).toBeEnabled();};

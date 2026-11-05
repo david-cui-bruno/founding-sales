@@ -330,3 +330,53 @@ run "the_default_worker_has_no_bedrock_grant_and_no_transport_variable" {
     error_message = "worker_model_transport defaults to anthropic: no Bedrock statement, no FSS_MODEL_TRANSPORT."
   }
 }
+
+run "buffer_cutover_injects_only_the_reused_key_and_excludes_operations" {
+  command = plan
+
+  variables {
+    social_publisher_runtime_ready = true
+    secret_arns = {
+      social-publisher-session-key = "arn:aws:secretsmanager:us-east-1:123456789012:secret:fss-test/social-publisher-session-key-abcdef"
+    }
+    api_environment    = { FSS_SOCIAL_PUBLISHER_MEDIA_ORIGIN = "https://sales.example.com" }
+    worker_environment = { FSS_SOCIAL_PUBLISHER_MEDIA_ORIGIN = "https://sales.example.com" }
+  }
+
+  assert {
+    condition = alltrue([
+      for task in [aws_ecs_task_definition.api, aws_ecs_task_definition.worker] :
+      [for secret in jsondecode(task.container_definitions)[0].secrets : secret.name if startswith(secret.name, "FSS_SOCIAL_PUBLISHER_")] == ["FSS_SOCIAL_PUBLISHER_CREDENTIAL_KEY"]
+    ])
+    error_message = "Only the retained encryption key reaches Buffer API/worker; no browser control credentials."
+  }
+
+  assert {
+    condition = alltrue([
+      for entry in concat(
+        jsondecode(aws_ecs_task_definition.operations.container_definitions)[0].environment,
+        jsondecode(aws_ecs_task_definition.operations.container_definitions)[0].secrets
+      ) : !startswith(entry.name, "FSS_SOCIAL_PUBLISHER_")
+    ])
+    error_message = "Operations receives neither publisher secrets nor publisher environment configuration."
+  }
+}
+
+run "disabled_buffer_runtime_does_not_inject_the_encryption_key" {
+  command = plan
+
+  variables {
+    social_publisher_runtime_ready = false
+    secret_arns = {
+      social-publisher-session-key = "arn:aws:secretsmanager:us-east-1:123456789012:secret:fss-test/social-publisher-session-key-abcdef"
+    }
+  }
+
+  assert {
+    condition = alltrue([
+      for task in [aws_ecs_task_definition.api, aws_ecs_task_definition.worker, aws_ecs_task_definition.operations] :
+      alltrue([for secret in jsondecode(task.container_definitions)[0].secrets : !startswith(secret.name, "FSS_SOCIAL_PUBLISHER_")])
+    ])
+    error_message = "Preservation without Buffer readiness does not inject publisher credentials."
+  }
+}

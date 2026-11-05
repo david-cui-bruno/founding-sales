@@ -30,5 +30,5 @@ export async function routeManualProvider(page:Page,app:ManualProspectApp){
  });
 }
 export async function loginManual(page:Page,app:ManualProspectApp,who:'alpha'|'beta'|'sales'='alpha'){
- const workspace=who==='beta'?app.fixture.beta:app.fixture.alpha;app.chooseIdentity(who==='sales'?workspace.salesperson:workspace.admin);await page.goto(app.origin);await page.getByLabel('Workspace ID',{exact:true}).fill(workspace.workspaceId);await page.getByRole('button',{name:'Sign in',exact:true}).click();
+ const workspace=who==='beta'?app.fixture.beta:app.fixture.alpha;app.chooseIdentity(who==='sales'?workspace.salesperson:workspace.admin);await page.goto(app.origin);await page.getByLabel('Workspace ID',{exact:true}).fill(workspace.workspaceId);await page.getByRole('button', { name: 'Continue with Google', exact: true }).click();
 }

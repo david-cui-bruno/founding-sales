@@ -162,7 +162,7 @@ test('workspace isolation, scoped empty page and current admin refusal never exp
   const f = owned.app.fixture;
   owned.app.chooseIdentity(f.alpha.salesperson);
   await page.getByLabel('Workspace ID', { exact: true }).fill(f.alpha.workspaceId);
-  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  await page.getByRole('button', { name: 'Continue with Google', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Sign out', exact: true })).toBeVisible();
   const refusal = await browserRequest(page, path, { body: { status: 'needs_review', offset: 0 } });
   expect(refusal.status).toBe(403);

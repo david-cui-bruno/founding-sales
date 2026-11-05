@@ -75,12 +75,6 @@ COPY --from=browser-build /app/browser-private /browser
 # ---------------------------------------------------------------------------
 FROM --platform=linux/arm64 ${NODE_IMAGE} AS runtime
 
-# The owned LinkedIn connection uses system Chromium on ARM64, not a browser SaaS.
-RUN apt-get update \
- && apt-get install -y --no-install-recommends chromium chromium-sandbox fonts-liberation \
- && chromium --version \
- && rm -rf /var/lib/apt/lists/*
-
 ARG GIT_REVISION=unknown
 LABEL org.opencontainers.image.title="fss-api" \
       org.opencontainers.image.description="Founding Sales System API: HTTPS surface, health, admin commands" \
@@ -94,8 +88,7 @@ ENV NODE_ENV=production \
     FSS_ROLE=api \
     NODE_OPTIONS="--experimental-transform-types --disable-warning=ExperimentalWarning" \
     PGSSLMODE=verify-full \
-    NODE_EXTRA_CA_CERTS=/app/certs/rds-global-bundle.pem \
-    FSS_SOCIAL_PUBLISHER_CHROMIUM_PATH=/usr/bin/chromium
+    NODE_EXTRA_CA_CERTS=/app/certs/rds-global-bundle.pem
 
 WORKDIR /app
 

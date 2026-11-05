@@ -1,5 +1,5 @@
 import {z} from 'zod';
-import {socialStandingCommandSchema} from '@fss/contracts';
+import {socialStandingCommandSchema,socialFounderInputViewSchema} from '@fss/contracts';
 import type {BrowserClient} from './BrowserClient.ts';
 import {SocialCommandCustody} from './SocialCommandCustody.ts';
 import {socialStandingResponses,socialStandingCommandResultSchema,socialStandingReceiptSchema} from '../shared/socialStandingBrowserContract.ts';
@@ -16,6 +16,7 @@ export function standingBrowserRequest(client:BrowserClient,current:()=>void):(p
  return async(path,body)=>{
   current();
   if(path==='/social/media/preview')return client.request(path,socialMediaSignedPreviewSchema,body,current);
+  if(path==='/social/inputs/read')return client.request(path,z.strictObject({input:socialFounderInputViewSchema}),body,current);
   if(path==='/social/standing-plan/reconcile')return custody.exclusive(async()=>{
    current();
    const held=custody.read();if(!held)return {state:'accepted',result:null};

@@ -22,7 +22,7 @@ export async function saveSocialConnection(ctx:RepositoryContext,raw:SocialConne
   await ctx.db.query("INSERT INTO social_accounts(workspace_id,id,owner_user_id,platform,external_id,display_name,account_kind,state) VALUES($1,$2,$3,$4,$5,$6,$7,'unsupported')",[ctx.scope.workspaceId,input.accountId,user,input.platform,input.externalId,input.displayName,input.accountKind]);
  }else{
   await ctx.db.query("UPDATE social_accounts SET display_name=$3,state='unsupported',revision=revision+1,adapter_version=NULL,verified_at=NULL,max_schedule_days=NULL WHERE workspace_id=$1 AND id=$2",[ctx.scope.workspaceId,input.accountId,input.displayName]);
-  await ctx.db.query("UPDATE social_publisher_sessions SET encrypted_state=NULL,state='disconnected',revision=revision+1 WHERE workspace_id=$1 AND account_id=$2 AND owner_user_id=$3",[ctx.scope.workspaceId,input.accountId,user]);
+  await ctx.db.query("UPDATE social_publisher_credentials SET encrypted_state=NULL,state='disconnected',revision=revision+1 WHERE workspace_id=$1 AND account_id=$2 AND owner_user_id=$3",[ctx.scope.workspaceId,input.accountId,user]);
  }
  const state='unsupported' as const;
  await recordCrmAuditEvent(ctx,{action:'social.account_observed',subjectKind:'social_account',subjectId:input.accountId,detail:{platform:input.platform,accountKind:input.accountKind}});
@@ -32,7 +32,7 @@ export async function disconnectSocialAccount(ctx:RepositoryContext,input:{accou
  const user=owner(ctx);if(!user)return {ok:false,reason:'user_required'};await lock(ctx);
  const result=await ctx.db.query("UPDATE social_accounts SET state='disconnected',revision=revision+1,adapter_version=NULL,verified_at=NULL,max_schedule_days=NULL WHERE workspace_id=$1 AND id=$2 AND owner_user_id=$3 RETURNING id",[ctx.scope.workspaceId,input.accountId,user]);
  if(!result.rows.length)return {ok:false,reason:'not_found'};
- await ctx.db.query("UPDATE social_publisher_sessions SET encrypted_state=NULL,state='disconnected',revision=revision+1 WHERE workspace_id=$1 AND account_id=$2 AND owner_user_id=$3",[ctx.scope.workspaceId,input.accountId,user]);
+ await ctx.db.query("UPDATE social_publisher_credentials SET encrypted_state=NULL,state='disconnected',revision=revision+1 WHERE workspace_id=$1 AND account_id=$2 AND owner_user_id=$3",[ctx.scope.workspaceId,input.accountId,user]);
  // Existing native schedules are not recalled by deleting a local login. Their
  // receipts and pending cancellation state must remain for a later reconnect.
  await recordCrmAuditEvent(ctx,{action:'social.account_disconnected',subjectKind:'social_account',subjectId:input.accountId,detail:{}});

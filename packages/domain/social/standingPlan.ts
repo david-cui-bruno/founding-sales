@@ -1,24 +1,34 @@
 import {randomUUID} from 'node:crypto';
-import {socialStandingPlanSaveSchema,type SocialStandingPlanSave,type SocialStandingPlanView,type SocialStandingActivity} from '@fss/contracts';
+import {socialStandingPlanSaveSchema,type SocialStandingPlanSave,type SocialStandingPlanView,type SocialStandingActivity,type SocialStandingOptions,type SocialPublisherBinding} from '@fss/contracts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import type {SocialResult} from './posts.ts';
 import {currentStandingConfiguration,lockStandingOwner,validateStandingConfiguration} from './standingAuthority.ts';
 import {standingWeek} from './standingCadence.ts';
 import {readApprovedSocialMediaForOwner} from './approvedMedia.ts';
 const user=(ctx:RepositoryContext)=>ctx.scope.actor.kind==='user'?ctx.scope.actor.userId:null;
-export async function readSocialStandingPlan(ctx:RepositoryContext):Promise<SocialStandingPlanView|null>{const owner=user(ctx);if(!owner||!await lockStandingOwner(ctx,owner))return null;return (await ctx.db.query<SocialStandingPlanView&Record<string,unknown>>('SELECT id AS "planId",revision,state,configuration FROM social_standing_plans WHERE workspace_id=$1 AND owner_user_id=$2',[ctx.scope.workspaceId,owner])).rows[0]??null;}
+export async function readSocialStandingPlan(ctx:RepositoryContext):Promise<SocialStandingPlanView|null>{const owner=user(ctx);if(!owner||!await lockStandingOwner(ctx,owner))return null;return (await ctx.db.query<SocialStandingPlanView&Record<string,unknown>>(`SELECT id AS "planId",revision,state,configuration FROM social_standing_plans WHERE workspace_id=$1 AND owner_user_id=$2 AND configuration->'binding'->>'adapter'='buffer-linkedin-v1'`,[ctx.scope.workspaceId,owner])).rows[0]??null;}
+/** Retired identities are history, never reconnect targets for a new provider. */
+export async function readSocialStandingPublisherOptions(ctx:RepositoryContext):Promise<Pick<SocialStandingOptions,'binding'|'intendedAccountId'|'accountDisplayName'>>{
+ const owner=user(ctx),empty={binding:null,intendedAccountId:null,accountDisplayName:null};if(!owner||!await lockStandingOwner(ctx,owner))return empty;
+ const saved=await readSocialStandingPlan(ctx);
+ const accounts=(await ctx.db.query<{id:string;display_name:string}>(`SELECT a.id,a.display_name FROM social_accounts a JOIN social_publisher_credentials c ON c.workspace_id=a.workspace_id AND c.account_id=a.id AND c.owner_user_id=a.owner_user_id AND c.external_id=a.external_id AND c.adapter='buffer-linkedin-v1' WHERE a.workspace_id=$1 AND a.owner_user_id=$2 AND a.platform='linkedin' AND a.account_kind='profile' ORDER BY (a.id=$3::uuid) DESC NULLS LAST,a.id LIMIT 2`,[ctx.scope.workspaceId,owner,saved?.configuration.binding.accountId??null])).rows;
+ const intended=accounts.find(account=>account.id===saved?.configuration.binding.accountId)??(accounts.length===1?accounts[0]:null);if(!intended)return empty;
+ const binding=(await ctx.db.query<SocialPublisherBinding&Record<string,unknown>>(`SELECT s.adapter,s.workspace_id AS "workspaceId",s.owner_user_id AS "ownerUserId",s.account_id AS "accountId",s.account_revision AS "accountRevision",s.id AS "credentialId",s.revision AS "credentialRevision",s.organization_id AS "organizationId",s.channel_id AS "channelId",s.external_id AS "externalId" FROM social_publisher_credentials s JOIN social_accounts a ON a.workspace_id=s.workspace_id AND a.id=s.account_id AND a.revision=s.account_revision AND a.owner_user_id=s.owner_user_id AND a.external_id=s.external_id AND a.adapter_version=s.adapter WHERE s.workspace_id=$1 AND s.owner_user_id=$2 AND a.id=$3 AND s.adapter='buffer-linkedin-v1' AND s.state='usable' AND s.encrypted_state IS NOT NULL AND a.state='connected' FOR SHARE OF a,s`,[ctx.scope.workspaceId,owner,intended.id])).rows[0]??null;
+ return {binding,intendedAccountId:intended.id,accountDisplayName:intended.display_name||null};
+}
 export async function saveSocialStandingPlan(ctx:RepositoryContext,raw:SocialStandingPlanSave):Promise<SocialResult<SocialStandingPlanView>>{
  const parsed=socialStandingPlanSaveSchema.safeParse(raw),owner=user(ctx);if(!parsed.success)return {ok:false,reason:'invalid_input'};if(!owner||!await lockStandingOwner(ctx,owner))return {ok:false,reason:'owner_unavailable'};
  const input=parsed.data;if(input.binding.ownerUserId!==owner||input.binding.workspaceId!==ctx.scope.workspaceId)return {ok:false,reason:'owner_mismatch'};
  try{new Intl.DateTimeFormat('en',{timeZone:input.timezone}).format();}catch{return {ok:false,reason:'invalid_timezone'};}
  if(new Set(input.cadence.map(s=>`${s.weekday}:${s.time}`)).size!==3)return {ok:false,reason:'duplicate_cadence'};
  const old=await readSocialStandingPlan(ctx);if((old?.revision??0)!==input.expectedRevision)return {ok:false,reason:'stale_revision'};
- const id=old?.planId??randomUUID(),revision=(old?.revision??0)+1;
+ const retained=(await ctx.db.query<{id:string;revision:number}>('SELECT id,revision FROM social_standing_plans WHERE workspace_id=$1 AND owner_user_id=$2 FOR UPDATE',[ctx.scope.workspaceId,owner])).rows[0];
+ const id=retained?.id??randomUUID(),revision=(retained?.revision??0)+1;
  if(!await validateStandingConfiguration(ctx,owner,input))return {ok:false,reason:'standing_plan_scope_unavailable'};
  const count=(await ctx.db.query<{count:string}>("SELECT count(*) FROM social_founder_inputs WHERE workspace_id=$1 AND owner_user_id=$2 AND id=ANY($3::uuid[]) AND public_safe AND reason IS NULL AND expires_at>clock_timestamp()",[ctx.scope.workspaceId,owner,input.inputIds])).rows[0];if(Number(count?.count)!==input.inputIds.length)return {ok:false,reason:'standing_plan_source_unavailable'};
  // Save is atomic with validation: callers MUST retain the transaction until command receipt.
  await ctx.db.query(`INSERT INTO social_standing_plans(workspace_id,id,owner_user_id,revision,state,configuration,budget_timezone) VALUES($1,$2,$3,$4,'active',$5::jsonb,$6) ON CONFLICT(workspace_id,owner_user_id) DO UPDATE SET revision=$4,state='active',configuration=$5::jsonb,updated_at=clock_timestamp()`,[ctx.scope.workspaceId,id,owner,revision,JSON.stringify(input),input.timezone]);
- if(old)await cancelUnsubmitted(ctx,owner,'plan_changed');
+ if(retained)await cancelUnsubmitted(ctx,owner,'plan_changed');
  return {ok:true,value:{planId:id,revision,state:'active',configuration:input}};
 }
 async function cancelUnsubmitted(ctx:RepositoryContext,owner:string,reason:string):Promise<void>{

@@ -107,7 +107,7 @@ test('new retained-only browser journey discloses empty-fact originals without f
   await expect(card(page).getByText(original, { exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: 'Sign out', exact: true }).click();
   release();
-  await expect(page.getByRole('button', { name: 'Sign in', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Continue with Google', exact: true })).toBeVisible();
   await expect(page.getByText(original, { exact: true })).toHaveCount(0);
   await expect(page.getByRole('region', { name: /Captured original blocks/u })).toHaveCount(0);
   expect(await unchangedState()).toEqual(before);

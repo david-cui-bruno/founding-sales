@@ -34,7 +34,7 @@ export async function admitSocialStandingSlots(ctx:RepositoryContext,owner:strin
   if(c.mediaScope==='approved_pool'){
    // Only explicit topic matches; an unrelated approved photograph is not filler.
    const candidate=(await ctx.db.query<{id:string;approved_version:number;approved_sha256:string;approval_revision:number}>(`SELECT a.id,a.approved_version,a.approved_sha256,a.approval_revision FROM social_assets a JOIN social_founder_inputs i ON i.workspace_id=a.workspace_id AND i.owner_user_id=a.owner_user_id AND i.id=$3 WHERE a.workspace_id=$1 AND a.owner_user_id=$2 AND a.approved_version IS NOT NULL AND length(a.approved_topic)>2 AND position(lower(a.approved_topic) in lower(concat(i.bullets,' ',i.context)))>0 ORDER BY a.id LIMIT 1`,[ctx.scope.workspaceId,owner,source.id])).rows[0];
-   if(candidate){const m=await readApprovedSocialMediaForOwner(ctx,owner,{assetId:candidate.id,version:candidate.approved_version,sha256:candidate.approved_sha256,approvalRevision:candidate.approval_revision});if(m)image={assetId:m.assetId,version:m.version,sha256:m.sha256,approvalRevision:m.approvalRevision,altText:m.altText,mime:m.mime};}
+   if(candidate){const m=await readApprovedSocialMediaForOwner(ctx,owner,{assetId:candidate.id,version:candidate.approved_version,sha256:candidate.approved_sha256,approvalRevision:candidate.approval_revision});if(m)image={assetId:m.assetId,version:m.version,sha256:m.sha256,approvalRevision:m.approvalRevision,altText:m.altText,mime:m.mime,byteLength:m.byteLength};}
   }
   await ctx.db.query('UPDATE social_standing_slots SET input_refs=$3::jsonb,image=$4::jsonb WHERE workspace_id=$1 AND id=$2',[ctx.scope.workspaceId,slotId,JSON.stringify(refs),image?JSON.stringify(image):null]);
  }

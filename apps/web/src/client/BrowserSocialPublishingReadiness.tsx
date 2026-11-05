@@ -31,9 +31,9 @@ export function BrowserSocialPublishingReadiness({client}:{client:BrowserClient}
  return <section aria-label="Publishing readiness" className="social-details">
   <h3>Publishing readiness</h3>
   <p>Read current runner availability, intended account verification and standing-policy status. Connecting an account does not activate publication.</p>
-  <p>Personal LinkedIn text or one approved image is supported by the browser route. Facebook profiles and groups are unsupported here.</p>
+  <p>Personal LinkedIn text or one approved image is supported through Buffer. Facebook profiles and groups are unsupported here.</p>
   <button type="button" disabled={busy} onClick={()=>{void read();}}>Read publishing readiness</button>
-  {busy?<p role="status">Reading current account and browser capability.</p>:null}{error?<p role="alert">{error}</p>:null}
+  {busy?<p role="status">Reading current account and Buffer capability.</p>:null}{error?<p role="alert">{error}</p>:null}
   {view?<div><p>Observed {view.observedAt} · Runner {view.runnerAvailable?'available':'unavailable'} · Publishing {view.publishingActivated?'activated under the current plan':'not activated'}.</p>
    <ul>{view.holds.map(reason=><li key={reason}>{labels[reason]}</li>)}</ul>
    {view.accounts.length?<ul>{view.accounts.map(account=><li key={account.accountId}>

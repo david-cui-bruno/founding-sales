@@ -28,7 +28,6 @@ import {socialDraftModel} from '../social/draftModel.ts';
 import {socialAssetsHandler,socialAssetsSource,socialDeletionPort,type SocialDeletionPort} from '../social/cleanup.ts';
 import {socialStandingHandler,socialStandingSource,type StandingWorkerDeps} from '../social/standingJobs.ts';
 import {createStandingDraftRequest} from '../social/standingDraftRequest.ts';
-import {socialImageReader} from '../social/mediaRead.ts';
 import {startSocialPublisher} from '@fss/social-publisher/startup';
 import {outreachReplySource} from '../handlers/outreach.ts';
 import {sourcingQualificationHandler,sourcingQualificationSource} from '../handlers/sourcingQualification.ts';
@@ -272,7 +271,7 @@ export function registerHandlers(
   // the opposite of `classify.reply`, and the difference is that a classification
   // with no model has nothing at all to record.
   registry.register(socialDraftHandler(composition.classifier?.processEnabled?socialDraftModel(composition.classifier.transport):null));
-  registry.register(socialStandingHandler({...composition.socialStanding??{publisher:null,readImage:socialImageReader({})},admitGeneration:createStandingDraftRequest}));
+  registry.register(socialStandingHandler({...composition.socialStanding??{publisher:null},admitGeneration:createStandingDraftRequest}));
   // Tavily discovery reads list pages through the same research fetcher as qualification.
   const search=composition.discovery&&composition.research?{provider:composition.discovery,pageFetch:composition.research.pageFetch}:undefined;
   if(search||composition.apolloDiscovery)registry.register(sourcingDiscoveryHandler(search,composition.apolloDiscovery));
@@ -688,7 +687,7 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
     ...crm.handlers,
     ...composed.mail&&crmConfiguration.capture?{mail:{...composed.mail,businessMailObserver:crm.observer}}:{},
     socialAssets:await socialDeletionPort(environment),
-    socialStanding:{publisher:publisherRuntime?.publisher??null,readImage:socialImageReader(environment)},
+    socialStanding:{publisher:publisherRuntime?.publisher??null},
     ...apolloDiscovery?{apolloDiscovery}:{},
     peopleProvider:ownSitePeople(),
     ...addressVerifier?{addressVerifier}:{},

@@ -1,18 +1,18 @@
 variable "social_publisher_runtime_ready" {
-  description = "Both publisher secrets are populated and the isolated sandboxed host is accepted; creates no posting authority."
+  description = "Buffer credential encryption key is populated and public media ingress is configured; creates no posting authority."
   type        = bool
   default     = false
 }
 
 variable "social_publisher_host" {
-  description = "Explicit isolated-host provisioning; null creates no host or recurring instance costs."
-  type        = object({ ami_id = string })
+  description = "Retained browser recovery host with its independently pinned accepted image; null explicitly retires it."
+  type        = object({ ami_id = string, image = string })
   default     = null
 }
 
 locals {
   publisher_environment = var.social_publisher_runtime_ready ? {
-    FSS_SOCIAL_PUBLISHER_ENDPOINT = "wss://${split(":", trimprefix(var.founder_browser.origin, "https://"))[0]}/social/publisher-runtime/browser"
+    FSS_SOCIAL_PUBLISHER_MEDIA_ORIGIN = var.founder_browser.origin
   } : {}
 }
 
@@ -24,8 +24,8 @@ resource "terraform_data" "publisher_configuration" {
       error_message = "The isolated publisher requires the existing reviewed browser TLS hostname."
     }
     precondition {
-      condition     = !var.social_publisher_runtime_ready || var.social_publisher_host != null
-      error_message = "Publisher credentials cannot be injected without the accepted isolated host."
+      condition     = !var.social_publisher_runtime_ready || var.founder_browser != null
+      error_message = "Buffer media requires the existing canonical public HTTPS app origin."
     }
   }
 }
@@ -46,7 +46,7 @@ module "social_publisher" {
   control_secret_arn    = module.secrets.application_secret_arns["social-publisher-control-token"]
   secrets_kms_key_arn   = module.secrets.secrets_kms_key_arn
   ami_id                = var.social_publisher_host.ami_id
-  image                 = var.api_image
+  image                 = var.social_publisher_host.image
   tags                  = local.tags
 
   depends_on = [terraform_data.publisher_configuration]

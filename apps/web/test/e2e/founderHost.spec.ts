@@ -78,7 +78,7 @@ test('NEW745 second valid same-workspace identity is refused before browser acce
   await page.goto(app.origin);
   await page.getByLabel('Workspace ID', { exact: true }).fill(app.fixture.alpha.workspaceId);
   const callback = page.waitForResponse(response => response.url().includes('/browser/callback?'));
-  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  await page.getByRole('button', { name: 'Continue with Google', exact: true }).click();
   const refusal = await callback;
   expect(refusal.status()).toBe(401);
   expect(await refusal.text()).not.toMatch(/Founder Host Synthetic Firm|workspaceId|userId|supportedClientVersions/u);

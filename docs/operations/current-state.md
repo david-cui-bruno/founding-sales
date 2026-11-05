@@ -1,6 +1,6 @@
 # Current operating state
 
-## November 4, 2026: Social software live; bounded Email restored
+## November 5, 2026: Social redesign and real LinkedIn connection recovery
 
 Root owns integration/interfaces/production. Broad coverage, soft ranking, buying-role evidence and learning from outcomes remain David's direction. Parent783/supply797/Email838/Social843 retain scope; paused chat follow-ups and older schedules stay paused.
 
@@ -28,7 +28,7 @@ Root owns integration/interfaces/production. Broad coverage, soft ranking, buyin
 
 **Prioritization848 deployed:** [requirements](../greenfield/prospect-prioritization.md)/[audit](../greenfield/prospect-priority-interface-audit.md); hosted priority/fit saves accepted, no conversion claim. PR852 dated phone/person/office originals remain context, not canonical authority. Step1.3–1.5 software complete.
 
-**Social #925 SOFTWARE DELIVERED:** [workflow](../greenfield/founder-social-publishing.md)/[ADR0039](../adr/0039-founder-standing-social-and-isolated-runtime.md). Controlled workflow/media/deletion/quota/no-repeat and actual app_runtime recovery passed. Isolated host: TLS/native six-client confinement, Dockerhealthy and CloudWatch marker accepted. API/worker keys injected; both execution-side DB observations stayed fresh/advanced over90seconds, separate from physical2API/1worker counts. Normal signed UI: runneravailable, publishingnotactivated; legacy connected marker has0usable sessions/0plans. Combined/risk acceptance CLEAN. Genuine bullets/three calibration reviews/intended LinkedIn connection/exact3-weekly plan activation remain owner actions, not engineering tests. No real model/account/post action performed. #932 retag/adoption P2 remains; #928 Conversations spec merged, acquisition not implemented.
+**Social #925 delivered; #935 custom app + Buffer Free selected:** [workflow](../greenfield/founder-social-publishing.md)/[ADR0040](../adr/0040-buffer-managed-social-publication.md). Five genuine notes, three reviewed drafts and guide4 calibration remain accepted. Candidate redesign/Buffer/schema167 source reviews are clean; typecheck, targeted behavior, lint/workflow/secrets and repaired operational checks pass. Signed real-API/DB desktop/mobile/dark smoke proved explicit profile selection, encrypted connection, empty grants and zero plans/provider writes. Not merged/deployed; actual Buffer access remains unverified. Custom Chromium publication is removed from the candidate, not used to bypass LinkedIn's denial; old host/image/keys retain recovery custody without automatic fallback. CI/protected delivery, owner Buffer-Free personal-profile authorization and separate exact3/week activation remain. Four exclusive-cluster E2Es remain externally blocked; unrelated databases untouched. No plan activation/post. #932 retag/adoption and #928 Conversations acquisition remain open.
 
 ## Preserved completed work and controls
 

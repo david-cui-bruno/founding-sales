@@ -26,7 +26,7 @@ export async function providerNavigation(context: BrowserContext, app: FounderHo
 export async function founderLogin(page: Page, app: FounderHostApp) {
   await page.goto(app.origin);
   await page.getByLabel('Workspace ID', { exact: true }).fill(app.fixture.alpha.workspaceId);
-  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  await page.getByRole('button', { name: 'Continue with Google', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Sign out', exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Founder Host Synthetic Firm', exact: true })).toBeVisible();
 }

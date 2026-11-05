@@ -46,7 +46,11 @@ test('every metadata field is strictly validated', () => {
   for (const [key, values] of Object.entries(rejected)) for (const value of values) invalid({ ...metadata, [key]: value });
 });
 
-const publisherMetadata = { amiId: 'ami-0f11e0e04ccb60d0a', runtimeReady: false };
+const publisherMetadata = {
+  hostAction: 'preserve', amiId: 'ami-0f11e0e04ccb60d0a',
+  image: `326255650484.dkr.ecr.us-east-1.amazonaws.com/fss-prod-api@sha256:${'a'.repeat(64)}`,
+  runtimeReady: false,
+};
 const noHost = { resources: [] };
 
 test('omitted publisher configuration cannot remove a staged host or active runtime', () => {
@@ -54,7 +58,7 @@ test('omitted publisher configuration cannot remove a staged host or active runt
   for (const raw of [undefined, '']) {
     assert.throws(() => socialPublisherConfiguration(raw, baseline, staged), { message: 'social_publisher_configuration_required' });
     for (const field of ['environment', 'secrets']) {
-      for (const name of ['FSS_SOCIAL_PUBLISHER_ENDPOINT', 'FSS_SOCIAL_PUBLISHER_TOKEN', 'FSS_SOCIAL_PUBLISHER_SESSION_KEY']) {
+      for (const name of ['FSS_SOCIAL_PUBLISHER_ENDPOINT', 'FSS_SOCIAL_PUBLISHER_TOKEN', 'FSS_SOCIAL_PUBLISHER_SESSION_KEY', 'FSS_SOCIAL_PUBLISHER_CREDENTIAL_KEY', 'FSS_SOCIAL_PUBLISHER_MEDIA_ORIGIN']) {
         const running = { containerDefinitions: [{ [field]: [{ name }] }] };
         assert.throws(() => socialPublisherConfiguration(raw, running, noHost), { message: 'social_publisher_configuration_required' });
       }
@@ -65,7 +69,10 @@ test('omitted publisher configuration cannot remove a staged host or active runt
 test('publisher provisioning rejects credentials, partial metadata and malformed values without reflecting them', () => {
   const invalidValues = [null, [], true, {}, { ...publisherMetadata, token: 'private-input' },
     { ...publisherMetadata, amiId: 'private-input' }, { ...publisherMetadata, runtimeReady: 'true' },
-    { amiId: publisherMetadata.amiId }, { runtimeReady: true }];
+    { amiId: publisherMetadata.amiId }, { runtimeReady: true },
+    { ...publisherMetadata, hostAction: 'remove' }, { ...publisherMetadata, image: publisherMetadata.image.replace('@sha256:', ':') },
+    { hostAction: 'retire', runtimeReady: true }, { hostAction: 'retire', runtimeReady: true, retirementAccepted: false },
+    { hostAction: 'retire', runtimeReady: true, retirementAccepted: true, image: publisherMetadata.image }];
   for (const value of invalidValues) {
     assert.throws(() => socialPublisherConfiguration(JSON.stringify(value), baseline, noHost), { message: 'social_publisher_configuration_invalid' });
   }
@@ -81,4 +88,24 @@ test('unknown baseline or Terraform inventory cannot authorize implicit host rem
   for (const state of [undefined, {}, { resources: null }]) {
     assert.throws(() => socialPublisherConfiguration(undefined, baseline, state), { message: 'social_publisher_configuration_invalid' });
   }
+});
+
+test('preservation pins the accepted recovery image independently of Buffer readiness', () => {
+  for (const runtimeReady of [false, true]) {
+    assert.deepEqual(socialPublisherConfiguration(JSON.stringify({ ...publisherMetadata, runtimeReady }), baseline, noHost), {
+      social_publisher_host: { ami_id: publisherMetadata.amiId, image: publisherMetadata.image },
+      social_publisher_runtime_ready: runtimeReady,
+    });
+  }
+});
+
+test('only explicit accepted retirement removes the recovery host while retaining Buffer configuration', () => {
+  const staged = { resources: [{ mode: 'managed', module: 'module.stack.module.social_publisher[0]', type: 'aws_instance', name: 'browser' }] };
+  const active = { containerDefinitions: [{ secrets: [{ name: 'FSS_SOCIAL_PUBLISHER_CREDENTIAL_KEY' }] }] };
+  for (const runtimeReady of [false, true]) {
+    assert.deepEqual(socialPublisherConfiguration(JSON.stringify({
+      hostAction: 'retire', runtimeReady, retirementAccepted: true,
+    }), active, staged), { social_publisher_host: null, social_publisher_runtime_ready: runtimeReady });
+  }
+  assert.throws(() => socialPublisherConfiguration('', active, staged), { message: 'social_publisher_configuration_required' });
 });

@@ -24,7 +24,7 @@ async function select(page: Page) {
 async function login(page: Page) {
   await routeManualProvider(page, app); await page.goto(app.origin);
   await expect(page.getByLabel('Workspace ID', { exact: true })).toBeVisible(); await expect(page.getByText('Checking browser session…', { exact: true })).toHaveCount(0);
-  await page.getByLabel('Workspace ID', { exact: true }).fill(app.fixture.alpha.workspaceId); await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  await page.getByLabel('Workspace ID', { exact: true }).fill(app.fixture.alpha.workspaceId); await page.getByRole('button', { name: 'Continue with Google', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Sign out', exact: true })).toBeVisible(); await select(page);
 }
 async function read(page: Page) { await region(page).getByRole('button', { name: 'Read current opening policy', exact: true }).click(); await expect(region(page).getByLabel('Approved opening lines', { exact: true })).toBeVisible(); }
