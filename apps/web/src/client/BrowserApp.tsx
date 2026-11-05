@@ -8,6 +8,7 @@ import { BrowserSocialWorkspace } from './BrowserSocialWorkspace.tsx';
 import { BrowserToday } from './BrowserToday.tsx';
 import { BrowserSettings } from './BrowserSettings.tsx';
 import { WorkspaceShell, type WorkspaceTheme } from './WorkspaceShell.tsx';
+import { WorkspaceNavigationGuard, useWorkspaceNavigation } from './WorkspaceNavigationGuard.tsx';
 import { ReplyAttempt } from './ReplyAttempt.ts';
 import { EmailCampaignClient } from './EmailCampaignClient.ts';
 import { PrivateDraftCustody } from './PrivateDraftCustody.ts';
@@ -46,7 +47,7 @@ function AuthenticatedWorkspace({ client, section, onNavigate, settings }: {
       if (current() && (draftId === null || uuid.safeParse(draftId).success)) setSelectedEmailDraftId(draftId);
     },
   };
-  return <div>
+  return <div className="workspace-content" data-section={section}>
     {section === 'today' ? <BrowserToday client={client} onNavigate={onNavigate} onOpenCalling={openCalling} /> : null}
     {section === 'prospects' ? <BrowserProspectsWorkspace client={client} onNavigate={onNavigate} onOpenCalling={openCalling} /> : null}
     {section === 'calling' ? <CallingWorkspace client={client} selection={callingSelection} onSelectionChange={selection => {
@@ -65,10 +66,15 @@ function AuthenticatedWorkspace({ client, section, onNavigate, settings }: {
   </div>;
 }
 
-export function BrowserApp({ client: suppliedClient }: { client?: BrowserClient } = {}): JSX.Element {
+export function BrowserApp(props: { client?: BrowserClient } = {}): JSX.Element {
+  return <WorkspaceNavigationGuard><BrowserAppContent {...props} /></WorkspaceNavigationGuard>;
+}
+
+function BrowserAppContent({ client: suppliedClient }: { client?: BrowserClient } = {}): JSX.Element {
   const owned = useRef<BrowserClient | null>(null);
   if (owned.current === null) owned.current = suppliedClient ?? createBrowserClient();
   const client = owned.current;
+  const canLeave = useWorkspaceNavigation();
   const [session, setSession] = useState(client.current);
   const [generation, setGeneration] = useState(client.epoch);
   const [section, setSection] = useState<WorkspaceSection>('today');
@@ -76,7 +82,7 @@ export function BrowserApp({ client: suppliedClient }: { client?: BrowserClient 
   const [workspaceId, setWorkspaceId] = useState('');
   const [deviceLabel, setDeviceLabel] = useState('Local browser');
   const [notice, setNotice] = useState('Checking browser session…');
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState(true);
   const live = useRef(false), operation = useRef(0), locked = useRef(false);
   useEffect(() => {
     live.current = true;
@@ -102,9 +108,9 @@ export function BrowserApp({ client: suppliedClient }: { client?: BrowserClient 
     });
     const epoch = client.epoch, mine = ++operation.current;
     void client.refresh().then(() => {
-      if (live.current && operation.current === mine && client.isCurrent(epoch)) setNotice('');
+      if (live.current && operation.current === mine && client.isCurrent(epoch)) { setNotice(''); setBusy(false); }
     }).catch(() => {
-      if (live.current && operation.current === mine) setNotice('Session unavailable. Sign in again or refresh access.');
+      if (live.current && operation.current === mine) { setNotice('Session unavailable. Sign in again or refresh access.'); setBusy(false); }
     });
     return () => {
       live.current = false; operation.current += 1; locked.current = false;
@@ -123,15 +129,19 @@ export function BrowserApp({ client: suppliedClient }: { client?: BrowserClient 
     finally { if (live.current && operation.current === mine && client.isCurrent(epoch)) { locked.current = false; setBusy(false); } }
   };
   const logout = async (): Promise<void> => {
+    if (!canLeave()) return;
     // signOut invalidates synchronously. Fence its confirmation against a later sign-in.
     const result = client.signOut(), epoch = client.epoch, mine = ++operation.current;
     try { await result; if (live.current && operation.current === mine && client.isCurrent(epoch)) setNotice('Signed out.'); }
     catch { if (live.current && operation.current === mine && client.isCurrent(epoch)) setNotice('Local private state cleared. Remote sign-out was not confirmed. Sign in again to check access.'); }
   };
-  const navigate = useCallback((destination: WorkspaceSection): void => { setSection(destination); setNotice(''); }, []);
+  const navigate = useCallback((destination: WorkspaceSection): void => {
+    if (destination !== section && !canLeave()) return;
+    setSection(destination); setNotice('');
+  }, [section, canLeave]);
   const toggleTheme = (): void => { setTheme(value => value === 'light' ? 'dark' : 'light'); };
   const signedIn = session?.status === 'signed_in' && generation === client.epoch;
-  return <WorkspaceShell section={section} onNavigate={navigate} theme={theme} onTheme={toggleTheme} signedIn={signedIn} onSignOut={() => { void logout(); }}>
+  return <WorkspaceShell key={generation} section={section} onNavigate={navigate} theme={theme} onTheme={toggleTheme} signedIn={signedIn} onSignOut={() => { void logout(); }}>
     {notice ? <p role="status" className="workspace-notice">{notice}</p> : null}
     {!signedIn ? <BrowserSignIn workspaceId={workspaceId} deviceLabel={deviceLabel} busy={busy}
       onWorkspaceId={setWorkspaceId} onDeviceLabel={setDeviceLabel}

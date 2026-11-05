@@ -18,6 +18,11 @@ export async function seedReplyBrief(f: AuthFixture, firmId: string, conversatio
   const recipient = conversation?.participants[0]?.email ?? `prospect-${randomUUID()}@example.test`;
   const ctx = repositoryContext(workspaceScope(workspaceId, { kind: 'user', userId: owner, role: 'salesperson' }), f.db);
   const admin = repositoryContext(workspaceScope(workspaceId, { kind: 'user', userId: f.alpha.admin.userId, role: 'admin' }), f.db);
+  // Exact reply previews retain the same configured-postal-address gate as sends.
+  await f.db.query(
+    "INSERT INTO workspace_settings(workspace_id,setting_key,version,value,change_note,changed_by_user_id) VALUES($1,'postal_address',1,$2::jsonb,'synthetic fixture address',$3) ON CONFLICT (workspace_id,setting_key,version) DO NOTHING",
+    [workspaceId, JSON.stringify({ address: '1 Example Way, Providence, RI 02903' }), f.alpha.admin.userId],
+  );
   const existing = (await f.db.query<{ id: string; email_address: string }>('SELECT id,email_address FROM mailboxes WHERE workspace_id=$1 AND owner_user_id=$2', [workspaceId, owner])).rows[0];
   const mailbox = existing ?? (await f.db.query<{ id: string; email_address: string }>(`INSERT INTO mailboxes(workspace_id,owner_user_id,email_address,provider_account_id,sync_state,history_id,history_id_updated_at,baseline_from_at,baseline_completed_at,coverage_watermark_at) VALUES($1,$2,$3,$3,'ready','1000',now(),now()-interval '30 days',now(),now()) RETURNING id,email_address`, [workspaceId, owner, address])).rows[0]!;
   const contact = (await f.db.query<{ id: string }>('INSERT INTO contacts(workspace_id,firm_id,full_name) VALUES($1,$2,$3) RETURNING id', [workspaceId, firmId, 'Robin Reply Brief Fixture'])).rows[0]!;

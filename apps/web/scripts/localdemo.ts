@@ -62,16 +62,19 @@ export async function runLocalDemo(options: { reviewWindow?: boolean; stopComman
     await signInSyntheticBrowser(page, runtime.app);
     if (cancelled()) return;
     if (runtime.manualPreparation) {
+      await page.getByRole('navigation', { name: 'Workspace sections' }).getByRole('button', { name: 'Prospects', exact: true }).click();
+      await page.getByRole('button', { name: 'Retained review', exact: true }).click();
       const worklist = page.getByRole('region', { name: 'Manual prospect worklist', exact: true });
       await worklist.getByRole('table').locator(`tr[data-candidate-id="${runtime.manualPreparation.candidateId}"]`).getByRole('button').click();
       await worklist.getByRole('article', { name: `Manual prospect ${runtime.manualPreparation.candidateId}`, exact: true }).waitFor();
       await worklist.scrollIntoViewIfNeeded();
     } else {
+      await page.getByRole('navigation', { name: 'Workspace sections' }).getByRole('button', { name: 'Email', exact: true }).click();
       await page.getByRole('button', { name: 'Refresh replies', exact: true }).click();
       await page.getByRole('button', { name: `${syntheticBrowserCase.firm}: ${syntheticReplySource.subject}`, exact: true }).click();
       await page.getByRole('button', { name: 'Refresh current reply context', exact: true }).click();
-      await page.getByText(syntheticReplySource.body, { exact: true }).waitFor();
-      await page.locator('#replies').scrollIntoViewIfNeeded();
+      await page.getByRole('region', { name: 'Reply composer', exact: true }).getByText(syntheticReplySource.body, { exact: true }).waitFor();
+      await page.getByRole('region', { name: 'Replies', exact: true }).scrollIntoViewIfNeeded();
     }
     await assertSyntheticNoSend(runtime.app);
     if (cancelled()) return;

@@ -1,6 +1,6 @@
 # Callie workspace design system
 
-Approved direction: David's November 5, 2026 review, [#939](https://github.com/david-cui-bruno/founding-sales/issues/939). Implementation is pending. This is the reusable design contract, not a claim that the prototype's simulated operations exist in production. [Delivery roadmap](workspace-redesign-roadmap.md) owns sequence and acceptance; [journeys](../features/README.md) own actual product coverage.
+Approved direction: David's November 5, 2026 review, [#939](https://github.com/david-cui-bruno/founding-sales/issues/939). Design handoff merged in PR940; production cutover is still pending. This is the reusable design contract, not a claim that the prototype's simulated operations exist in production. [Delivery roadmap](workspace-redesign-roadmap.md) owns sequence and acceptance; [journeys](../features/README.md) own actual product coverage.
 
 ## Authority and reference
 
@@ -30,12 +30,13 @@ System font stack; no downloaded font. Neutral, flat surfaces; restrained border
 | Canvas / panel / sidebar | `#fafaf9` / `#ffffff` / `#f3f3f1` | `#111212` / `#17181a` / `#131415` |
 | Hover / selection | `#eeeeeb` / `#e8edeb` | `#1e1f21` / `#222728` |
 | Border / subtle border | `#e5e4e0` / `#efeeea` | `#2a2c2e` / `#212325` |
-| Text / secondary / metadata | `#1a1a18` / `#5b5a56` / `#8d8c87` | `#ecece9` / `#a4a39f` / `#75746f` |
+| Text / secondary / metadata | `#1a1a18` / `#5b5a56` / `#72716d` | `#ecece9` / `#a4a39f` / `#96958f` |
 | Primary / on-primary / soft | `#2d6a4f` / `#ffffff` / `#e5efe9` | `#5fb38a` / `#0c1912` / `#18291f` |
 | Warning / soft | `#95580a` / `#f9efdd` | `#e3a95b` / `#2a2116` |
 | Error / soft | `#b3261e` / `#fbe9e7` | `#f0867d` / `#2c1a19` |
 | Info / soft | `#2856c9` / `#e8eefb` | `#88a9f5` / `#1a2132` |
 | Writing / soft | `#6a4fb8` / `#efebf9` | `#b5a3ee` / `#221e32` |
+| Control boundary | `#8b8b85` | `#777973` |
 
 Typography: body 14px/1.5; secondary 13px; nonessential metadata 12–12.5px; list headings 17px/650; selected-item title 22px/650. Numeric times, money and counts use tabular numerals. Primary actions use weight 550–600. Tight headings, not oversized dashboard slogans.
 
@@ -67,5 +68,7 @@ Every pattern handles loading, empty, unavailable, forbidden, stale, unsaved, pe
 ## Enforcement during implementation
 
 The production token CSS and real shared patterns become executable truth; this document explains decisions. A small development-only pattern gallery should render those actual modules, including states, rather than screenshots or a separate app. No Storybook service, paid dependency or design-system platform is needed.
+
+Executable patterns: [tokens](../../apps/web/src/client/workspaceTokens.css), [shell](../../apps/web/src/client/WorkspaceShell.tsx), [list/detail and states](../../apps/web/src/client/WorkspacePatterns.tsx). On Node24 run `npm run dev:patterns --workspace apps/web`, then open `http://127.0.0.1:8879/`. It bundles those same modules with no product connections. Metadata and control-boundary colors above incorporate contrast corrections to the fictional reference.
 
 For each vertical slice: compare the real browser to the reference at desktop/laptop widths; exercise the changed workflow and refusal/uncertainty paths; retain targeted regressions for meaningful behavior; run workflow/type/lint/secret gates as applicable. Delete replaced CSS, views and incidental wording tests in the same cutover. Do not deliver a new shell whose destinations are placeholders, or claim prototype tests prove backend effects.

@@ -1,36 +1,13 @@
-.browser-main .browser-signin {
-  width: 100%;
-  max-width: 580px;
-  margin: clamp(12px, 4vh, 48px) auto;
-  padding: 0;
-  border: 0;
-  background: transparent;
-}
-.browser-signin-welcome { margin-bottom: 28px; }
-.browser-signin-welcome .workspace-eyebrow { margin: 0 0 20px; }
-.browser-signin-greeting { margin: 0 0 8px; color: var(--muted); font-size: 18px; }
-.browser-signin-welcome h1 { font-size: clamp(32px, 5vw, 44px); letter-spacing: -1.4px; }
-.browser-signin-welcome > p:last-child { margin: 14px 0 0; max-width: 44ch; color: var(--muted); line-height: 1.65; }
-.browser-signin-card { border: 1px solid var(--line-strong); border-radius: 22px; padding: clamp(20px, 4vw, 32px); background: var(--panel-strong); box-shadow: var(--shadow); }
-.browser-signin-account { margin: 0 0 26px; color: var(--muted); font-size: 14px; line-height: 1.7; }
-.browser-signin-account strong { color: var(--text); font-weight: 600; }
-.browser-signin form > label, .browser-signin-details label { margin: 0 0 8px; font-size: 14px; font-weight: 600; }
-.browser-signin input { min-height: 46px; box-sizing: border-box; font-size: 16px; }
-.browser-signin-hint { margin: 10px 0 0; color: var(--muted); font-size: 12px; line-height: 1.65; }
-.browser-signin-details { margin-top: 14px; font-size: 13px; }
-.browser-signin-details summary { width: fit-content; max-width: 100%; padding: 8px 0; cursor: pointer; color: var(--text); line-height: 1.5; }
-.browser-signin-details > p:not(.browser-signin-hint) { margin: 8px 0 12px; color: var(--muted); line-height: 1.7; }
-.browser-signin-advanced { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 8px; }
-.browser-signin-advanced label { margin-top: 12px; }
-.browser-signin button.browser-signin-continue { display: flex; justify-content: space-between; width: 100%; min-height: 48px; margin-top: 24px; font-size: 14px; padding-inline: 18px; }
-.browser-signin-next { text-align: center; }
-.browser-signin-recovery { margin-top: 28px; padding-top: 20px; border-top: 1px solid var(--line); }
-.browser-signin-recovery > p:first-child { margin: 0; font-size: 13px; color: var(--muted); }
-.browser-signin-recovery button { margin: 4px 0 0 -10px; padding: 8px 10px; min-height: 44px; }
-.browser-signin-recovery .browser-signin-hint { margin-top: 0; }
-.browser-signin :is(input, button, summary):focus-visible { outline: 2px solid var(--workspace-accent); outline-offset: 4px; }
-@media (max-width: 540px) {
-  .browser-main .browser-signin { margin-block: 12px; }
-  .browser-signin-welcome { margin-bottom: 22px; }
-  .browser-signin-card { border-radius: 16px; }
-}
+.browser-main .browser-signin { width: 100%; max-width: 400px; margin: auto; padding: 24px 0; border: 0; background: transparent; }
+.browser-signin > .browser-brand { justify-content: center; padding-bottom: 24px; }
+.browser-signin-card { border: 1px solid var(--line); border-radius: 14px; padding: 28px; background: var(--panel); }
+.browser-signin-card h1 { font-size: 22px; font-weight: 650; }
+.browser-signin-account { color: var(--muted); font-size: 13px; margin: 8px 0 20px; }
+.browser-signin-account strong { color: var(--text); font-weight: 550; }
+.browser-signin form > label { margin: 16px 0 6px; font-size: 13px; font-weight: 550; }
+.browser-signin input { min-height: 38px; font-size: 14px; }
+.browser-signin-hint { margin: 6px 0 0; color: var(--muted); font-size: 12px; }
+.browser-signin button.browser-signin-continue { display: flex; justify-content: center; width: 100%; min-height: 40px; margin-top: 20px; font-size: 14px; }
+.browser-signin-recovery { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); }
+.browser-signin-recovery p { margin: 0; font-size: 13px; color: var(--muted); }
+.browser-signin-recovery button { margin: 4px 0 0 -8px; padding: 6px 8px; }

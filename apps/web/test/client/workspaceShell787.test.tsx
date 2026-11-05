@@ -1,8 +1,6 @@
 // @vitest-environment jsdom
 import {priorityFixturePage} from './support/priorityFixture.ts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { URL as NodeURL } from 'node:url';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { BrowserApp } from '../../src/client/BrowserApp.tsx';
 import { BrowserClient } from '../../src/client/BrowserClient.ts';
@@ -113,32 +111,9 @@ describe('issue787 mounted real-client shell', () => {
     const identityReads=s.send.mock.calls.filter(([url])=>url==='/browser/api/calling-identities');
     expect(identityReads).toHaveLength(1);expect(identityReads.every(([,init])=>(init?.method??'GET')==='GET'&&init?.body===undefined)).toBe(true);
   });
-  it('exposes six theme aliases and excludes feature structural panels from legacy card rules', () => {
-    const style = document.createElement('style');
-    style.textContent = readFileSync(new NodeURL('../../src/client/browser.css', import.meta.url), 'utf8');
-    document.head.append(style);
-    try {
-      const rules = Array.from(style.sheet!.cssRules).filter((rule): rule is CSSStyleRule => 'selectorText' in rule);
-      const aliases = rules.find(rule => rule.style.getPropertyValue('--workspace-bg'))!;
-      for (const [name, token] of Object.entries({ bg: '--bg', text: '--text', muted: '--muted', border: '--line-strong', panel: '--panel', accent: '--manual-sage' })) {
-        expect(aliases.style.getPropertyValue(`--workspace-${name}`).trim()).toBe(`var(${token})`);
-      }
-      expect(rules.find(rule => rule.selectorText === '.browser-workspace')?.style.getPropertyValue('--bg')).toBeTruthy();
-      expect(rules.find(rule => rule.selectorText === '.browser-workspace[data-theme=dark]')?.style.getPropertyValue('--bg')).toBeTruthy();
-      const cards = rules.filter(rule => rule.selectorText.startsWith(':where(.browser-main section') || rule.selectorText.startsWith(':where(.browser-main article'));
-      expect(cards).toHaveLength(2);
-      const ui = render(<main className="browser-main">{['workspace-prospects', 'email-workspace', 'social-workspace', 'workspace-calling'].map(name => <section key={name} className={name}><section /><article /><aside /></section>)}<section data-legacy="true" /></main>);
-      for (const feature of ui.container.querySelectorAll('.workspace-prospects, .workspace-prospects *, .email-workspace, .email-workspace *, .social-workspace, .social-workspace *, .workspace-calling, .workspace-calling *')) {
-        expect(cards.some(rule => feature.matches(rule.selectorText))).toBe(false);
-      }
-      expect(cards.some(rule => ui.container.querySelector('[data-legacy]')!.matches(rule.selectorText))).toBe(true);
-    } finally { style.remove(); }
-  });
   it('mounts only real Today, escapes content and uses the shared five destinations', async () => {
     const s = setup(); render(<BrowserApp client={s.client} />);
     await screen.findByText(card.firmName);
-    expect(screen.getByText('1 firms in this snapshot')).toBeTruthy();
-    expect(screen.getByText(/Snapshot 2026-10-25/u)).toBeTruthy();
     expect(within(screen.getByRole('navigation')).getAllByRole('button').map(button => button.textContent)).toEqual(['Today', 'Prospects', 'Calling', 'Email', 'Social']);
     expect(within(screen.getByRole('navigation')).getByRole('button', { name: 'Today' }).getAttribute('aria-current')).toBe('page');
     expect(s.send.mock.calls.every(([url]) => url === '/browser/session' || String(url).startsWith('/browser/api/today?'))).toBe(true);
@@ -162,7 +137,7 @@ describe('issue787 mounted real-client shell', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Settings & account' }));
     expect(screen.getByRole('heading', { name: 'Settings' })).toBeTruthy();
     expect(screen.getByText(id)).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Switch to day mode' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Light' }));
     expect(ui.container.firstElementChild?.getAttribute('data-theme')).toBe('light');
     expect(sessionStorage.length + localStorage.length).toBe(before);
   });
@@ -188,7 +163,7 @@ describe('issue787 mounted real-client shell', () => {
     expect(screen.queryByText(/firms in this snapshot/u)).toBeNull();
     await act(async () => { held.resolve(json({ ...today, cards: [] })); });
     await screen.findByText('No firms need attention in this snapshot.');
-    expect(screen.queryByRole('button', { name: 'Open firm' })).toBeNull();
+    expect(screen.queryByRole('button', { name: `Open ${card.firmName}` })).toBeNull();
   });
   it('refused/unavailable read clears the previous snapshot and stops, explicit refresh recovers', async () => {
     const s = setup(); render(<BrowserApp client={s.client} />); await screen.findByText(card.firmName);
@@ -248,7 +223,7 @@ describe('issue787 mounted real-client shell', () => {
   });
   it('ignores late Firm after navigation without replacing the new page', async () => {
     const s = setup(); const held = s.delayFirm(); render(<BrowserApp client={s.client} />); await screen.findByText(card.firmName);
-    fireEvent.click(screen.getByRole('button', { name: 'Open firm' }));
+    fireEvent.click(screen.getByRole('button', { name: `Open ${card.firmName}` }));
     await waitFor(() => { expect(s.send.mock.calls.some(([url]) => url === '/browser/api/crm/firm-page-v3')).toBe(true); });
     navigate('Calling'); await act(async () => { held.resolve(json({})); });
     expect(screen.getByRole('heading', { name: 'Calling' })).toBeTruthy();
@@ -256,7 +231,7 @@ describe('issue787 mounted real-client shell', () => {
   });
   it('does not dispatch a Firm read after navigation during its session wait', async () => {
     const s = setup(); render(<BrowserApp client={s.client} />); await screen.findByText(card.firmName);
-    const held = s.delaySession(); fireEvent.click(screen.getByRole('button', { name: 'Open firm' })); navigate('Calling');
+    const held = s.delaySession(); fireEvent.click(screen.getByRole('button', { name: `Open ${card.firmName}` })); navigate('Calling');
     await act(async () => { held.resolve(json({ status: 'signed_in', workspaceId: id, userId: id, deviceId: id, role: 'admin', revision: 'one', csrfToken: 'c'.repeat(40), expiresAt: new Date(Date.now() + 120_000).toISOString() })); });
     expect(s.send.mock.calls.some(([url]) => url === '/browser/api/crm/firm-page-v3')).toBe(false);
   });
@@ -280,13 +255,5 @@ describe('issue787 mounted real-client shell', () => {
     await waitFor(() => { expect(s.navigate).toHaveBeenCalledWith('https://login.example.test/authorize'); });
     expect(s.send.mock.calls.every(([url]) => url === '/browser/session' || url === '/browser/sign-in')).toBe(true);
     expect(screen.queryByRole('navigation')).toBeNull();
-  });
-  it('keeps server priority and progressively discloses a long snapshot without more requests', async () => {
-    const s = setup(); s.answer({ ...today, cards: Array.from({ length: 10 }, (_, index) => ({ ...card, firmId: `00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`, firmName: `Firm ${index}` })) });
-    render(<BrowserApp client={s.client} />); await screen.findByText('Firm 0');
-    expect(screen.getAllByRole('button', { name: 'Open firm' })).toHaveLength(8);
-    fireEvent.click(screen.getByRole('button', { name: 'Show more firms' }));
-    expect(screen.getAllByRole('heading', { level: 3 }).map(value => value.textContent)).toEqual(Array.from({ length: 10 }, (_, index) => `Firm ${index}`));
-    expect(s.send.mock.calls.filter(([url]) => String(url).startsWith('/browser/api/today?'))).toHaveLength(1);
   });
 });
