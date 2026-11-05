@@ -83,6 +83,6 @@ export async function loginQualifiedResearch(page: Page, app: ThinHostApp, beta 
   app.chooseIdentity(workspace.admin);
   await page.goto(app.origin);
   await page.getByLabel('Workspace ID', { exact: true }).fill(workspace.workspaceId);
-  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  await page.getByRole('button', { name: 'Continue with Google', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Sign out', exact: true })).toBeVisible();
 }

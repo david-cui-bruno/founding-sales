@@ -45,8 +45,8 @@ locals {
   # first apply keeps this false; this stage-two change must not deploy before AWSCURRENT exists.
   worker_reads_millionverifier_api_key = true
 
-  # Stage one creates the dedicated empty encryption-key entry. Stage two may
-  # inject it only after its owned value and supported sandbox runtime are ready.
+  # Reuse the accepted encryption-key value without rotation. Inject only once
+  # Buffer application credentials and canonical public media ingress are ready.
   social_publisher_runtime_ready = var.social_publisher_runtime_ready
 
   # Adapter construction is separate from owner-controlled database activation.

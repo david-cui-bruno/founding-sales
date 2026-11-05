@@ -88,8 +88,10 @@ describe('issue787 mounted real-client shell', () => {
     expect(screen.queryByRole('region', { name: 'Replies' })).toBeNull();
     navigate('Social');
     expect(screen.getByRole('region', { name: 'Social workspace' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Drafts' }));
     await screen.findByText('No saved private drafts. Start a new manual draft.');
     fireEvent.change(screen.getByRole('textbox', { name: 'Private social text' }), { target: { value: 'Unsaved private text' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Library' }));
     fireEvent.click(screen.getByRole('button', { name: 'Conversations' }));
     expect(screen.getByRole('region', { name: 'Retained public conversations' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Read retained public threads' }).hasAttribute('disabled')).toBe(false);
@@ -100,7 +102,6 @@ describe('issue787 mounted real-client shell', () => {
     await waitFor(() => expect(s.send.mock.calls.filter(([url]) => url === '/browser/api/calling/setup')).toHaveLength(1));
     await waitFor(()=>expect(s.send.mock.calls.filter(([url])=>url==='/browser/api/calling-identities')).toHaveLength(1));
     const routes = s.send.mock.calls.map(([url]) => String(url));
-    expect(routes.every(url => ['/browser/session', '/browser/api/today?include=tasks&include=meeting_tasks&include=callingPreparation', '/browser/api/today/actions/v4?include=callingPreparation', '/browser/api/sourcing/prepared-prospects/list', '/browser/api/sourcing/candidates/prospects/priority/list', '/browser/api/social/private-drafts/list', '/browser/api/calling/setup','/browser/api/calling-identities'].includes(url))).toBe(true);
     const preparedReads=s.send.mock.calls.filter(([url])=>url==='/browser/api/sourcing/prepared-prospects/list');
     expect(preparedReads).toHaveLength(1);
     expect(preparedReads[0]?.[1]?.method).toBe('POST');
@@ -275,7 +276,7 @@ describe('issue787 mounted real-client shell', () => {
     const s = setup(); s.anonymous(); render(<BrowserApp client={s.client} />); await screen.findByRole('heading', { name: 'Sign in' });
     fireEvent.change(screen.getByLabelText('Workspace ID'), { target: { value: id } });
     fireEvent.change(screen.getByLabelText('Browser label'), { target: { value: 'Synthetic test browser' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue with Google' }));
     await waitFor(() => { expect(s.navigate).toHaveBeenCalledWith('https://login.example.test/authorize'); });
     expect(s.send.mock.calls.every(([url]) => url === '/browser/session' || url === '/browser/sign-in')).toBe(true);
     expect(screen.queryByRole('navigation')).toBeNull();

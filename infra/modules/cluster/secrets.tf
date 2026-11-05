@@ -1,19 +1,19 @@
 locals {
   # Only the two application services receive publisher authority. Migration and
   # operations retain their existing dedicated database/Gmail references.
-  api_secret_names        = ["calcom", "device-credential-pepper", "google-gmail-oauth-client", "google-oidc-client", "session-signing-key", "social-publisher-session-key", "social-publisher-control-token", "twilio-voice"]
-  worker_secret_names     = ["sourcing-search", "zoom-meetings", "millionverifier-api-key", "calcom", "google-gmail-oauth-client", "llm-classifier-api-key", "social-publisher-session-key", "social-publisher-control-token", "transcription", "twilio-voice"]
+  api_secret_names        = ["calcom", "device-credential-pepper", "google-gmail-oauth-client", "google-oidc-client", "session-signing-key", "social-publisher-session-key", "twilio-voice"]
+  worker_secret_names     = ["sourcing-search", "zoom-meetings", "millionverifier-api-key", "calcom", "google-gmail-oauth-client", "llm-classifier-api-key", "social-publisher-session-key", "transcription", "twilio-voice"]
   operations_secret_names = ["google-gmail-oauth-client"]
-  publisher_secret_names  = ["social-publisher-session-key", "social-publisher-control-token"]
+  publisher_secret_names  = ["social-publisher-session-key"]
   secret_environment_names = {
-    "llm-classifier-api-key"         = "FSS_LLM_CLASSIFIER_API_KEY"
-    "millionverifier-api-key"        = "FSS_MILLIONVERIFIER_API_KEY"
-    "sourcing-search"                = "FSS_TAVILY_API_KEY"
-    "social-publisher-session-key"   = "FSS_SOCIAL_PUBLISHER_SESSION_KEY"
-    "social-publisher-control-token" = "FSS_SOCIAL_PUBLISHER_TOKEN"
+    "llm-classifier-api-key"  = "FSS_LLM_CLASSIFIER_API_KEY"
+    "millionverifier-api-key" = "FSS_MILLIONVERIFIER_API_KEY"
+    "sourcing-search"         = "FSS_TAVILY_API_KEY"
+    # Reuse the accepted encryption key/container without rotating outstanding custody.
+    "social-publisher-session-key" = "FSS_SOCIAL_PUBLISHER_CREDENTIAL_KEY"
   }
   # Empty secret containers may exist before their values are installed. Inject
-  # neither publisher credential until the host and both values are ready.
+  # the encryption key only when the Buffer application configuration is ready.
   worker_injected_secret_names = [
     for name in local.worker_secret_names : name
     if(name != "millionverifier-api-key" || var.worker_reads_millionverifier_api_key)

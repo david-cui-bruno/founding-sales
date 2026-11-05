@@ -132,7 +132,7 @@ test('current exact revision, workspace, session and administrator refusals do n
   const f = owned.app.fixture;
   owned.app.chooseIdentity(f.alpha.salesperson);
   await page.getByLabel('Workspace ID', { exact: true }).fill(f.alpha.workspaceId);
-  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  await page.getByRole('button', { name: 'Continue with Google', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Sign out', exact: true })).toBeVisible();
   await stable(async () => {
     const refused = await browserRequest(page, path, { body: { candidateId: source.candidateId, expectedRevision: source.candidateRevision } });

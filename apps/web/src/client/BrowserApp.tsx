@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type JSX } from 'react';
 import { callingSubjectSchema, uuid } from '@fss/contracts';
 import { BrowserClient } from './BrowserClient.ts';
+import { BrowserSignIn } from './BrowserSignIn.tsx';
 import { BrowserProspectsWorkspace } from './BrowserProspectsWorkspace.tsx';
 import { BrowserEmailWorkspace } from './BrowserEmailWorkspace.tsx';
 import { BrowserSocialWorkspace } from './BrowserSocialWorkspace.tsx';
@@ -132,6 +133,10 @@ export function BrowserApp({ client: suppliedClient }: { client?: BrowserClient 
   const signedIn = session?.status === 'signed_in' && generation === client.epoch;
   return <WorkspaceShell section={section} onNavigate={navigate} theme={theme} onTheme={toggleTheme} signedIn={signedIn} onSignOut={() => { void logout(); }}>
     {notice ? <p role="status" className="workspace-notice">{notice}</p> : null}
-    {!signedIn ? <section aria-label="Sign in" className="workspace-glass workspace-signin"><p className="workspace-eyebrow">Your private workspace</p><h1>Sign in</h1><p>Use your existing workspace to continue.</p><form onSubmit={event => { event.preventDefault(); void run(() => client.signIn(workspaceId, deviceLabel)); }}><label>Workspace ID<input autoComplete="off" name="workspace" value={workspaceId} onChange={event => { setWorkspaceId(event.target.value); }} required /></label><label>Browser label<input name="deviceLabel" value={deviceLabel} onChange={event => { setDeviceLabel(event.target.value); }} required /></label><div className="workspace-inline-actions"><button type="submit" className="workspace-primary" disabled={busy}>Sign in</button><button type="button" disabled={busy} onClick={() => { void run(() => client.refresh()); }}>Refresh access</button></div></form></section> : <AuthenticatedWorkspace key={generation} client={client} section={section} onNavigate={navigate} settings={<BrowserSettings client={client} theme={theme} onTheme={toggleTheme} busy={busy} onRefresh={() => { void run(() => client.refresh()); }} />} />}
+    {!signedIn ? <BrowserSignIn workspaceId={workspaceId} deviceLabel={deviceLabel} busy={busy}
+      onWorkspaceId={setWorkspaceId} onDeviceLabel={setDeviceLabel}
+      onContinue={() => { void run(() => client.signIn(workspaceId, deviceLabel)); }}
+      onRefresh={() => { void run(() => client.refresh()); }} />
+      : <AuthenticatedWorkspace key={generation} client={client} section={section} onNavigate={navigate} settings={<BrowserSettings client={client} theme={theme} onTheme={toggleTheme} busy={busy} onRefresh={() => { void run(() => client.refresh()); }} />} />}
   </WorkspaceShell>;
 }

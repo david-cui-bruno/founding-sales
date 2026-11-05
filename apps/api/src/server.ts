@@ -8,7 +8,7 @@ import type { MailCaptureReadiness } from '@fss/domain/mail/crmCaptureReadiness.
 import type { CrmMailEvidencePort } from '@fss/domain/crm/mailEvidence.ts';
 import type {BookingCapacityDeps} from './routes/bookingCapacity.ts';
 import type {SocialMediaStore} from './social/mediaStore.ts';
-import type {SocialBrowserPublisher} from '@fss/social-publisher';
+import type {SocialBufferPublisher} from '@fss/social-publisher';
 import type { CallAudioRemover } from './integrations/callAudio.ts';
 import type { MeetingAudioStore } from './integrations/meetingAudio.ts';
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
@@ -129,7 +129,7 @@ export interface ApiOptions {
   /** Lane M4: a meeting recording's upload URL and HEAD. Absent: the upload routes are 404. */
   readonly meetingAudio?: MeetingAudioStore | undefined;
   readonly socialMedia?: SocialMediaStore | undefined;
-  readonly socialPublisher?: SocialBrowserPublisher | undefined;
+  readonly socialPublisher?: SocialBufferPublisher | undefined;
   /** Extra route modules, so a lane mounts without editing this file. */
   readonly extraRoutes?: readonly RouteModule[] | undefined;
   /** The structured log; the safety metric filters read it. Absent in unit tests. */
@@ -270,6 +270,7 @@ export async function dispatch(request: ApiRequest, options: ApiOptions): Promis
       status: mounted.status,
       body: mounted.body,
       ...(mounted.contentType === undefined ? {} : { contentType: mounted.contentType }),
+      ...(mounted.contentLength === undefined ? {} : {contentLength:mounted.contentLength}),
     };
   }
 
@@ -316,13 +317,14 @@ function send(
   body: unknown,
   contentType?: string,
   extraHeaders: Readonly<Record<string, string>> = {},
+  contentLength?: number,
 ): void {
   const isJson = contentType === undefined;
-  const payload = isJson ? JSON.stringify(body) : String(body);
+  const payload = Buffer.isBuffer(body) ? body : isJson ? JSON.stringify(body) : String(body);
   response.writeHead(status, {
     ...extraHeaders,
     'content-type': contentType ?? 'application/json; charset=utf-8',
-    'content-length': String(Buffer.byteLength(payload)),
+    'content-length': String(contentLength ?? Buffer.byteLength(payload)),
     // No caching of anything this API says: everything it says is about right now.
     'cache-control': 'no-store',
     'x-content-type-options': 'nosniff',
@@ -470,7 +472,7 @@ async function handle(
       const code = refusalCodeOf(result.body);
       options.log?.log('info', 'refusal', { reason: String(result.status), path, ...(code === null ? {} : { code }) });
     }
-    send(response, result.status, result.body, result.contentType);
+    send(response, result.status, result.body, result.contentType, {}, method === 'HEAD' ? result.contentLength : undefined);
   } catch (error) {
     if (error instanceof DatabaseBusyError) {
       // Every connection was in use for the whole checkout timeout. The checkout is

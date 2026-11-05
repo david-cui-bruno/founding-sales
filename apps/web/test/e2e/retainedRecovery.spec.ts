@@ -50,6 +50,6 @@ test('composes retained identity and human interpretation through real HTTPS sig
  const read=await browserRequest(page,'/sourcing/qualification/read',{body:{candidateId:fixture.candidateId}});expect(qualificationViewSchema.parse(read.body)).toMatchObject({status:'admitted',interpretationOrigin:'human_retained',recovery:{originalRunId:fixture.runId}});
  expect((await owned.app.fixture.db.query('SELECT * FROM sourcing_qualification_runs WHERE id=$1',[fixture.runId])).rows[0]).toEqual(original);
  for(const table of noWriteTables)expect((await owned.app.fixture.db.query(`SELECT to_jsonb(t) AS row FROM ${table} t ORDER BY to_jsonb(t)::text`)).rows,`${table}: no new or changed acquisition/contact records`).toEqual(baseline.get(table));
- await page.getByRole('button',{name:'Sign out',exact:true}).click();await expect(page.getByRole('button',{name:'Sign in',exact:true})).toBeVisible();expect(await held(page)).toBeNull();
+ await page.getByRole('button',{name:'Sign out',exact:true}).click();await expect(page.getByRole('button', { name: 'Continue with Google', exact: true })).toBeVisible();expect(await held(page)).toBeNull();
  console.log('ISSUE760_RETAINED_RECOVERY_ACCEPTED',JSON.stringify({candidateId:fixture.candidateId,originalRunId:fixture.runId,firmId:admission.result.firmId,originalUnchanged:true,acquisition:0,contact:0}));
 });

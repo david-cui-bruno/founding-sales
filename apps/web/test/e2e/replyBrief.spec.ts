@@ -69,7 +69,7 @@ async function login(page: Page): Promise<void> {
     browserResourceRecorded = true;
   }
   await page.getByLabel('Workspace ID', { exact: true }).fill(app.fixture.alpha.workspaceId);
-  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  await page.getByRole('button', { name: 'Continue with Google', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Sign out', exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Reply Brief Synthetic Firm', exact: true, level: 3 })).toBeVisible();
 }

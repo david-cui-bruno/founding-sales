@@ -92,8 +92,9 @@ export async function containSyntheticBrowser(context: BrowserContext, app: Repl
 }
 export async function signInSyntheticBrowser(page: Page, app: ReplyBriefApp): Promise<void> {
   await page.goto(app.origin);
+  await page.getByText('Checking browser session…', { exact: true }).waitFor({ state: 'hidden' });
   await page.getByLabel('Workspace ID', { exact: true }).fill(app.fixture.alpha.workspaceId);
-  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  await page.getByRole('button', { name: 'Continue with Google', exact: true }).click();
   await page.getByRole('button', { name: 'Sign out', exact: true }).waitFor();
 }
 export async function assertSyntheticNoSend(app: ReplyBriefApp): Promise<void> {

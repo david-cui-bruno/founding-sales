@@ -187,7 +187,7 @@ test('real browser request and reviewed admission retain exact custody through r
   await zeroOutbound(); expect(admissionCommands).toBe(2);
   const current = await browserRequest(page, '/sourcing/qualification/read', { body: { candidateId } }); expect(qualificationViewSchema.parse(current.body).admission?.firmId).toBe(admitted.result.firmId);
   await page.getByRole('button', { name: 'Sign out', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Sign in', exact: true })).toBeVisible(); expect(await held(page)).toBeNull();
+  await expect(page.getByRole('button', { name: 'Continue with Google', exact: true })).toBeVisible(); expect(await held(page)).toBeNull();
   expect((await browserRequest(page, '/sourcing/qualification/read', { body: { candidateId } })).status).toBe(401);
   await loginQualifiedResearch(page, owned.app, true);
   expect((await browserRequest(page, '/sourcing/qualification/read', { body: { candidateId } })).status).toBe(200);

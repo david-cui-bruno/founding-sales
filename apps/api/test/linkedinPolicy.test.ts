@@ -9,7 +9,7 @@ import {repositoryContext,workspaceScope} from '@fss/domain/db/workspaceScope.ts
 import {checkLinkedinPolicyForWork} from '@fss/domain/social/linkedinPolicy.ts';
 import {setTimeout as delay} from 'node:timers/promises';
 import {createServer} from 'node:http';
-import {postgresPublisherSessions} from '@fss/social-publisher';
+import {postgresPublisherCredentials} from '@fss/social-publisher';
 
 const approvedRulesVersion='634-2026-10-13';
 const command=()=>({commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION});
@@ -17,13 +17,13 @@ const generation={provider:'bedrock',providerKey:'configured-founder-haiku',regi
 function caller(f:AuthFixture,token:string,db:SessionQueryable=f.db){
  return (path:string,body:unknown)=>dispatch({method:'POST',path,query:new URLSearchParams(),headers:token?{authorization:`Bearer ${token}`}:{},body},{session:db,auth:{...f.deps,db},supportedClientVersions:f.deps.config.supportedClientVersions,sendingEnabled:false,upgradeUrl:'https://fixture.invalid/update'});
 }
-const publisherExternalId='https://www.linkedin.com/in/controlled-founder';
-/** Controlled native observation fixture. Posting session evidence is never
+const publisherExternalId='controlled-founder-native-id';
+/** Controlled Buffer observation fixture. Posting credentials are never
  * LinkedIn outreach identity/acquisition/history or dispatch authority. */
 async function observePublisherAccount(f:AuthFixture,accountId:string,displayName='Founder',space=f.alpha){
- const sessions=postgresPublisherSessions(f.db,Buffer.alloc(32,29));
- const binding=await sessions.save({workspaceId:space.workspaceId,ownerUserId:space.admin.userId},accountId,{externalId:publisherExternalId,displayName},JSON.stringify({cookies:[{name:'fixture',value:'controlled-private-session'}],origins:[]}),async()=>{});
- await sessions.heartbeat('worker','controlled-fixture-chromium');
+ const credentials=postgresPublisherCredentials(f.db,Buffer.alloc(32,29));
+ const binding=await credentials.save({workspaceId:space.workspaceId,ownerUserId:space.admin.userId},accountId,{externalId:publisherExternalId,displayName,organizationId:'a'.repeat(24),channelId:'b'.repeat(24)},'controlled-private-api-key',async()=>{});
+ await credentials.heartbeat('worker');
  return binding;
 }
 async function setup(){

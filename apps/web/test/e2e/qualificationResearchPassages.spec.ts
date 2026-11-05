@@ -23,7 +23,7 @@ async function login(page:Page){
  await expect(page.getByLabel('Workspace ID',{exact:true})).toBeVisible();
  await expect(page.getByText('Checking browser session…',{exact:true})).toHaveCount(0);
  await page.getByLabel('Workspace ID',{exact:true}).fill(owned.app.fixture.alpha.workspaceId);
- await page.getByRole('button',{name:'Sign in',exact:true}).click();await expect(page.getByRole('button',{name:'Sign out',exact:true})).toBeVisible();await openInventory(page);
+ await page.getByRole('button', { name: 'Continue with Google', exact: true }).click();await expect(page.getByRole('button',{name:'Sign out',exact:true})).toBeVisible();await openInventory(page);
 }
 test.beforeAll(async()=>{
  assert.equal(process.env['FSS_RESEARCH_PASSAGES_EXCLUSIVE_LANE'],'issue797-retained-context','Root sole disposable PG/Chrome lane grant required');
@@ -65,6 +65,6 @@ test('signed retained read surfaces research clues, separates office from area a
  if(evidence)await page.screenshot({path:join(evidence,'research-context-mobile.png'),fullPage:true});
  await page.reload();await expect(page.getByRole('button',{name:'Sign out',exact:true})).toBeVisible();await openInventory(page);await inventory.getByRole('button',{name:'Load ordinary inventory',exact:true}).click();await card.getByRole('button',{name:'Read qualification',exact:true}).click();
  await expect(context).not.toHaveAttribute('open','');await context.locator('summary').click();await expect(context.getByText(person,{exact:true}).first()).toBeVisible();
- await page.getByRole('button',{name:'Sign out',exact:true}).click();await expect(page.getByRole('button',{name:'Sign in',exact:true})).toBeVisible();await expect(page.getByText(person,{exact:true})).toHaveCount(0);
+ await page.getByRole('button',{name:'Sign out',exact:true}).click();await expect(page.getByRole('button', { name: 'Continue with Google', exact: true })).toBeVisible();await expect(page.getByText(person,{exact:true})).toHaveCount(0);
  expect(await state()).toEqual(before);expect(mutations).toEqual([]);expect(external).toEqual([]);
 });

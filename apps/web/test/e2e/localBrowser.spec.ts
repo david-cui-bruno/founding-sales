@@ -27,7 +27,7 @@ async function login(page: Page, workspace = app.fixture.alpha, member = workspa
   app.chooseIdentity(member);
   await page.goto(app.origin);
   await page.getByLabel('Workspace ID', { exact: true }).fill(workspace.workspaceId);
-  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  await page.getByRole('button', { name: 'Continue with Google', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Sign out', exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: workspace === app.fixture.alpha ? 'Alpha Synthetic Browser Firm' : 'Beta Synthetic Browser Firm', exact: true })).toBeVisible();
 }

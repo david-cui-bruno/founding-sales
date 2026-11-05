@@ -18,6 +18,7 @@ import { LINKEDIN_ROUTE_PATHS, routeLinkedinRoutes } from './linkedinRoutes.ts';
 import { PEOPLE_PATHS, routePeople } from './people.ts';
 import {BOOKING_CAPACITY_PATHS,routeBookingCapacity} from './bookingCapacity.ts';
 import {SOCIAL_PATHS,routeSocial} from './social.ts';
+import {SOCIAL_PUBLISHER_MEDIA_PREFIX,routeSocialPublisherMedia} from './socialPublisherMedia.ts';
 import {SOURCING_LEARNING_PATHS,routeSourcingLearning} from './sourcingLearning.ts';
 import {OUTREACH_PATHS,routeOutreach} from './outreach.ts';
 import {EMAIL_CAMPAIGN_PATHS,routeEmailCampaigns} from './emailCampaigns.ts';
@@ -140,6 +141,7 @@ function asBootstrapResponse(result: RouteResult): BootstrapResponse {
     status: result.status,
     body: result.body,
     ...(result.contentType === undefined ? {} : { contentType: result.contentType }),
+    ...(result.contentLength === undefined ? {} : {contentLength:result.contentLength}),
   };
 }
 
@@ -182,6 +184,7 @@ function healthModule(routing: RoutingOptions): RouteModule {
 export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[] {
   return [
     healthModule(routing),
+    moduleOf('social-publisher-media',{prefixes:[SOCIAL_PUBLISHER_MEDIA_PREFIX]},routeSocialPublisherMedia,routing),
     moduleOf('sourcing-learning',{paths:SOURCING_LEARNING_PATHS},routeSourcingLearning,routing),
     moduleOf('sourcing', { paths: [...SOURCING_PATHS,...RETAINED_RECOVERY_PATHS] }, routeSourcing, routing),
     moduleOf('prospect-phone-discovery', { paths: PROSPECT_PHONE_DISCOVERY_PATHS }, routeProspectPhoneDiscovery, routing),

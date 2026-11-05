@@ -54,7 +54,7 @@ async function login(page: Page, beta = false): Promise<void> {
   app.chooseIdentity(workspace.salesperson);
   await page.goto(app.origin);
   await page.getByLabel('Workspace ID', { exact: true }).fill(workspace.workspaceId);
-  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  await page.getByRole('button', { name: 'Continue with Google', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Sign out', exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: beta ? 'Thin Host Beta Firm' : 'Thin Host Alpha Firm', exact: true })).toBeVisible();
 }

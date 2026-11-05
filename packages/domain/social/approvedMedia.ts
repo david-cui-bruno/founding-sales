@@ -31,8 +31,8 @@ export async function listSocialMedia(ctx:RepositoryContext){
  return (await ctx.db.query<ApprovedMediaRow&{approved:boolean}>(`SELECT a.id AS "assetId",o.version,o.sha256,a.approval_revision AS "approvalRevision",COALESCE(a.approved_caption,'') AS caption,COALESCE(a.approved_topic,'') AS topic,COALESCE(a.approved_alt_text,'') AS "altText",o.width,o.height,o.mime,COALESCE(a.approved_version=o.version AND a.approved_sha256=o.sha256,false) AS approved FROM social_assets a JOIN social_asset_objects o ON o.workspace_id=a.workspace_id AND o.asset_id=a.id AND o.version=a.current_version JOIN workspace_memberships m ON m.workspace_id=a.workspace_id AND m.user_id=a.owner_user_id AND m.status='active' WHERE a.workspace_id=$1 AND a.owner_user_id=$2 AND a.state='ready' AND o.state='ready' AND o.sanitized ORDER BY a.id LIMIT 100`,[ctx.scope.workspaceId,owner])).rows;
 }
 /** Internal object-key projection; never return this value from a browser route. */
-export async function readApprovedSocialMediaForOwner(ctx:RepositoryContext,ownerUserId:string,input:{assetId:string;version:number;sha256:string;approvalRevision?:number}):Promise<(ApprovedSocialMedia&{objectKey:string})|null>{
+export async function readApprovedSocialMediaForOwner(ctx:RepositoryContext,ownerUserId:string,input:{assetId:string;version:number;sha256:string;approvalRevision?:number}):Promise<(ApprovedSocialMedia&{objectKey:string;byteLength:number})|null>{
  const approved=await readApprovedSocialMedia(ctx,{...input,ownerUserId});if(!approved)return null;
- const object=(await ctx.db.query<{object_key:string}>("SELECT object_key FROM social_asset_objects WHERE workspace_id=$1 AND asset_id=$2 AND version=$3 AND sha256=$4 AND state='ready' AND sanitized FOR SHARE",[ctx.scope.workspaceId,input.assetId,input.version,input.sha256])).rows[0];
- return object?{...approved,objectKey:object.object_key}:null;
+ const object=(await ctx.db.query<{object_key:string;bytes:number}>("SELECT object_key,bytes FROM social_asset_objects WHERE workspace_id=$1 AND asset_id=$2 AND version=$3 AND sha256=$4 AND state='ready' AND sanitized AND kind='derivative' AND bytes BETWEEN 1 AND 5242880 FOR SHARE",[ctx.scope.workspaceId,input.assetId,input.version,input.sha256])).rows[0];
+ return object?{...approved,objectKey:object.object_key,byteLength:Number(object.bytes)}:null;
 }

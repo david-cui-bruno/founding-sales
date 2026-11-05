@@ -5,7 +5,6 @@ import {seedTwoWorkspaces,type TwoWorkspaces} from '../db/support/fixtures.ts';
 import {repositoryContext,workspaceScope} from '../../db/workspaceScope.ts';
 import {withTransaction} from '../../db/queryable.ts';
 import {readSocialWorkspace} from '../../social/posts.ts';
-import {postgresPublisherSessions} from '../../../social-publisher/src/publisherSessions.ts';
 import {registerSocialManualDestination} from '../../social/manualDestination.ts';
 let db:TestDatabase,seed:TwoWorkspaces;
 const ctx=(beta=false)=>{const s=beta?seed.beta:seed.alpha;return repositoryContext(workspaceScope(s.workspaceId,{kind:'user',userId:s.admin.userId,role:'admin'}),db.session);};
@@ -18,14 +17,13 @@ it('records a human supplied LinkedIn identity as unsupported rather than granti
 
 it('requires a Facebook Page and refuses manual metadata overwriting a current encrypted publisher identity',async()=>{
  const accountId=randomUUID();expect(await tx(()=>registerSocialManualDestination(ctx(),{accountId,platform:'facebook',externalId:'page',displayName:'Page',accountKind:'profile'}))).toEqual({ok:false,reason:'facebook_page_required'});
- const native={accountId,platform:'linkedin' as const,externalId:'https://www.linkedin.com/in/native-founder',displayName:'Founder',accountKind:'profile' as const};
- const sessions=postgresPublisherSessions(db.session,Buffer.alloc(32,17));
- const binding=await sessions.save({workspaceId:seed.alpha.workspaceId,ownerUserId:seed.alpha.admin.userId},accountId,{externalId:native.externalId,displayName:native.displayName},JSON.stringify({cookies:[{name:'fixture',value:'private-fixture-session'}],origins:[]}),async()=>{});
- await sessions.heartbeat('worker','controlled-fixture-chromium');
- expect(await sessions.read(binding)).not.toBeNull();
+ const native={accountId,platform:'linkedin' as const,externalId:'native-founder',displayName:'Founder',accountKind:'profile' as const};
+ await db.session.query("INSERT INTO social_accounts(workspace_id,id,owner_user_id,platform,external_id,display_name,account_kind,state,adapter_version,verified_at,max_schedule_days) VALUES($1,$2,$3,'linkedin',$4,'Founder','profile','connected','buffer-linkedin-v1',clock_timestamp(),30)",[seed.alpha.workspaceId,accountId,seed.alpha.admin.userId,native.externalId]);
+ const credentialId=randomUUID(),ciphertext=Buffer.alloc(29,17);
+ await db.session.query("INSERT INTO social_publisher_credentials(workspace_id,id,owner_user_id,account_id,account_revision,adapter,organization_id,channel_id,external_id,encrypted_state,state,verified_at) VALUES($1,$2,$3,$4,1,'buffer-linkedin-v1','111111111111111111111111','222222222222222222222222',$5,$6,'usable',clock_timestamp())",[seed.alpha.workspaceId,credentialId,seed.alpha.admin.userId,accountId,native.externalId,ciphertext]);
  expect(await tx(()=>registerSocialManualDestination(ctx(),{...native,displayName:'Unverified manual replacement'}))).toEqual({ok:false,reason:'destination_already_connected'});
- expect((await readSocialWorkspace(ctx())).accounts.find(account=>account.id===accountId)).toMatchObject({state:'connected',displayName:'Founder',adapterVersion:'linkedin-web-chromium-v1'});
- expect(await sessions.read(binding)).not.toBeNull();
+ expect((await readSocialWorkspace(ctx())).accounts.find(account=>account.id===accountId)).toMatchObject({state:'connected',displayName:'Founder',adapterVersion:'buffer-linkedin-v1'});
+ expect((await db.session.query('SELECT encrypted_state FROM social_publisher_credentials WHERE workspace_id=$1 AND id=$2',[seed.alpha.workspaceId,credentialId])).rows).toEqual([{encrypted_state:ciphertext}]);
 });
 
 it('scopes manual identities to their owner and refuses reinterpretation or duplicate accounts',async()=>{

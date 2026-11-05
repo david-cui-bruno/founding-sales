@@ -1,10 +1,10 @@
 variable "social_publisher_host" {
-  description = "Approved isolated browser host and pinned native ARM64 AMI. Null keeps it unprovisioned."
-  type        = object({ ami_id = string })
+  description = "Retained recovery host, native ARM64 AMI and independently pinned accepted immutable API image. Null explicitly retires it."
+  type        = object({ ami_id = string, image = string })
   default     = null
 }
 variable "social_publisher_runtime_ready" {
-  description = "Both dedicated credentials and the isolated authenticated native runtime have passed acceptance. Never owner publication consent."
+  description = "Buffer credential encryption key and canonical public media ingress are configured. Never owner publication consent."
   type        = bool
   default     = false
 }

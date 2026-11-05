@@ -1,13 +1,14 @@
 import type {SocialPublisherPort,SocialPublisherAttempt} from '@fss/contracts';
+import {PublisherRefusal} from '@fss/social-publisher';
+import {invalidateSocialPublisherCredential} from '@fss/domain/social/standingAuthority.ts';
 import {repositoryContext,workspaceScope} from '@fss/domain/db/workspaceScope.ts';
 import {withTransaction} from '@fss/domain/db/queryable.ts';
 import type {JobHandler} from '@fss/domain/jobs/handlerRegistry.ts';
 import type {JobSpecification} from '@fss/domain/jobs/jobStore.ts';
 import {admitSocialStandingSlots,prepareSocialStandingSlot,type StandingGenerationAdmission} from '@fss/domain/social/standingSlots.ts';
 import {readStandingSlot,adoptStandingPost,checkStandingPublicationAuthority,markStandingSubmission,checkStandingInspectionAuthority,readStandingRecoveryBinding,recordStandingObservation} from '@fss/domain/social/standingPublication.ts';
-import {readApprovedSocialMediaForOwner} from '@fss/domain/social/approvedMedia.ts';
 import type {DueWorkSource} from '../scheduler/schedulerPass.ts';
-export interface StandingWorkerDeps {publisher:SocialPublisherPort|null;admitGeneration:StandingGenerationAdmission;readImage:(objectKey:string)=>Promise<Uint8Array>}
+export interface StandingWorkerDeps {publisher:SocialPublisherPort|null;admitGeneration:StandingGenerationAdmission}
 export function socialStandingSource(enabled:boolean):DueWorkSource{return {name:'social-standing',find:async(session,at)=>{
  const workspaces=(await session.query<{workspace_id:string}>("SELECT workspace_id FROM social_standing_plans WHERE state='active' UNION SELECT workspace_id FROM social_standing_slots WHERE submission_marked_at IS NOT NULL AND state IN ('submitting','scheduled','unknown','cancellation_pending') AND inspection_deadline>clock_timestamp() ORDER BY workspace_id LIMIT 25")).rows;
  const jobs:JobSpecification[]=[];
@@ -30,16 +31,13 @@ export function socialStandingHandler(deps:StandingWorkerDeps):JobHandler{return
  if(!slot.submission_marked_at){
   try{slot=await withTransaction(db,()=>adoptStandingPost(ctx,slot!));}catch{await db.query("UPDATE social_standing_slots SET state='held',reason='source_or_authority_changed',text=NULL,snapshot=NULL WHERE workspace_id=$1 AND id=$2 AND submission_marked_at IS NULL AND state='queued' AND revision=$3",[input.scope.workspaceId,id,slot.revision]);return;}
  }
- const snapshot=slot.snapshot;if(!snapshot||!slot.fingerprint)return;
- let image:SocialPublisherAttempt['image']=null;
- try{if(snapshot.image){
-  if(slot.submission_marked_at)image={mime:snapshot.image.mime,sha256:snapshot.image.sha256,altText:''};
-  else{const media=await withTransaction(db,()=>readApprovedSocialMediaForOwner(ctx,slot!.owner_user_id,snapshot.image!));if(!media)throw new Error('image_unavailable');image={bytes:await deps.readImage(media.objectKey),mime:media.mime,sha256:media.sha256,altText:media.altText};}
- }}catch{await db.query("UPDATE social_standing_slots SET reason='image_unavailable' WHERE workspace_id=$1 AND id=$2",[input.scope.workspaceId,id]);return;}
- const attempt:SocialPublisherAttempt={binding:snapshot.binding,attemptId:slot.attempt_id,fingerprint:slot.fingerprint,text:slot.submission_marked_at?null:snapshot.text,textSHA256:snapshot.textSHA256,publishAt:snapshot.publishAt,image};
+ const snapshot=slot.snapshot;if(!snapshot||!slot.fingerprint||snapshot.binding.adapter!=='buffer-linkedin-v1')return;
+ const image:SocialPublisherAttempt['image']=snapshot.image?{mime:snapshot.image.mime,sha256:snapshot.image.sha256,altText:slot.submission_marked_at?'':snapshot.image.altText,byteLength:snapshot.image.byteLength}:null;
+ const attempt:SocialPublisherAttempt={binding:snapshot.binding,attemptId:slot.attempt_id,fingerprint:slot.fingerprint,text:slot.submission_marked_at?null:snapshot.text,textSHA256:snapshot.textSHA256,publishAt:snapshot.publishAt,submittedAt:slot.submission_marked_at?.toISOString()??null,mediaReceiptId:slot.media_receipt_id??null,image};
  if(slot.submission_marked_at){
   const retained=slot;
-  await withTransaction(db,async()=>{const authority=()=>checkStandingInspectionAuthority(ctx,retained);await authority();const binding=await readStandingRecoveryBinding(ctx,retained),recovery={...attempt,binding:binding??attempt.binding};const observation=retained.state==='cancellation_pending'&&retained.receipt_id?await publisher.cancel(recovery,retained.receipt_id,authority):await publisher.inspect(recovery,retained.receipt_id,authority);await recordStandingObservation(ctx,retained,recovery,observation);});return;
+  const result=await withTransaction(db,async()=>{const authority=()=>checkStandingInspectionAuthority(ctx,retained);await authority();const binding=await readStandingRecoveryBinding(ctx,retained),recovery={...attempt,binding:binding??attempt.binding};const observation=retained.state==='cancellation_pending'&&retained.receipt_id?await publisher.cancel(recovery,retained.receipt_id,authority):await publisher.inspect(recovery,retained.receipt_id,authority);await recordStandingObservation(ctx,retained,recovery,observation);return {binding:recovery.binding,revoked:observation.reason==='credential_revoked'};});
+  if(result.revoked)await invalidateSocialPublisherCredential(ctx,result.binding);return;
  }
  const unsubmitted=slot;
  let inTransaction=false,marked=false;
@@ -55,8 +53,10 @@ export function socialStandingHandler(deps:StandingWorkerDeps):JobHandler{return
    await authority();return true;
   });
   await begin();await recordStandingObservation(ctx,unsubmitted,attempt,observation);await db.query('COMMIT');inTransaction=false;
- }catch{
+  if(observation.reason==='credential_revoked')await invalidateSocialPublisherCredential(ctx,attempt.binding);
+ }catch(error){
   if(inTransaction){await db.query('ROLLBACK');inTransaction=false;}
   await db.query("UPDATE social_standing_slots SET state=CASE WHEN submission_marked_at IS NULL THEN 'failed_known_not_submitted' ELSE 'unknown' END,reason=CASE WHEN submission_marked_at IS NULL THEN 'preparation_refused' ELSE 'inspection_required' END,next_inspection_at=clock_timestamp()+interval '5 minutes' WHERE workspace_id=$1 AND id=$2 AND revision=$3 AND ((NOT $4::boolean AND submission_marked_at IS NULL AND state='queued') OR ($4::boolean AND submission_marked_at IS NOT NULL AND state='submitting'))",[input.scope.workspaceId,id,unsubmitted.revision,marked]);
+  if(error instanceof PublisherRefusal&&error.reason==='credential_revoked')await invalidateSocialPublisherCredential(ctx,attempt.binding);
  }
 }};}

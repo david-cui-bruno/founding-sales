@@ -10,12 +10,12 @@ import {voiceText} from '../../../../packages/domain/test/social/voiceGeneration
 const generation=(page:Page)=>page.getByRole('region',{name:'Guided social suggestion request',exact:true});
 const composer=(page:Page)=>page.getByRole('region',{name:'Private social composer',exact:true});
 let app:Awaited<ReturnType<typeof startManualProspectApp>>,seed:Awaited<ReturnType<typeof seedSocialGuidedGeneration>>,baseline:Record<string,unknown[]>;
-async function social(page:Page){await page.getByRole('navigation',{name:'Workspace sections',exact:true}).getByRole('button',{name:'Social',exact:true}).click();await expect(generation(page)).toBeVisible();}
+async function social(page:Page){await page.getByRole('navigation',{name:'Workspace sections',exact:true}).getByRole('button',{name:'Social',exact:true}).click();await page.getByRole('button',{name:'Drafts',exact:true}).click();await expect(generation(page)).toBeVisible();}
 async function login(page:Page){
  // Wait for the initial session/CSRF refresh before editing or submitting. A
  // concurrent initial signed-out transition can otherwise clear the form.
  await page.goto(app.origin);await expect(page.getByLabel('Workspace ID',{exact:true})).toBeVisible();await expect(page.getByText('Checking browser session…',{exact:true})).toHaveCount(0);
- await page.getByLabel('Workspace ID',{exact:true}).fill(app.fixture.alpha.workspaceId);await page.getByRole('button',{name:'Sign in',exact:true}).click();await expect(page.getByRole('button',{name:'Sign out',exact:true})).toBeVisible();
+ await page.getByLabel('Workspace ID',{exact:true}).fill(app.fixture.alpha.workspaceId);await page.getByRole('button', { name: 'Continue with Google', exact: true }).click();await expect(page.getByRole('button',{name:'Sign out',exact:true})).toBeVisible();
 }
 async function snapshot(){const value=await socialProductSnapshot(app);for(const key of ['provider_reservations','command_receipts','audit_events'])delete value[key];return value;}
 async function select(page:Page){await generation(page).getByRole('button',{name:'Read current generation inputs',exact:true}).click();await generation(page).getByRole('checkbox',{name:/Use saved voice guide/u}).check();await generation(page).getByRole('checkbox',{name:/A local draft workspace is planned/u}).check();}

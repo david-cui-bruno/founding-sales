@@ -151,7 +151,11 @@ locals {
   # `fss verify` runs as the *runtime* identity, with the runtime connection and
   # nothing else. A verify that passed as the migration user would prove nothing
   # about the credential the services are about to use.
-  operations_environment = local.worker_environment
+  # Publisher configuration belongs only to API/worker, never admin operations.
+  operations_environment = {
+    for name, value in local.worker_environment : name => value
+    if !startswith(name, "FSS_SOCIAL_PUBLISHER_")
+  }
 
   migration_environment = merge(local.common_environment, {
     # The tool deliberately does not read FSS_SCHEMA_MIN/MAX: `fss migrate` is

@@ -21,10 +21,10 @@ locals {
     "session-signing-key",
     "device-credential-pepper",
     "llm-classifier-api-key",
-    # Dedicated encryption for owner-connected LinkedIn sessions. Never an auth
-    # signing key; API/worker injection waits for the operator-installed value.
+    # Reused encryption key for Buffer credentials and retained browser ciphertext.
+    # Keep the existing value/container; never rotate away outstanding custody.
     "social-publisher-session-key",
-    # Separate browser-host control credential; never the PG session encryption key.
+    # Retained browser recovery host only; never injected into Buffer API/worker.
     "social-publisher-control-token",
     # Call-to-booking (slice W): Twilio Voice (account, API key, TwiML app, auth token,
     # caller id) and Cal.com (webhook secret, API key), each a JSON object the API reads

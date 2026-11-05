@@ -23,8 +23,8 @@ async function capture(expiresAt:string|null=null){
 }
 async function login(page:Page){
  await routeManualProvider(page,app);await page.goto(app.origin);await expect(page.getByLabel('Workspace ID',{exact:true})).toBeVisible();await expect(page.getByText('Checking browser session…',{exact:true})).toHaveCount(0);
- await page.getByLabel('Workspace ID',{exact:true}).fill(app.fixture.alpha.workspaceId);await page.getByRole('button',{name:'Sign in',exact:true}).click();await expect(page.getByRole('button',{name:'Sign out',exact:true})).toBeVisible();
- await page.getByRole('navigation',{name:'Workspace sections',exact:true}).getByRole('button',{name:'Social',exact:true}).click();await page.getByRole('button',{name:'Conversations',exact:true}).click();
+ await page.getByLabel('Workspace ID',{exact:true}).fill(app.fixture.alpha.workspaceId);await page.getByRole('button', { name: 'Continue with Google', exact: true }).click();await expect(page.getByRole('button',{name:'Sign out',exact:true})).toBeVisible();
+ await page.getByRole('navigation',{name:'Workspace sections',exact:true}).getByRole('button',{name:'Social',exact:true}).click();await page.getByRole('button',{name:'Library',exact:true}).click();await page.getByRole('button',{name:'Conversations',exact:true}).click();
 }
 test('signed web list/open reads actual retained owner originals without acquisition or public effects, and navigation drops projections',async({researchPage:page},testInfo)=>{
  const input=await capture(),tables=['social_accounts','social_posts','social_deliveries','social_draft_requests','provider_reservations','outbound_messages','jobs'];
@@ -38,7 +38,7 @@ test('signed web list/open reads actual retained owner originals without acquisi
  await page.setViewportSize({width:390,height:844});await page.screenshot({path:testInfo.outputPath('public-thread-mobile.png'),fullPage:true});await page.setViewportSize({width:1440,height:1000});
  expect((await browserRequest(page,'/social/threads/capture',{body:input})).status).toBe(404);
  expect((await browserRequest(page,'/social/threads/read',{body:{threadId:input.threadId,expectedRevision:1},csrf:'forged'})).status).toBe(403);
- await page.getByRole('button',{name:'Posts',exact:true}).click();await expect(panel(page)).toHaveCount(0);await page.getByRole('button',{name:'Conversations',exact:true}).click();await expect(panel(page)).not.toContainText(input.snapshot.messages[0]!.text);
+ await page.getByRole('button',{name:'Drafts',exact:true}).click();await expect(panel(page)).toHaveCount(0);await page.getByRole('button',{name:'Library',exact:true}).click();await page.getByRole('button',{name:'Conversations',exact:true}).click();await expect(panel(page)).not.toContainText(input.snapshot.messages[0]!.text);
  expect(await page.evaluate(()=>JSON.stringify({local:{...localStorage},session:{...sessionStorage}}))).not.toContain(input.snapshot.messages[0]!.text);
  expect(await counts()).toEqual(before);expect(app.runtimeRequests()).toBeGreaterThan(0);expect(app.fixture.google.jwksFetches()).toBeGreaterThan(0);
 });

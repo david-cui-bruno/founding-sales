@@ -1,5 +1,5 @@
 import {socialPublisherConnectionInputSchema,socialPublisherConnectionResultSchema} from '@fss/contracts';
-import type {SocialBrowserPublisher} from '@fss/social-publisher';
+import type {SocialBufferPublisher} from '@fss/social-publisher';
 import {PublisherRefusal} from '@fss/social-publisher';
 import {contextForPrincipal,type RouteDeps} from './routeSupport.ts';
 import {retainedPrincipalAuthority} from './retainedPrincipalAuthority.ts';
@@ -9,7 +9,7 @@ import type {RouteResult} from './types.ts';
 export const SOCIAL_PUBLISHER_CONNECTION_PATH='/social/publisher/connection';
 /** Ephemeral credential transport: NEVER runCommand, receipts, audit, request logs or caches.
  * Connection ownership is derived solely from the retained authenticated principal. */
-export async function routeSocialPublisherConnection(deps:RouteDeps,publisher:Pick<SocialBrowserPublisher,'connection'>|undefined):Promise<RouteResult>{
+export async function routeSocialPublisherConnection(deps:RouteDeps,publisher:Pick<SocialBufferPublisher,'connection'>|undefined):Promise<RouteResult>{
  if(deps.request.method!=='POST')return {status:405,body:{error:'method_not_allowed'}};
  const input=socialPublisherConnectionInputSchema.safeParse(deps.request.body);
  if(!input.success)return {status:400,body:{error:'invalid_input'}};
@@ -31,8 +31,10 @@ export async function routeSocialPublisherConnection(deps:RouteDeps,publisher:Pi
   });
  }catch(error){
   if(changed)return {status:401,body:{error:'unauthenticated'}};
-  const allowed=['connection_ready_to_verify','connection_capacity','connection_busy','connection_rate_limited','connection_expired','connection_unavailable','session_unavailable','account_mismatch','self_account_unverified','native_scheduling_unavailable','native_inspection_unavailable','publisher_account_mismatch','publisher_account_already_connected'];
+  try{await authority();}catch{return {status:401,body:{error:'unauthenticated'}};}
+  const allowed=['credential_invalid','credential_revoked','credential_unavailable','provider_rate_limited','discovery_limit','channel_unavailable','channel_permission_denied','queue_paused','account_mismatch','publisher_account_mismatch','publisher_account_already_connected','publisher_account_limit','runtime_closed'];
   const reason=error instanceof PublisherRefusal&&allowed.includes(error.reason)?error.reason:'connection_unavailable';
-  return {status:reason==='connection_rate_limited'?429:409,body:{error:reason}};
+  // Vendor errors never invalidate app authentication; 409 has that meaning in BrowserClient.
+  return {status:reason==='provider_rate_limited'?429:503,body:{error:reason}};
  }
 }

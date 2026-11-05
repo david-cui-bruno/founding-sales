@@ -5,10 +5,11 @@ const id='00000000-0000-4000-8000-000000000001';
 const command={commandId:id,clientVersion:'1.0.0'};
 describe('signed Social workspace boundary',()=>{
  it('keeps an intended reconnect account identity separate from usable publisher authority',()=>{
-  const body={binding:null,intendedAccountId:id,calibrationId:null,guideRef:null,inputIds:[]};
+  const body={binding:null,intendedAccountId:id,accountDisplayName:null,calibrationId:null,guideRef:null,inputIds:[]};
   expect(socialWorkspaceBrowserResult('/social/standing-plan/options',200,body)).toEqual({status:200,body});
-  expect(socialWorkspaceRequestAllowed('/social/publisher/connection',{operation:'start',accountId:id})).toBe(true);
-  expect(socialWorkspaceRequestAllowed('/social/publisher/connection',{operation:'start',accountId:id,usable:true})).toBe(false);
+  const connection={operation:'connect',accountId:id,apiKey:'fixture-key',organizationId:'a'.repeat(24),channelId:'b'.repeat(24)};
+  expect(socialWorkspaceRequestAllowed('/social/publisher/connection',connection)).toBe(true);
+  expect(socialWorkspaceRequestAllowed('/social/publisher/connection',{...connection,usable:true})).toBe(false);
  });
  it('admits only current input refs and explicit founder processing, never standing worker authority',()=>{
   const input={mode:'linkedin_founder',sourceRefs:[],factBlocks:[],founderInputRefs:[{inputId:id,revision:1}],founderInputProcessingScope:'bedrock_haiku_founder_inputs_v1',founderFormat:'story'};
@@ -21,7 +22,7 @@ describe('signed Social workspace boundary',()=>{
   expect(socialWorkspaceRequestAllowed('/social/inputs/read',{inputId:id})).toBe(true);
   expect(socialWorkspaceRequestAllowed('/social/inputs/read',{inputId:id,ownerUserId:id})).toBe(false);
   expect(socialWorkspaceRequestAllowed('/social/calibration/read',{notes:'private'})).toBe(false);
-  expect(socialWorkspaceRequestAllowed('/social/publisher/connection',{operation:'input',connectionId:id,event:{kind:'text',text:'ephemeral'},...command})).toBe(false);
+  expect(socialWorkspaceRequestAllowed('/social/publisher/connection',{operation:'discover',apiKey:'fixture-key',...command})).toBe(false);
  });
  it('preserves domain CAS refusal without pretending authority collisions succeeded',()=>{
   const refusal={status:'refused',replayed:false,reason:'stale_revision'};
@@ -30,7 +31,7 @@ describe('signed Social workspace boundary',()=>{
  });
  it('never projects malformed or extra private fields from provider responses',()=>{
   expect(socialWorkspaceBrowserResult('/social/calibration/read',200,{completion:null,rawPrompt:'private'})).toEqual({status:502,body:{error:'browser_response_invalid'}});
-  expect(socialWorkspaceBrowserResult('/social/publisher/connection',200,{state:'closed',cookies:'secret'})).toEqual({status:502,body:{error:'browser_response_invalid'}});
+  expect(socialWorkspaceBrowserResult('/social/publisher/connection',200,{state:'closed',apiKey:'private-key'})).toEqual({status:502,body:{error:'browser_response_invalid'}});
  });
  it('allows only exact configured signed storage origin, bounded expiry and upload headers',()=>{
   const origin='https://fixture-social.s3.us-east-1.amazonaws.com';

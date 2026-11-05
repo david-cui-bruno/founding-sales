@@ -13,11 +13,11 @@ const secondId='30000000-0000-4000-8000-000000000003';
 const newId='40000000-0000-4000-8000-000000000004';
 const json=(value:unknown)=>new Response(JSON.stringify(value));
 function deferred(){let resolve!:(value:Response)=>void;const promise=new Promise<Response>(yes=>{resolve=yes;});return {resolve,promise};}
-function fixture(){
+function fixture(role='admin'){
  const now=Date.now(),createdAt=new Date(now).toISOString(),expiresAt=new Date(now+86400000).toISOString();
  const metadata=(draftId:string):SocialPrivateDraftMetadata=>({draftId,revision:1,kind:'post',originKind:'manual',availability:'available',createdAt,updatedAt:createdAt,expiresAt});
  let drafts=[metadata(firstId),metadata(secondId)];
- let session={status:'signed_in',workspaceId:ownerId,userId:ownerId,deviceId:ownerId,role:'admin',revision:'social-workspace',csrfToken:'c'.repeat(40),expiresAt:new Date(now+120000).toISOString()};
+ let session={status:'signed_in',workspaceId:ownerId,userId:ownerId,deviceId:ownerId,role,revision:'social-workspace',csrfToken:'c'.repeat(40),expiresAt:new Date(now+120000).toISOString()};
  let refused=false,unknown=false,unavailable=false,wrongIdentity=false,paged=false,listUnavailable=false;
  let held:ReturnType<typeof deferred>|null=null;
  const commands:Record<string,unknown>[]=[],reads:{route:string;body:Record<string,unknown>}[]=[];
@@ -27,6 +27,7 @@ function fixture(){
   if(url==='/browser/logout')return json({status:'signed_out'});
   const route=String(url),body=JSON.parse(String(init?.body)) as Record<string,unknown>;
   reads.push({route,body});
+  if(route.endsWith('/voice-preferences/read'))return json({guide:{state:'absent'}});
   if(route.endsWith('/private-drafts/list'))return json(paged?{drafts:drafts.filter(draft=>draft.draftId===(body['afterId']?secondId:firstId)),nextAfterId:body['afterId']?null:firstId}:{drafts:listUnavailable?drafts.map(draft=>({...draft,availability:'unavailable'})):drafts,nextAfterId:null});
   if(route.endsWith('/private-drafts/read')){
    if(held)return held.promise;
@@ -59,9 +60,10 @@ beforeEach(()=>{
 afterEach(()=>{cleanup();localStorage.clear();vi.restoreAllMocks();vi.unstubAllGlobals();});
 const text=()=>screen.getByLabelText('Private social text');
 const reopen=(id=firstId)=>fireEvent.click(screen.getByRole('button',{name:new RegExp(`Reopen private draft ${id}`,'u')}));
-async function mount(){const s=fixture();await s.client.refresh();const view=render(<BrowserSocialWorkspace client={s.client}/>);await screen.findByRole('button',{name:new RegExp(`Reopen private draft ${firstId}`,'u')});return {...s,view};}
+function openDrafts(){fireEvent.click(within(screen.getByRole('navigation',{name:'Social views'})).getByRole('button',{name:'Drafts'}));}
+async function mount(){const s=fixture();await s.client.refresh();const view=render(<BrowserSocialWorkspace client={s.client}/>);openDrafts();await screen.findByRole('button',{name:new RegExp(`Reopen private draft ${firstId}`,'u')});return {...s,view};}
 it('loads actual metadata only, explicitly reopens one exact draft, and retains the list beside one editor',async()=>{
- const s=await mount();expect(s.reads.map(read=>read.route)).toEqual(['/browser/api/social/private-drafts/list']);
+ const s=await mount();expect(s.reads.some(read=>read.route==='/browser/api/social/private-drafts/read')).toBe(false);
  expect(text()).toHaveProperty('value','');expect(screen.getAllByRole('textbox')).toHaveLength(1);
  reopen();await waitFor(()=>expect(text()).toHaveProperty('value','First neutral owner draft.'));
  const list=screen.getByRole('complementary',{name:'Saved private drafts'});
@@ -77,7 +79,7 @@ it('saves through real client custody/CAS and explicitly reopens persisted conte
  fireEvent.click(screen.getByRole('button',{name:'Save private draft'}));await screen.findByText('Private draft saved at revision 2. Not approved, scheduled or published.');
  expect(s.commands).toHaveLength(1);expect(s.commands[0]).toMatchObject({operation:'update',draftId:firstId,expectedRevision:1,text:'Edited neutral private text.'});
  expect(localStorage.getItem(PRIVATE_DRAFT_PENDING_KEY)).toBeNull();
- s.view.unmount();render(<BrowserSocialWorkspace client={s.client}/>);await screen.findByRole('button',{name:new RegExp(`Reopen private draft ${firstId}`,'u')});expect(text()).toHaveProperty('value','');
+ s.view.unmount();render(<BrowserSocialWorkspace client={s.client}/>);openDrafts();await screen.findByRole('button',{name:new RegExp(`Reopen private draft ${firstId}`,'u')});expect(text()).toHaveProperty('value','');
  reopen();await waitFor(()=>expect(text()).toHaveProperty('value','Edited neutral private text.'));expect(s.commands).toHaveLength(1);s.client.dispose();
 });
 it('keeps manual conflict edits visibly unsaved and never overwrites without a new explicit operation',async()=>{
@@ -88,7 +90,7 @@ it('keeps manual conflict edits visibly unsaved and never overwrites without a n
 it('holds UNKNOWN across view unmount and IDs-only reconciliation, never reminting or storing prose',async()=>{
  const s=await mount();s.loseResponse();fireEvent.click(screen.getByRole('button',{name:'Start new manual draft'}));fireEvent.change(text(),{target:{value:'Neutral unknown-save text.'}});fireEvent.click(screen.getByRole('button',{name:'Save private draft'}));
  await screen.findByText(/Private operation unavailable or outcome unknown/u);const held=localStorage.getItem(PRIVATE_DRAFT_PENDING_KEY);expect(held).not.toContain('Neutral unknown-save text.');expect(held).toBeTruthy();
- fireEvent.click(screen.getByRole('button',{name:'Conversations'}));fireEvent.click(screen.getByRole('button',{name:'Posts'}));await screen.findByRole('button',{name:'Reconcile same private save'});
+ fireEvent.click(screen.getByRole('button',{name:'Library'}));fireEvent.click(screen.getByRole('button',{name:'Conversations'}));openDrafts();await screen.findByRole('button',{name:'Reconcile same private save'});
  await waitFor(()=>expect(screen.getByRole('button',{name:'Reconcile same private save'}).hasAttribute('disabled')).toBe(false));
  expect(text()).toHaveProperty('value','');expect(screen.queryByRole('button',{name:'Retry exact same private save'})).toBeNull();
  fireEvent.click(screen.getByRole('button',{name:'Reconcile same private save'}));await screen.findByText(/Save outcome UNKNOWN/u);expect(localStorage.getItem(PRIVATE_DRAFT_PENDING_KEY)).toBe(held);expect(s.commands).toHaveLength(1);
@@ -97,10 +99,9 @@ it('holds UNKNOWN across view unmount and IDs-only reconciliation, never reminti
 });
 it('offers explicit retained public-thread reads without passive acquisition or connection/publishing actions',async()=>{
  const s=await mount();fireEvent.change(text(),{target:{value:'Unsaved private bytes.'}});const before=s.reads.length;
- fireEvent.click(screen.getByRole('button',{name:'Conversations'}));const conversations=screen.getByRole('region',{name:'Retained public conversations'});
- expect(within(conversations).getByText('Retained LinkedIn public-web post/thread snapshots. Coverage is partial or unknown. These are not DMs or private/group discussions.')).toBeTruthy();
+ fireEvent.click(screen.getByRole('button',{name:'Library'}));fireEvent.click(screen.getByRole('button',{name:'Conversations'}));const conversations=screen.getByRole('region',{name:'Retained public conversations'});
  expect(within(conversations).getByRole('button',{name:'Read retained public threads'}).hasAttribute('disabled')).toBe(false);expect(s.reads).toHaveLength(before);expect(screen.queryByLabelText('Private social text')).toBeNull();
- expect(screen.queryByRole('button',{name:/^(?:publish|connect|send|schedule)\b/iu})).toBeNull();fireEvent.click(screen.getByRole('button',{name:'Posts'}));await screen.findByRole('button',{name:new RegExp(`Reopen private draft ${firstId}`,'u')});expect(text()).toHaveProperty('value','');s.client.dispose();
+ expect(screen.queryByRole('button',{name:/^(?:publish|connect|send|schedule)\b/iu})).toBeNull();openDrafts();await screen.findByRole('button',{name:new RegExp(`Reopen private draft ${firstId}`,'u')});expect(text()).toHaveProperty('value','');s.client.dispose();
 });
 it('Back preserves mounted unsaved text and new composition clears identity',async()=>{
  const s=await mount();reopen();await waitFor(()=>expect(text()).toHaveProperty('value','First neutral owner draft.'));fireEvent.change(text(),{target:{value:'Mounted unsaved edit.'}});
@@ -141,8 +142,8 @@ it('scope replacement fences a held selected read and clears list and editor',as
  expect(screen.queryByLabelText('Private social text')).toBeNull();expect(screen.queryByRole('complementary',{name:'Saved private drafts'})).toBeNull();s.client.dispose();
 });
 it('empty persisted list permits a new private composition without sources, account, or provider',async()=>{
- const s=fixture();s.setDrafts([]);await s.client.refresh();render(<BrowserSocialWorkspace client={s.client}/>);await screen.findByText('No saved private drafts. Start a new manual draft.');
- fireEvent.click(screen.getByRole('button',{name:'Start new manual draft'}));fireEvent.change(text(),{target:{value:'Manual neutral composition.'}});expect(s.reads).toHaveLength(1);expect(s.commands).toEqual([]);expect(screen.getByText('First save starts a maximum 90-day lifetime. · Human review required')).toBeTruthy();s.client.dispose();
+ const s=fixture();s.setDrafts([]);await s.client.refresh();render(<BrowserSocialWorkspace client={s.client}/>);openDrafts();await screen.findByText('No saved private drafts. Start a new manual draft.');
+ fireEvent.click(screen.getByRole('button',{name:'Start new manual draft'}));fireEvent.change(text(),{target:{value:'Manual neutral composition.'}});expect(s.commands).toEqual([]);s.client.dispose();
 });
 it('new manual comment uses create then authorized readback and adds only actual metadata to the list',async()=>{
  const s=await mount();fireEvent.click(screen.getByRole('button',{name:'Start new manual draft'}));fireEvent.change(screen.getByLabelText('Scratch format'),{target:{value:'comment'}});fireEvent.change(text(),{target:{value:'Neutral private comment.'}});
@@ -152,7 +153,7 @@ it('new manual comment uses create then authorized readback and adds only actual
  expect(screen.getByRole('button',{name:new RegExp(`Reopen private draft ${newId}`,'u')})).toBeTruthy();expect(screen.getByRole('complementary',{name:'Saved private drafts'}).textContent).not.toContain('Neutral private comment.');s.client.dispose();
 });
 it('uses the real list cursor and preserves exact selected editor across metadata pages',async()=>{
- const s=fixture();s.page();await s.client.refresh();render(<BrowserSocialWorkspace client={s.client}/>);await screen.findByRole('button',{name:'Next private drafts'});reopen();await waitFor(()=>expect(text()).toHaveProperty('value','First neutral owner draft.'));
+ const s=fixture();s.page();await s.client.refresh();render(<BrowserSocialWorkspace client={s.client}/>);openDrafts();await screen.findByRole('button',{name:'Next private drafts'});reopen();await waitFor(()=>expect(text()).toHaveProperty('value','First neutral owner draft.'));
  fireEvent.click(screen.getByRole('button',{name:'Next private drafts'}));await screen.findByRole('button',{name:new RegExp(`Reopen private draft ${secondId}`,'u')});expect(s.reads.at(-1)?.body).toEqual({afterId:firstId});
  expect(text()).toHaveProperty('value','First neutral owner draft.');expect(screen.queryByRole('button',{name:'Next private drafts'})).toBeNull();s.client.dispose();
 });
@@ -163,4 +164,13 @@ it('does not mask source-withheld current readback with an accepted historical s
 it('clears even a newly created selected draft if the following list reports current source loss',async()=>{
  const s=await mount();s.withholdList();fireEvent.click(screen.getByRole('button',{name:'Start new manual draft'}));fireEvent.change(text(),{target:{value:'New private save before current list refusal.'}});fireEvent.click(screen.getByRole('button',{name:'Save private draft'}));
  await screen.findByText('Selected private draft is no longer available. Private text cleared.');expect(text()).toHaveProperty('value','');expect(screen.getByText('New private draft')).toBeTruthy();expect(s.commands).toHaveLength(1);s.client.dispose();
+});
+it('keeps nonadmin private voice editing reachable without managed-publishing reads or authority',async()=>{
+ const s=fixture('salesperson');await s.client.refresh();render(<BrowserSocialWorkspace client={s.client}/>);
+ fireEvent.click(screen.getByRole('button',{name:'Library'}));fireEvent.click(screen.getByRole('button',{name:'Voice'}));
+ fireEvent.click(screen.getByRole('button',{name:'Read private voice guide'}));await screen.findByRole('button',{name:'Add style preference'});
+ fireEvent.click(screen.getByRole('button',{name:'Add style preference'}));fireEvent.change(screen.getByLabelText('Style guidance 1'),{target:{value:'Direct and specific.'}});
+ expect(screen.getByRole('button',{name:'Save private voice guide'})).toHaveProperty('disabled',false);
+ expect(s.reads.some(read=>read.route.includes('/calibration/')||read.route.includes('/standing-plan/'))).toBe(false);
+ expect(screen.queryByRole('button',{name:'Publishing'})).toBeNull();s.client.dispose();
 });

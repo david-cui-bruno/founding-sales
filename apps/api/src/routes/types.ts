@@ -4,7 +4,7 @@ import type { MailCaptureReadiness } from '@fss/domain/mail/crmCaptureReadiness.
 import type { CrmMailEvidencePort } from '@fss/domain/crm/mailEvidence.ts';
 import type {BookingCapacityDeps} from './bookingCapacity.ts';
 import type {SocialMediaStore} from '../social/mediaStore.ts';
-import type {SocialBrowserPublisher} from '@fss/social-publisher';
+import type {SocialBufferPublisher} from '@fss/social-publisher';
 import type { ClientVersionPolicy } from '@fss/contracts';
 import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
 import type { SuppressionJournal } from '@fss/domain/suppression/journal.ts';
@@ -54,6 +54,8 @@ export interface RouteResult {
   readonly body: unknown;
   /** Defaults to `application/json; charset=utf-8`. */
   readonly contentType?: string;
+  /** HEAD metadata for a binary representation without reading its object bytes. */
+  readonly contentLength?: number;
 }
 
 export interface RoutingOptions {
@@ -92,7 +94,7 @@ export interface RoutingOptions {
    */
   readonly meetingAudio?: MeetingAudioStore | undefined;
   readonly socialMedia?: SocialMediaStore | undefined;
-  readonly socialPublisher?: SocialBrowserPublisher | undefined;
+  readonly socialPublisher?: SocialBufferPublisher | undefined;
   /**
    * Everything the Gmail grant, the webhook and the message view need (12.1 to 12.3).
    *

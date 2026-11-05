@@ -31,7 +31,7 @@ export async function loginCustody(page: Page, app: ReplyBriefApp): Promise<void
   if (!profilePath) throw new Error('Owned browser profile not found');
   console.log('REPLY_CUSTODY_BROWSER_RESERVED', JSON.stringify({ pid: Number(browser.trim().split(/\s+/u)[0]), profilePath }));
   await page.getByLabel('Workspace ID', { exact: true }).fill(app.fixture.alpha.workspaceId);
-  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  await page.getByRole('button', { name: 'Continue with Google', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Sign out', exact: true })).toBeVisible();
   expect(app.fixture.google.jwksFetches()).toBeGreaterThan(0);
   expect(app.fixture.google.tokenExchanges().at(-1)?.clientSecretPresented).toBe(true);

@@ -90,6 +90,33 @@ async function openNotes(): Promise<void> {
 }
 
 describe('BrowserApp real shared presentation', () => {
+  describe('signed-out recovery and context clearing', () => {
+    function signedOutSetup() {
+      const s = setup();
+      s.send.mockImplementation(async url => {
+        if (url === '/browser/session') return json({ status: 'signed_out', csrfToken: 'a'.repeat(40) });
+        if (url === '/browser/sign-in') return json({ authorizationUrl: 'https://login.example.test/authorize' });
+        throw new Error('No private API may mount while signed out');
+      });
+      return s;
+    }
+    it('keeps recovery separate from sign-in and clears entered context on auth invalidation', async () => {
+      const s = signedOutSetup();
+      try {
+        render(<BrowserApp client={s.client} />);
+        await waitFor(() => { expect(screen.queryByText('Checking browser session…')).toBeNull(); });
+        fireEvent.change(screen.getByLabelText('Workspace ID'), { target: { value: id } });
+        fireEvent.change(screen.getByLabelText('Browser label'), { target: { value: 'Private browser label' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Refresh access' }));
+        await waitFor(() => { expect(screen.getByRole('button', { name: 'Refresh access' }).matches(':disabled')).toBe(false); });
+        expect(s.send.mock.calls.some(([url]) => url === '/browser/sign-in')).toBe(false);
+        act(() => { s.client.invalidate(false); });
+        expect((screen.getByLabelText('Workspace ID') as HTMLInputElement).value).toBe('');
+        expect((screen.getByLabelText('Browser label') as HTMLInputElement).value).not.toBe('Private browser label');
+        expect(screen.queryByRole('navigation', { name: 'Workspace sections' })).toBeNull();
+      } finally { s.client.dispose(); }
+    });
+  });
   describe('actual Calling composition', () => {
     beforeEach(() => {
       vi.stubGlobal('crypto', webcrypto); vi.stubGlobal('TextEncoder', TextEncoder);

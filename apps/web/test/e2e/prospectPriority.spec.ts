@@ -24,7 +24,7 @@ async function login(page:Page,who:'alpha'|'beta'|'sales'='alpha'):Promise<void>
  // Initial access reconciliation may clear the form; wait before entering identity.
  await expect(page.getByText('Checking browser session…',{exact:true})).toHaveCount(0);
  await page.getByLabel('Workspace ID',{exact:true}).fill(workspace.workspaceId);
- await page.getByRole('button',{name:'Sign in',exact:true}).click();
+ await page.getByRole('button', { name: 'Continue with Google', exact: true }).click();
  await expect(page.getByRole('button',{name:'Sign out',exact:true})).toBeVisible();
  if(who!=='sales')await openRetained(page);
 }

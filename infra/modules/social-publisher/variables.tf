@@ -17,7 +17,7 @@ variable "ami_id" {
   }
 }
 variable "image" {
-  description = "The reviewed API image reused with the browser-only entrypoint, never the API application."
+  description = "The independently pinned accepted old API image for browser recovery custody, never the stripped candidate API application."
   type        = string
   validation {
     condition     = can(regex("^[0-9]{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com/[a-z0-9][a-z0-9/_-]*@sha256:[0-9a-f]{64}$", var.image))

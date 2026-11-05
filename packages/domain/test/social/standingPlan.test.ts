@@ -53,17 +53,17 @@ it('commits one submission identity, never re-admits after unknown, and preserve
  await expect(withTransaction(db.session,()=>checkStandingInspectionAuthority(f.worker,retained))).resolves.toBeUndefined();
  await expect(withTransaction(db.session,()=>checkStandingPublicationAuthority(f.worker,retained))).rejects.toThrow('standing_authority_changed');
  await db.session.query('UPDATE social_accounts SET revision=revision+1 WHERE workspace_id=$1 AND id=$2',[f.w,f.configuration.binding.accountId]);
- await db.session.query('UPDATE social_publisher_sessions SET revision=revision+1,account_revision=account_revision+1 WHERE workspace_id=$1 AND account_id=$2',[f.w,f.configuration.binding.accountId]);
- expect(await withTransaction(db.session,()=>readStandingRecoveryBinding(f.worker,retained))).toMatchObject({accountId:f.configuration.binding.accountId,externalId:f.configuration.binding.externalId,accountRevision:2,sessionRevision:2});
+ await db.session.query('UPDATE social_publisher_credentials SET revision=revision+1,account_revision=account_revision+1 WHERE workspace_id=$1 AND account_id=$2',[f.w,f.configuration.binding.accountId]);
+ expect(await withTransaction(db.session,()=>readStandingRecoveryBinding(f.worker,retained))).toMatchObject({accountId:f.configuration.binding.accountId,externalId:f.configuration.binding.externalId,accountRevision:2,credentialRevision:2});
  expect((await readStandingSlot(f.worker,s.id))?.snapshot?.binding.accountRevision).toBe(1);
  await db.session.query("UPDATE social_accounts SET external_id='https://www.linkedin.com/in/different-fixture/' WHERE workspace_id=$1 AND id=$2",[f.w,f.configuration.binding.accountId]);
  expect(await withTransaction(db.session,()=>readStandingRecoveryBinding(f.worker,retained))).toBeNull();
 });
 it('adopts one exact approved image on any verified personal account and withdrawal physically erases the queued snapshot',async()=>{
- const f=await standingFixture(db.session),s=await readyStandingFixture(db.session,f),sha256='b'.repeat(64);
+ const f=await standingFixture(db.session,true,'approved_pool'),s=await readyStandingFixture(db.session,f),sha256='b'.repeat(64);
  const asset=await withTransaction(db.session,()=>registerSocialAsset(f.owner,{sha256,bytes:100,mime:'image/png',origin:{kind:'screenshot',sourceUrl:null,usageNote:null}}));if(!asset.ok)throw new Error(asset.reason);
  const approved=await withTransaction(db.session,()=>approveSanitizedMediaFixture(f.owner,asset.value.assetId,sha256,'Controlled owned fixture screenshot'));
- const image={assetId:asset.value.assetId,version:2,sha256,approvalRevision:approved.approvalRevision,altText:'Controlled owned fixture screenshot',mime:'image/png'};
+ const image={assetId:asset.value.assetId,version:2,sha256,approvalRevision:approved.approvalRevision,altText:'Controlled owned fixture screenshot',mime:'image/png',byteLength:100};
  await db.session.query('UPDATE social_standing_slots SET image=$3::jsonb WHERE workspace_id=$1 AND id=$2',[f.w,s.id,JSON.stringify(image)]);
  const slot=(await readStandingSlot(f.worker,s.id))!,adopted=await withTransaction(db.session,()=>adoptStandingPost(f.worker,slot));
  expect(adopted.snapshot?.image).toEqual(image);

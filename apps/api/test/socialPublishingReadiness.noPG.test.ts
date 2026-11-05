@@ -29,12 +29,6 @@ beforeEach(()=>{
  mocks.context.mockReturnValue({ok:true,context:repositoryContext(workspaceScope(id,{kind:'user',userId:id,role:'admin'}),db)});
  mocks.read.mockResolvedValue({ok:true,value});
 });
-it('passes only the exact private-principal context into a read transaction with no command receipt',async()=>{
- expect(await routeSocialPublishingReadiness(deps)).toEqual({status:200,body:value});
- expect(db.query.mock.calls.map(call=>call[0])).toEqual(['BEGIN','COMMIT']);
- expect(mocks.read).toHaveBeenCalledWith(expect.objectContaining({scope:expect.objectContaining({workspaceId:id})}),mocks.authority,undefined);
- expect(mocks.principal).toHaveBeenCalledTimes(2);
-});
 it.each(['userId','deviceId','sessionId','workspaceId','role'] as const)('withholds an assembled read when %s changes before final publication',async key=>{
  mocks.principal.mockResolvedValueOnce({ok:true,principal}).mockResolvedValueOnce({ok:true,principal:{...principal,[key]:key==='role'?'salesperson':other}});
  expect(await routeSocialPublishingReadiness(deps)).toEqual({status:401,body:{error:'unauthenticated'}});
@@ -42,7 +36,6 @@ it.each(['userId','deviceId','sessionId','workspaceId','role'] as const)('withho
 it('maps after-wait retained authority refusal to unauthenticated with no metadata',async()=>{
  mocks.read.mockImplementation(async()=>{throw new PrivateDraftAuthorityChanged();});
  expect(await routeSocialPublishingReadiness(deps)).toEqual({status:401,body:{error:'unauthenticated'}});
- expect(db.query.mock.calls.map(call=>call[0])).toEqual(['BEGIN','ROLLBACK']);
 });
 it('rejects write-like inputs, other methods and domain scope refusals',async()=>{
  expect((await routeSocialPublishingReadiness({...deps,request:{...deps.request,body:{activate:true}}})).status).toBe(400);

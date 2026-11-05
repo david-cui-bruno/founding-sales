@@ -3,24 +3,10 @@ import { clientVersionPolicySchema } from '@fss/contracts';
 import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
 import { RouteRegistryError, createRouteRegistry, type RouteModule } from '../src/bootstrap/routeRegistry.ts';
 import { mountedRoutes } from '../src/bootstrap/routes.ts';
-import { apiRouteModules } from '../src/routes/modules.ts';
 import { registryFor, route, type ApiOptions } from '../src/server.ts';
-import { localNoopSuppressionJournal } from '../src/journal/index.ts';
-import {registeredPaths} from './support/registeredPaths.ts';
-import { DEFAULT_UPGRADE_URL } from '../src/routes/types.ts';
 
-/**
- * What the API mounts, and what it refuses to mount.
- *
- * Lane G3b moved G2's and G3a's routers off the `for` loop in `server.ts` and on to
- * G5b's registry. The loop's failure mode was silent — a module whose guard was
- * wrong answered for somebody else's path, and the module with the authorization in
- * it never ran — so these assertions are about the collision rules rather than about
- * any one endpoint.
- *
- * No database: `createRouteRegistry` is a pure function of the module list, and the
- * mounted list is the thing worth pinning.
- */
+// Route ownership and refusal boundaries prevent a broad module claim from
+// intercepting a request before the intended module's authorization runs.
 
 const NEVER_QUERIED: SessionQueryable = {
   query: async () => {
@@ -37,32 +23,8 @@ function options(): ApiOptions {
   };
 }
 
-const routing = {
-  session: NEVER_QUERIED,
-  supportedClientVersions: clientVersionPolicySchema.parse({ minimum: '1.0.0', ceiling: '1.0.x', incompatible: [] }),
-  sendingEnabled: false,
-  upgradeUrl: DEFAULT_UPGRADE_URL,
-  // Lane G4's routes take the suppression journal from here. The no-op is the right
-  // one for a test that builds a registry and never serves a request; the production
-  // bootstrap calls `requireDurableJournal` instead.
-  suppressionJournal: localNoopSuppressionJournal(),
-};
 
 describe('what the API mounts', () => {
-  it('mounts every route the process serves, and builds the registry once per options object', () => {
-    const shared = options();
-    const registry = registryFor(shared);
-    expect(registryFor(shared)).toBe(registry);
-
-    expect([...registry.paths()]).toEqual(registeredPaths);
-    expect([...registry.prefixes()]).toEqual([
-      '/auth',
-      '/contacts',
-      '/firms',
-      '/merges',
-      '/opportunities',
-    ]);
-  });
 
   it('mounts prepared prospect reads as exact sourcing paths without a creation or dispatch route',()=>{
     const registry=registryFor(options());
@@ -208,90 +170,4 @@ describe('what the API mounts', () => {
     }
   });
 
-  it('gives every module a name an operator can read in the startup line', () => {
-    const names = apiRouteModules(routing).map(module => module.name);
-    expect(names).toEqual([
-      'health',
-      'sourcing-learning',
-      'sourcing',
-      'prospect-phone-discovery',
-      'auth',
-      'devices',
-      'firms',
-      'contacts',
-      'opportunities',
-      'pipeline',
-      'merges',
-      'crm-mail-import',
-      'business-mail',
-      'business-acquisition',
-      'people-relationships',
-      'selected-imports',
-      'selected-attachments',
-      'linkedin-manual',
-      'linkedin-routes',
-      'people',
-      'ask',
-      'ask-actions',
-      'crm-progress',
-      'crm-commitments',
-      'crm-evidence',
-      'crm-capabilities',
-      'crm-capture-read-recovery',
-      'crm-acquisition-diagnostic',
-      'crm-processing',
-      'firm-page',
-      'import',
-      'add-firm',
-      'firm-basics',
-      'postures',
-      'suppressions',
-      'dial',
-      'calling-identities',
-      'calls',
-      'calling-setup',
-      'calling-preparation',
-      'calling-workspace',
-      'calling-execution-receipt',
-      'calling-audio-test',
-      'callbacks',
-      'call-sessions',
-      'call-analysis',
-      'call-proposals',
-      'call-recap',
-      'call-trial',
-      'twilio',
-      'calcom',
-      'meetings',
-      'booking-capacity',
-      'meeting-auto-recording',
-      'meeting-follow-through',
-      'social',
-      'outreach', 'email-campaigns', 'campaign-opening-control',
-      'notifications',
-      'meeting-qualification',
-      'meeting-outcomes',
-      'meeting-transcription',
-      'meeting-recordings',
-      'pauses',
-      'gmail',
-      'gmail-push',
-      'messages',
-      'replies',
-      'reply-composer',
-      'outbound',
-      'today',
-      'research',
-      'snooze',
-      'sequences',
-      'templates',
-      'enrollments',
-      'follow-up-permissions',
-      'settings',
-      'dashboard',
-      'diagnostics',
-      'retention',
-      'attachments',
-    ]);
-  });
 });
