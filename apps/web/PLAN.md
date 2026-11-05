@@ -1,5 +1,15 @@
 # Browser delivery plan
 
+## Active delivery: approved single-workspace redesign (#939)
+
+David approved the November5 compact workspace, separate Pipeline, monthly deal values, Today nudges and explicit sending from Callie. [Design system](../../docs/greenfield/workspace-design-system.md) records tokens, reusable patterns, states and safety corrections; the [implementation roadmap](../../docs/greenfield/workspace-redesign-roadmap.md) owns M0–M8 outcomes, dependencies and acceptance. [Runnable reference](../../docs/greenfield/workspace-prototype/index.html) preserves the approved composition with explicitly fictional, simulated actions.
+
+This direction supersedes earlier glass/layout assignments and the 73-view inventory, not domain/authority/custody rules or completed operational evidence. Main model owns design/integration. Implement shared patterns through the first real Today view, then the merged Prospects/calling loop, Pipeline, human replies, deal nudges, promised/check-in sending and remaining Social/Settings. Deliver complete vertical slices with normal reviews/CI/release; no placeholder destinations or copied prototype handlers.
+
+Keep #873/#919 and the approved Social plan as independent operating work. #932 hardening and #928 selected-public-thread acquisition retain their own risk/prerequisite scope. No UI progress enables sending, capture, calling or publishing.
+
+## Previously delivered work
+
 **Delivered #818:** all five retained manual-review prospects and source-bound numbers are saved/current-read/reload-confirmed in Calling→Kept prospects: RPM Boston+16175220099, J Butler+19786949004, RoundRoom+16174878082, RPM Lakeview+19403230505 and3G+19402620091. Final normal-founder reload shows seven rows, preserving two existing unknown-phone entries. PR819/main dece59c02 and natural main CI passed; protected reviewed40619143992/schema143, native smokes/readback/OFF and independent health/cleanup passed. No new capture, canonical promotion, call or outcome. Checkpoints64f2961ac/6d47b9f85 are unchanged main ancestors; local workflow clarifications8ad5893f3/1f6b71ddf remain unpushed.
 
 
