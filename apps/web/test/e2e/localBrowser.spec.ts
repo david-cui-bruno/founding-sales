@@ -29,13 +29,14 @@ async function login(page: Page, workspace = app.fixture.alpha, member = workspa
   await page.getByLabel('Workspace ID', { exact: true }).fill(workspace.workspaceId);
   await page.getByRole('button', { name: 'Continue with Google', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Sign out', exact: true })).toBeVisible();
-  await expect(page.getByRole('heading', { name: workspace === app.fixture.alpha ? 'Alpha Synthetic Browser Firm' : 'Beta Synthetic Browser Firm', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: `Open ${workspace === app.fixture.alpha ? 'Alpha Synthetic Browser Firm' : 'Beta Synthetic Browser Firm'}`, exact: true })).toBeVisible();
 }
 async function openAlpha(page: Page): Promise<void> {
-  await page.getByRole('article').filter({ has: page.getByRole('heading', { name: 'Alpha Synthetic Browser Firm', exact: true }) }).getByRole('button', { name: 'Open firm' }).click();
+  await page.getByRole('button', { name: 'Open Alpha Synthetic Browser Firm', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Firm', exact: true })).toBeVisible();
 }
 async function readNotes(page: Page): Promise<void> {
+  await page.getByRole('button', { name: 'Meeting notes', exact: true }).click();
   await page.getByLabel('Meeting ID', { exact: true }).fill(app.meetingId);
   await page.getByRole('button', { name: 'Read meeting notes', exact: true }).click();
   await expect(page.getByLabel('Your notes', { exact: true })).toBeVisible();
@@ -53,7 +54,7 @@ test('real signed OIDC login, Today, existing Firm, reload, logout and second id
   await assertNoBrowserCredentials(page, app);
   await openAlpha(page);
   await page.reload();
-  await expect(page.getByRole('heading', { name: 'Alpha Synthetic Browser Firm', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Open Alpha Synthetic Browser Firm', exact: true })).toBeVisible();
   await openAlpha(page);
   const today = await browserRequest(page, '/today');
   expect(today.status).toBe(200);
@@ -65,7 +66,7 @@ test('real signed OIDC login, Today, existing Firm, reload, logout and second id
   expect(await page.evaluate(() => ({ local: { ...localStorage }, session: { ...sessionStorage } }))).toEqual({ local: {}, session: {} });
   await login(page, app.fixture.beta);
   expect((await browserRequest(page, '/today/firm', { body: { firmId: app.betaFirmId }, revision: alphaSession.status === 'signed_in' ? alphaSession.revision : '' })).status).toBe(409);
-  await expect(page.getByRole('heading', { name: 'Alpha Synthetic Browser Firm', exact: true })).toHaveCount(0);
+  await expect(page.getByText('Alpha Synthetic Browser Firm', { exact: true })).toHaveCount(0);
   expect((await browserRequest(page, `/firms/${app.alphaFirmId}`)).status).toBe(404);
   expect((await browserRequest(page, `/meetings/outcomes?meetingId=${app.meetingId}`)).status).toBe(404);
   await assertNoBrowserCredentials(page, app);
@@ -96,7 +97,7 @@ for (const refusal of ['membership', 'device', 'session', 'expiry'] as const) {
       expect((await browserRequest(page, '/meetings/notes', { body: { meetingId: app.meetingId, expectedRevision: 0, debrief: 'Must not persist', speakerMappings: [], itemOverrides: [], sufficient: false, commandId: randomUUID() } })).status).toBeGreaterThanOrEqual(400);
       await page.reload();
       await expect(page.getByLabel('Workspace ID', { exact: true })).toBeVisible();
-      await expect(page.getByRole('heading', { name: 'Alpha Synthetic Browser Firm', exact: true })).toHaveCount(0);
+      await expect(page.getByText('Alpha Synthetic Browser Firm', { exact: true })).toHaveCount(0);
     } finally {
       app.fixture.setNow(baseline);
       if (refusal === 'membership') await app.fixture.db.query("UPDATE workspace_memberships SET status='active',deactivated_at=NULL WHERE workspace_id=$1 AND user_id=$2", [session.workspaceId, session.userId]);
@@ -156,7 +157,7 @@ test('late real Today response cannot repopulate after logout', async ({ page })
   // Observe browser response delivery, then let its generation check and React flush.
   expect((await lateResponse).status()).toBe(200);
   await page.evaluate(async () => { await new Promise(requestAnimationFrame); await new Promise(requestAnimationFrame); });
-  await expect(page.getByRole('heading', { name: 'Alpha Synthetic Browser Firm', exact: true })).toHaveCount(0);
+  await expect(page.getByText('Alpha Synthetic Browser Firm', { exact: true })).toHaveCount(0);
   expect((await browserRequest(page, '/today')).status).toBe(401);
 });
 

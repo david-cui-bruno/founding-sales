@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { meetingNotesRevisionSchema, meetingOutcomesViewSchema, saveMeetingNotesSchema, uuid, type MeetingOutcomesView, type SaveMeetingNotes } from '@fss/contracts';
 import { MeetingDebrief } from './MeetingDebrief.tsx';
 import { BrowserBoundaryError, type BrowserClient, type PendingNotes } from './BrowserClient.ts';
+import { useUnsavedWorkspaceText, useWorkspaceNavigation } from './WorkspaceNavigationGuard.tsx';
 
 const receiptSchema = z.strictObject({ status: z.literal('accepted'), replayed: z.boolean(), result: meetingNotesRevisionSchema });
 const draftOf = (view: MeetingOutcomesView): SaveMeetingNotes => saveMeetingNotesSchema.parse({
@@ -19,7 +20,11 @@ export function BrowserMeetingNotes({ client, firmId }: { client: BrowserClient;
   const [pending, setPending] = useState<PendingNotes | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('Select an existing meeting by its ID. No calling, capture or provider action is available.');
+  const dirty = pending === null && draft !== null && view !== null && (draft.debrief !== view.notes.debrief || draft.sufficient !== view.notes.sufficient);
+  useUnsavedWorkspaceText(dirty);
+  const canLeave = useWorkspaceNavigation();
   const read = async (): Promise<void> => {
+    if (!canLeave()) return;
     const epoch = client.epoch;
     setBusy(true);
     setView(null);

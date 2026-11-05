@@ -59,10 +59,10 @@ test('NEW745 signed PKCE founder login Today Firm reload logout preserves deskto
   expect(app.fixture.google.jwksFetches()).toBeGreaterThan(0);
   expect(app.fixture.deps.config.oidc.redirectUri).toBe(app.desktopCallback);
   expect(app.desktopCallback).not.toBe(`${app.origin}/browser/callback`);
-  await page.getByRole('article').filter({ has: page.getByRole('heading', { name: 'Founder Host Synthetic Firm', exact: true }) }).getByRole('button', { name: 'Open firm' }).click();
+  await page.getByRole('button', { name: 'Open Founder Host Synthetic Firm', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Firm', exact: true })).toBeVisible();
   await page.reload();
-  await expect(page.getByRole('heading', { name: 'Founder Host Synthetic Firm', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Open Founder Host Synthetic Firm', exact: true })).toBeVisible();
   expect(await page.evaluate(() => document.cookie)).toBe('');
   for (const cookie of await context.cookies(app.origin)) expect(cookie.httpOnly && cookie.secure && cookie.sameSite === 'Lax' && cookie.path === '/').toBe(true);
   await page.getByRole('button', { name: 'Sign out', exact: true }).click();

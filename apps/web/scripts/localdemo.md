@@ -6,14 +6,14 @@ Add `FSS_LOCAL_DEMO_MANUAL_PREPARATION=1` to the clean independent start command
 
 Inspect its company/source details, choose **Prepare manual draft · NO SEND**, type fictional outreach and **Review exact draft · NO SEND**. Editing invalidates review. Draft and review exist only in this open view and are discarded by reload, selection, refresh or access changes. Nothing is sent or saved by review. Original-backed Replies remains separate and its fixture suggestions are scripted, not live inference.
 
-For the outcome step, open this prospect's private manual activity and expand the persistent **Fictional outcome walkthrough and limits** instructions. Only in this disposable fictional workspace, deliberately simulate the unchecked manual-phone report attestation and save an explicitly SYNTHETIC report. No real call occurred. Record a callback intention if useful, reload, select the exact same prospect, reopen private activity, refresh its metadata and deliberately open the exact report. This retrieves a stored intention, not an earliest-due queue, reminder, Today task, booking or action. Report content persists only until this demo shuts down. Do not enter real or private business data.
+For the outcome step, open this prospect's private manual activity and read the persistent **Fictional outcome walkthrough and limits** instructions. Only in this disposable fictional workspace, deliberately simulate the unchecked manual-phone report attestation and save an explicitly SYNTHETIC report. No real call occurred. Record a callback intention if useful, reload, select the exact same prospect, reopen private activity, refresh its metadata and deliberately open the exact report. This retrieves a stored intention, not an earliest-due queue, reminder, Today task, booking or action. Report content persists only until this demo shuts down. Do not enter real or private business data.
 
 ## Reliable macOS review window (issue784)
 
 For a review that must survive its originating terminal/tool command, explicitly start the finite OS-owned window from the repository root:
 
 ```sh
-env -i HOME="$HOME" PATH="/opt/homebrew/opt/node@24/bin:/opt/homebrew/bin:/usr/bin:/bin" TMPDIR="$TMPDIR" FSS_SYNTHETIC_LOCAL_DEMO=1 node --experimental-transform-types --disable-warning=ExperimentalWarning apps/web/scripts/localdemoReviewWindow.ts start
+env -i HOME="$HOME" PATH="/opt/homebrew/opt/node@24/bin:/opt/homebrew/bin:/usr/bin:/bin" TMPDIR="$TMPDIR" LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 FSS_SYNTHETIC_LOCAL_DEMO=1 node --experimental-transform-types --disable-warning=ExperimentalWarning apps/web/scripts/localdemoReviewWindow.ts start
 node --experimental-transform-types --disable-warning=ExperimentalWarning apps/web/scripts/localdemoReviewWindow.ts status
 node --experimental-transform-types --disable-warning=ExperimentalWarning apps/web/scripts/localdemoReviewWindow.ts stop
 ```
@@ -33,16 +33,16 @@ Hard kill, OS crash, logout or a teardown failure is not certified graceful reco
 From the repository root with installed dependencies, Node24 and installed Google Chrome:
 
 ```sh
-env -i HOME="$HOME" PATH="/opt/homebrew/opt/node@24/bin:/opt/homebrew/bin:/usr/bin:/bin" TMPDIR="$TMPDIR" FSS_SYNTHETIC_LOCAL_DEMO=1 npm run localdemo --workspace apps/web
+env -i HOME="$HOME" PATH="/opt/homebrew/opt/node@24/bin:/opt/homebrew/bin:/usr/bin:/bin" TMPDIR="$TMPDIR" LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 FSS_SYNTHETIC_LOCAL_DEMO=1 npm run localdemo --workspace apps/web
 ```
 
 A clean environment is deliberate. The launcher refuses inherited PostgreSQL, production browser and provider settings. It creates its own loopback PostgreSQL/template/fixture database, localhost HTTPS certificate, signed OIDC test identity and isolated Chrome profile. It never adopts Homebrew PostgreSQL or your usual Chrome profile. It uses the real React build, browser host, authenticated API and domain owners, not a mockup. No production settings, credentials or external providers are needed.
 
-The Chrome window opens the four fictional case A originals in **Replies**. The yellow SYNTHETIC / fictional / NO SEND / scripted-not-live-model label remains visible while scrolling, including after reload. Expand **Local demo instructions and limits** for the journey:
+After sign-in, choose **Email → Replies** to open the four fictional case A originals. The yellow SYNTHETIC / fictional / NO SEND / scripted-not-live-model label and **Local demo instructions and limits** remain visible while scrolling, including after reload:
 
 1. Inspect the readable original message and prior conversation. **Generate suggestion** invokes a fixed fixture script authored during implementation, not live inference. **Use suggestion in draft**, edit **Reply draft**, then **Preview exact reply**. Nothing is sent. The source already contains an agreed fictional walkthrough time and an unfulfilled recap promise. No actual scheduling, recap delivery or task/reminder control is added. Reply scratch is lost on refresh.
-2. In Today, **Open firm**, **Load existing meetings**, **Open preparation**. This is a fictional fixture meeting reflecting the time agreed inside the invented thread, NOT a real calendar booking or actual human commitment. The preparation uses invented case A source observations, not model-quality evidence. No source link needs to be visited.
-3. For useful private persistence, copy the displayed fictional meeting UUID into **Meeting ID**, **Read meeting notes**, write SYNTHETIC rehearsal notes in **Your notes**, **Save notes**. Reload, **Open firm**, enter the same meeting UUID, **Read meeting notes** to reopen. Only the existing real UI and meeting-note API persist these notes. Saving does not assign tasks, schedule a meeting, confirm interest, contact anyone or send anything.
+2. In **Today**, select the exact Fablewick company row, then **Meeting preparation → Load existing meetings → Open preparation**. The work list stays beside the selected company. This is a fictional fixture meeting reflecting the time agreed inside the invented thread, NOT a real calendar booking or actual human commitment. Preparation uses invented case A observations, not model-quality evidence. No source link needs to be visited.
+3. For private persistence, choose **Meeting notes**, copy the displayed fictional meeting UUID into **Meeting ID**, **Read meeting notes**, write SYNTHETIC rehearsal notes in **Your notes**, **Save notes**. Reload, select the same company, choose **Meeting notes** and read the same UUID to reopen. Only the existing real UI and meeting-note API persist these notes. Saving does not assign tasks, schedule a meeting, confirm interest, contact anyone or send anything.
 
 Default lifetime: 20 minutes, hard maximum30. Set `FSS_LOCAL_DEMO_MINUTES=1` through `30` in the clean command to shorten/change it. Closing the isolated Chrome window, Ctrl-C, or `kill -TERM <exact Node PID printed in SYNTHETIC_BROWSER_DEMO_READY>` stops the demo. The ready receipt prints exact owned profile/TLS/PG paths, PG PID, database, OIDC/HTTPS origins, meeting UUID, expiry and stop command. A mode0600 copy lives inside the owned profile until shutdown. Shutdown removes the owned profile, TLS, database/template and cluster. All saved notes disappear with the disposable demo. Do not use real business or private content here.
 

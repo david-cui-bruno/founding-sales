@@ -1,17 +1,27 @@
-import { useEffect, useRef, type JSX, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type JSX, type ReactNode } from 'react';
 import { WORKSPACE_SECTIONS, type WorkspaceSection } from './workspaceNavigation.ts';
+import { WorkspaceIcon } from './WorkspaceIcon.tsx';
 
 export type WorkspaceTheme = 'light' | 'dark';
-const icons: Record<WorkspaceSection, string> = {
-  today: 'M4 4h6v6H4z M14 4h6v6h-6z M4 14h6v6H4z M14 14h6v6h-6z',
-  prospects: 'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2 M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8 M20 8v6 M17 11h6',
-  calling: 'M5 3h4l2 5-3 2a15 15 0 0 0 6 6l2-3 5 2v4a2 2 0 0 1-2 2C10 21 3 14 3 5a2 2 0 0 1 2-2',
-  email: 'M3 5h18v14H3z M3 5l9 7 9-7',
-  social: 'M21 11a8 8 0 0 1-8 8H7l-5 3 2-6a8 8 0 1 1 17-5z',
-  settings: 'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8 M12 2v3 M12 19v3 M2 12h3 M19 12h3 M5 5l2 2 M17 17l2 2 M5 19l2-2 M17 7l2-2',
-};
-function Icon({ section }: { section: WorkspaceSection }): JSX.Element {
-  return <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={icons[section]} /></svg>;
+const destinations = [...WORKSPACE_SECTIONS, { id: 'settings', label: 'Settings' } satisfies { id: WorkspaceSection; label: string }];
+
+function SectionSearch({ onNavigate, onClose }: { onNavigate: (section: WorkspaceSection) => void; onClose: () => void }): JSX.Element {
+  const dialog = useRef<HTMLDialogElement>(null), input = useRef<HTMLInputElement>(null);
+  const [query, setQuery] = useState('');
+  const matches = destinations.filter(item => item.label.toLocaleLowerCase().includes(query.toLocaleLowerCase()));
+  useEffect(() => {
+    const element = dialog.current;
+    if (!element) return;
+    element.showModal(); input.current?.focus();
+    return () => { element.close(); };
+  }, []);
+  const navigate = (section: WorkspaceSection): void => { onClose(); onNavigate(section); };
+  return <dialog ref={dialog} className="workspace-search-dialog" aria-label="Jump to a workspace section" onCancel={event => { event.preventDefault(); onClose(); }} onClick={event => { if (event.target === event.currentTarget) onClose(); }}>
+    <form onSubmit={event => { event.preventDefault(); const first = matches[0]; if (first) navigate(first.id); }}>
+      <div className="workspace-search-field"><WorkspaceIcon name="search" /><input ref={input} aria-label="Find a section" placeholder="Jump to a section…" value={query} onChange={event => { setQuery(event.target.value); }} /><button type="button" className="workspace-quiet" aria-label="Close section search" onClick={onClose}><WorkspaceIcon name="close" /></button></div>
+      <div className="workspace-search-results">{matches.length ? matches.map(item => <button type="button" key={item.id} onClick={() => { navigate(item.id); }}><WorkspaceIcon name={item.id} />{item.label}</button>) : <p>No matching section.</p>}</div>
+    </form>
+  </dialog>;
 }
 
 /** Presentation only. Selecting a destination never changes channel or source authority. */
@@ -20,8 +30,10 @@ export function WorkspaceShell({ section, onNavigate, theme, onTheme, signedIn, 
   theme: WorkspaceTheme; onTheme: () => void; signedIn: boolean;
   onSignOut: () => void; children: ReactNode;
 }): JSX.Element {
-  const main = useRef<HTMLElement>(null);
+  const main = useRef<HTMLElement>(null), searchButton = useRef<HTMLButtonElement>(null);
   const previous = useRef(section);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const closeSearch = (): void => { setSearchOpen(false); searchButton.current?.focus(); };
   useEffect(() => {
     if (previous.current !== section) main.current?.focus();
     previous.current = section;
@@ -29,9 +41,12 @@ export function WorkspaceShell({ section, onNavigate, theme, onTheme, signedIn, 
   useEffect(() => {
     if (!signedIn) return;
     const keydown = (event: KeyboardEvent): void => {
+      if (event.defaultPrevented || event.altKey || event.isComposing) return;
+      if ((event.metaKey || event.ctrlKey) && event.key.toLocaleLowerCase() === 'k') {
+        event.preventDefault(); setSearchOpen(value => !value); return;
+      }
       const target = event.target;
-      if (event.defaultPrevented || event.altKey || event.isComposing
-        || (target instanceof Element && target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"], dialog, [role="dialog"]'))) return;
+      if (target instanceof Element && target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"], dialog, [role="dialog"]')) return;
       if ((event.metaKey || event.ctrlKey) && event.key === ',') {
         event.preventDefault(); onNavigate('settings'); return;
       }
@@ -44,20 +59,21 @@ export function WorkspaceShell({ section, onNavigate, theme, onTheme, signedIn, 
     window.addEventListener('keydown', keydown);
     return () => { window.removeEventListener('keydown', keydown); };
   }, [signedIn, onNavigate]);
-  const label = section === 'settings' ? 'Settings' : WORKSPACE_SECTIONS.find(value => value.id === section)?.label;
-  return <div className="browser-workspace" data-theme={theme}>
+  return <div className="browser-workspace" data-theme={theme} data-signed-in={signedIn}>
     <a className="workspace-skip" href="#workspace-main">Skip to workspace</a>
     <header className="browser-sidebar">
-      <div className="browser-brand"><span className="workspace-mark" aria-hidden="true"><i /><i /><i /></span><span>Callie<span className="workspace-brand-dot">.</span></span></div>
-      {signedIn ? <nav aria-label="Workspace sections">{WORKSPACE_SECTIONS.map((destination, index) => <button key={destination.id} type="button" aria-current={section === destination.id ? 'page' : undefined} aria-keyshortcuts={String(index + 1)} onClick={() => { onNavigate(destination.id); }}><Icon section={destination.id} /><span>{destination.label}</span></button>)}</nav> : <p className="workspace-muted">Your private sales workspace</p>}
+      <div className="browser-brand"><span className="workspace-mark" aria-hidden="true">C</span><span>Callie</span></div>
+      {signedIn ? <>
+        <button ref={searchButton} type="button" className="workspace-section-search" onClick={() => { setSearchOpen(true); }} aria-keyshortcuts="Meta+K Control+K"><WorkspaceIcon name="search" /><span>Search sections</span><kbd>⌘K</kbd></button>
+        <nav aria-label="Workspace sections">{WORKSPACE_SECTIONS.map((destination, index) => <button key={destination.id} type="button" aria-current={section === destination.id ? 'page' : undefined} aria-keyshortcuts={String(index + 1)} onClick={() => { onNavigate(destination.id); }}><WorkspaceIcon name={destination.id} /><span>{destination.label}</span></button>)}</nav>
+      </> : <p className="workspace-muted">Your private sales workspace</p>}
       <div className="browser-session">
-        {signedIn ? <><p className="workspace-eyebrow">Personal workspace</p><button type="button" aria-current={section === 'settings' ? 'page' : undefined} onClick={() => { onNavigate('settings'); }}><Icon section="settings" /> Settings & account</button></> : null}
+        {signedIn ? <button type="button" aria-current={section === 'settings' ? 'page' : undefined} onClick={() => { onNavigate('settings'); }}><WorkspaceIcon name="settings" /> Settings & account</button> : null}
         <div className="workspace-sidebar-foot"><button type="button" aria-pressed={theme === 'dark'} onClick={onTheme}>{theme === 'dark' ? 'Day mode' : 'Night mode'}</button>{signedIn ? <button type="button" onClick={onSignOut}>Sign out</button> : null}</div>
-        {signedIn ? <p className="workspace-shortcuts">1–5 to navigate · ⌘/Ctrl , settings</p> : null}
+        {signedIn ? <p className="workspace-shortcuts">1–5 navigate · ⌘K sections · ⌘, settings</p> : null}
       </div>
     </header>
-    <div className="workspace-canvas"><div className="workspace-topbar"><span><span className="workspace-muted">Workspace</span><span aria-hidden="true"> / </span>{signedIn ? label : 'Sign in'}</span><span className="workspace-private">Private workspace</span></div>
-      <main ref={main} id="workspace-main" className="browser-main" tabIndex={-1}>{children}</main>
-    </div>
+    <div className="workspace-canvas"><main ref={main} id="workspace-main" className="browser-main" tabIndex={-1}>{children}</main></div>
+    {signedIn && searchOpen ? <SectionSearch onNavigate={onNavigate} onClose={closeSearch} /> : null}
   </div>;
 }

@@ -1,12 +1,12 @@
 # Selling journeys
 
-[Map index](README.md) · [Setup/verification](verification.md) · [Current queue/evidence](../../apps/web/PLAN.md). Navigation below is derived from current source and retained tests, **not newly executed by this documentation lane**. Root's completed bounded hosted navigation/request/current-read observation is retained in the verification guide, not an instruction to replay it.
+[Map index](README.md) · [Setup/verification](verification.md) · [Current queue/evidence](../../apps/web/PLAN.md). Navigation follows current source; linked harnesses and PLAN distinguish exercised acceptance from recipes. [Current state](../operations/current-state.md) owns production identity and activation. Retained observations are not instructions to replay live actions.
 
 ## Today and next action
 
-**Reach:** normal sign-in → **Today**. Use the presented prospect/context action to reach **Prospects** or **Calling**, not a guessed URL. **Goal:** decide the next legitimate action from current due work and source context.
+**Reach:** normal sign-in → **Today**. Select a company in the ordered work list; its exact **Context / Meeting preparation / Meeting notes** stays beside that list. On narrow screens **Back to Today** restores the list without another queue read. Use **Open calling brief** or **Open Email** for the next supported action, not a guessed URL. Unsaved meeting-note text asks before selection, tab/section changes, rereading, refresh or sign-out; forced access loss still clears private views.
 
-**Owners/checks:** [BrowserToday](../../apps/web/src/client/BrowserToday.tsx), [Today behavior](../greenfield/today.md), [glass workspace journey](../../apps/web/test/e2e/glassWorkspace.spec.ts), [automatic supply](../../apps/web/test/e2e/automaticSupply.spec.ts) and [holds](../../apps/web/test/e2e/automaticSupplyHolds.spec.ts).
+**Owners/checks:** [BrowserToday](../../apps/web/src/client/BrowserToday.tsx), [shared patterns](../../apps/web/src/client/WorkspacePatterns.tsx), [Today behavior](../greenfield/today.md), [mounted session/notes regressions](../../apps/web/test/client/BrowserApp.test.tsx), [shell/source-fence regressions](../../apps/web/test/client/workspaceShell787.test.tsx), [glass workspace journey](../../apps/web/test/e2e/glassWorkspace.spec.ts), [automatic supply](../../apps/web/test/e2e/automaticSupply.spec.ts) and [holds](../../apps/web/test/e2e/automaticSupplyHolds.spec.ts). M1's signed local acceptance and pending release are recorded in PLAN.
 
 **Observe:** exact subject/context survives navigation without changing identity. Reading Today is not a write, acquisition or call. Where a separate permitted action changes business state, use its exact receipt and later authoritative read, not an optimistic card. Retained hosted reads and local glass acceptance are in PLAN. Callback intentions are display/history, not proved reminder execution; real daily usefulness remains partial.
 

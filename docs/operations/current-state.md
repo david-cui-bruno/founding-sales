@@ -1,6 +1,6 @@
 # Current operating state
 
-## November 5, 2026: Social redesign and real LinkedIn connection recovery
+## November 5, 2026: approved operations and workspace redesign
 
 Root owns integration/interfaces/production. Broad coverage, soft ranking, buying-role evidence and learning from outcomes remain David's direction. Parent783/supply797/Email838/Social843 retain scope; paused chat follow-ups and older schedules stay paused.
 
@@ -28,7 +28,7 @@ Root owns integration/interfaces/production. Broad coverage, soft ranking, buyin
 
 **Prioritization848 deployed:** [requirements](../greenfield/prospect-prioritization.md)/[audit](../greenfield/prospect-priority-interface-audit.md); hosted priority/fit saves accepted, no conversion claim. PR852 dated phone/person/office originals remain context, not canonical authority. Step1.3–1.5 software complete.
 
-**Social #935/PR936 custom app + Buffer Free DEPLOYED:** [workflow](../greenfield/founder-social-publishing.md)/[ADR0040](../adr/0040-buffer-managed-social-publication.md). Five genuine inputs, accepted calibration/guide4 survive live readback; plan/binding absent, runner available, publication inactive. Normal existing-owner Google sign-in and four live destinations verified; desktop/light and390px mobile/dark had no horizontal overflow. Guided key form empty/password-protected, discovery disabled without key. Earlier chooser wait failure was harness sequencing, not an established provider block; no membership/bypass change. Signed candidate integration and reviews pass; no provider writes. David reports Buffer connected in Firefox; private app key/profile verification and separate exact3/week activation remain. Old marked-attempt inventory permitted migration; preserve actual host/image/keys without fallback or retirement. Four exclusive-cluster E2Es remain externally blocked; unrelated databases untouched. No publication. #932 retag/adoption and #928 acquisition remain open.
+**Social #935/PR936 DEPLOYED167; approved same-profile plan ACTIVE:** [workflow](../greenfield/founder-social-publishing.md)/[ADR0040](../adr/0040-buffer-managed-social-publication.md). Five genuine inputs, calibration/guide4 and normal owner sign-in/four destinations retain accepted evidence. Fresh November5 read: text-only M/W/F10:00 America/New_York; next November6 15:00UTC slot `preparing`, not published; November2/4 slots `skipped/missed_window`. No reactivation, force-publication or provider write from UI work. Desktop/light and390px mobile/dark acceptance remains. Old marked-attempt inventory permitted migration; preserve actual host/image/keys without fallback or retirement. Four exclusive-cluster Social E2Es remain externally blocked; unrelated databases untouched. First publication unobserved. #932 retag/adoption and #928 acquisition remain open.
 
 ## Preserved completed work and controls
 

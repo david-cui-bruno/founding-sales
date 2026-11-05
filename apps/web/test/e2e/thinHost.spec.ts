@@ -56,13 +56,14 @@ async function login(page: Page, beta = false): Promise<void> {
   await page.getByLabel('Workspace ID', { exact: true }).fill(workspace.workspaceId);
   await page.getByRole('button', { name: 'Continue with Google', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Sign out', exact: true })).toBeVisible();
-  await expect(page.getByRole('heading', { name: beta ? 'Thin Host Beta Firm' : 'Thin Host Alpha Firm', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: `Open ${beta ? 'Thin Host Beta Firm' : 'Thin Host Alpha Firm'}`, exact: true })).toBeVisible();
 }
 async function firm(page: Page): Promise<void> {
-  await page.getByRole('article').filter({ has: page.getByRole('heading', { name: 'Thin Host Alpha Firm', exact: true }) }).getByRole('button', { name: 'Open firm' }).click();
+  await page.getByRole('button', { name: 'Open Thin Host Alpha Firm', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Firm', exact: true })).toBeVisible();
 }
 async function notes(page: Page): Promise<void> {
+  await page.getByRole('button', { name: 'Meeting notes', exact: true }).click();
   await page.getByLabel('Meeting ID', { exact: true }).fill(app.meetingId);
   await page.getByRole('button', { name: 'Read meeting notes', exact: true }).click();
   await expect(page.getByLabel('Your notes', { exact: true })).toBeVisible();
@@ -88,7 +89,7 @@ test('new host serves externally bundled CSP-safe UI with real signed login, Fir
   expect(await page.locator('body').evaluate(element => getComputedStyle(element).margin)).toBe('0px');
   await firm(page);
   await page.reload();
-  await expect(page.getByRole('heading', { name: 'Thin Host Alpha Firm', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Open Thin Host Alpha Firm', exact: true })).toBeVisible();
   const alpha = await browserSession(page);
   expect(alpha.status).toBe('signed_in');
   for (const cookie of await page.context().cookies(app.origin)) {
@@ -102,7 +103,7 @@ test('new host serves externally bundled CSP-safe UI with real signed login, Fir
   await login(page, true);
   expect((await browserRequest(page, `/firms/${app.alphaFirmId}`)).status).toBe(404);
   expect((await browserRequest(page, '/today/firm', { body: { firmId: app.betaFirmId }, revision: alpha.status === 'signed_in' ? alpha.revision : '' })).status).toBe(409);
-  await expect(page.getByRole('heading', { name: 'Thin Host Alpha Firm', exact: true })).toHaveCount(0);
+  await expect(page.getByText('Thin Host Alpha Firm', { exact: true })).toHaveCount(0);
   expect(violations).toEqual([]);
 });
 
@@ -159,7 +160,7 @@ test('new host authenticates revocation and protects generation after delayed re
   } finally { releaseResponse(); }
   expect((await delivered).status()).toBe(200);
   await page.evaluate(async () => { await new Promise(requestAnimationFrame); await new Promise(requestAnimationFrame); });
-  await expect(page.getByRole('heading', { name: 'Thin Host Alpha Firm', exact: true })).toHaveCount(0);
+  await expect(page.getByText('Thin Host Alpha Firm', { exact: true })).toHaveCount(0);
   await login(page);
   const session = await browserSession(page);
   if (session.status !== 'signed_in') throw new Error('Expected signed-in real session');

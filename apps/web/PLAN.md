@@ -6,6 +6,10 @@ David approved the November5 compact workspace, separate Pipeline, monthly deal 
 
 This direction supersedes earlier glass/layout assignments and the 73-view inventory, not domain/authority/custody rules or completed operational evidence. Main model owns design/integration. Implement shared patterns through the first real Today view, then the merged Prospects/calling loop, Pipeline, human replies, deal nudges, promised/check-in sending and remaining Social/Settings. Deliver complete vertical slices with normal reviews/CI/release; no placeholder destinations or copied prototype handlers.
 
+**M1 source implemented; reviews CLEAN; CI/integration pending:** compact neutral/green shell, shared production tokens/pattern gallery, section search, visible sign-in/account controls and real Today queue beside selected company context. Calling remains reachable until M2 integrates it; Pipeline appears only with M3's real contract. Signed disposable-host/app_runtime checks exercised retained queue, exact selection, note save/readback, six cancelled discard paths, explicit discard, failed-read retry, light/dark desktop/laptop/390px, post-Back focus and sign-out erasure; zero outbound rows/provider calls. Full web1163PASS/6skipped; repository types/lint/workflow pass, ratchet unchanged. Combined and privacy reviews closed. Production remains unchanged; M1/M2 form the first useful release.
+
+**CI/development feedback research complete:** [measured options and adoption order](../../docs/greenfield/ci-and-dev-feedback-options-20261105.md). Prefer native parallel selected-suite jobs and focused watch/incremental checks before another platform. Paid services and CI configuration remain unchanged; projected timing gains require a representative benchmark.
+
 Keep #873/#919 and the approved Social plan as independent operating work. #932 hardening and #928 selected-public-thread acquisition retain their own risk/prerequisite scope. No UI progress enables sending, capture, calling or publishing.
 
 ## Previously delivered work

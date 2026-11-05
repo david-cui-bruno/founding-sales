@@ -27,11 +27,14 @@ test('fictional originals to editable reply, sourced preparation and durable pri
     await expect(page.getByLabel('Synthetic demo notice')).toContainText(demoLabel);
     expect(app.fixture.google.jwksFetches()).toBeGreaterThan(0);
     expect(app.fixture.google.tokenExchanges().at(-1)?.clientSecretPresented).toBe(true);
+    await page.getByRole('navigation', { name: 'Workspace sections' }).getByRole('button', { name: 'Email', exact: true }).click();
     await page.getByRole('button', { name: 'Refresh replies', exact: true }).click();
     await page.getByRole('button', { name: `${syntheticBrowserCase.firm}: ${syntheticReplySource.subject}`, exact: true }).click();
     await page.getByRole('button', { name: 'Refresh current reply context', exact: true }).click();
-    for (const source of syntheticBrowserCase.messages) await expect(page.getByText(source.body, { exact: true })).toBeVisible();
-    if (proof) { await page.getByText(syntheticReplySource.body, { exact: true }).scrollIntoViewIfNeeded(); await page.screenshot({ path: `${proof}/781-input-viewport.png` }); await chmod(`${proof}/781-input-viewport.png`, 0o600); }
+    await page.locator('.email-originals > summary').click();
+    const composer = page.getByRole('region', { name: 'Reply composer', exact: true });
+    for (const source of syntheticBrowserCase.messages) await expect(composer.getByText(source.body, { exact: true })).toBeVisible();
+    if (proof) { await composer.getByText(syntheticReplySource.body, { exact: true }).scrollIntoViewIfNeeded(); await page.screenshot({ path: `${proof}/781-input-viewport.png` }); await chmod(`${proof}/781-input-viewport.png`, 0o600); }
     expect(app.calls()).toBe(0);
     await page.getByRole('button', { name: 'Generate suggestion', exact: true }).click();
     await expect(page.getByRole('complementary', { name: 'Reply suggestion' })).toContainText(scriptedReply);
@@ -45,9 +48,11 @@ test('fictional originals to editable reply, sourced preparation and durable pri
     for (const path of ['/replies/composer/send', '/replies/composer/send-status', '/replies/confirm']) expect((await browserRequest(page, path, { body: {} })).status).toBe(404);
     if (proof) { await page.getByRole('article', { name: 'Final reply preview' }).scrollIntoViewIfNeeded(); await page.screenshot({ path: `${proof}/781-reply.png`, fullPage: true }); await chmod(`${proof}/781-reply.png`, 0o600); await page.screenshot({ path: `${proof}/781-reply-viewport.png` }); await chmod(`${proof}/781-reply-viewport.png`, 0o600); }
     const open = async () => {
-      await page.getByRole('article').filter({ has: page.getByRole('heading', { name: syntheticBrowserCase.firm, level: 3, exact: true }) }).getByRole('button', { name: 'Open firm', exact: true }).click();
+      await page.getByRole('navigation', { name: 'Workspace sections' }).getByRole('button', { name: 'Today', exact: true }).click();
+      await page.getByRole('button', { name: `Open ${syntheticBrowserCase.firm}`, exact: true }).click();
     };
     await open();
+    await page.getByRole('button', { name: 'Meeting preparation', exact: true }).click();
     await page.getByRole('button', { name: 'Load existing meetings', exact: true }).click();
     await page.getByRole('button', { name: 'Open preparation', exact: true }).click();
     const brief = page.getByRole('article', { name: 'Current meeting brief' });
@@ -56,6 +61,7 @@ test('fictional originals to editable reply, sourced preparation and durable pri
     await expect(brief).toContainText('Fulfillment unobserved');
     await expect(brief).toContainText(app.meetingId);
     const note = 'SYNTHETIC rehearsal only, not a completed meeting: Mara wants request ownership clarified when vendors have not replied. SYN-A-04 recap promise due 2026-10-27 12:00 America/New_York, fulfillment unobserved. Private preparation notes only, no task assignment, calendar event or send.';
+    await page.getByRole('button', { name: 'Meeting notes', exact: true }).click();
     await page.getByLabel('Meeting ID', { exact: true }).fill(app.meetingId);
     await page.getByRole('button', { name: 'Read meeting notes', exact: true }).click();
     await page.getByLabel('Your notes', { exact: true }).fill(note);
@@ -63,8 +69,9 @@ test('fictional originals to editable reply, sourced preparation and durable pri
     await expect(page.getByText('Saved notes revision 1.', { exact: true })).toBeVisible();
     await page.reload();
     await expect(page.getByLabel('Synthetic demo notice')).toContainText(demoLabel);
-    await expect(page.getByRole('heading', { name: syntheticBrowserCase.firm, level: 3, exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: `Open ${syntheticBrowserCase.firm}`, exact: true })).toBeVisible();
     await open();
+    await page.getByRole('button', { name: 'Meeting notes', exact: true }).click();
     await page.getByLabel('Meeting ID', { exact: true }).fill(app.meetingId);
     await page.getByRole('button', { name: 'Read meeting notes', exact: true }).click();
     await expect(page.getByLabel('Your notes', { exact: true })).toHaveValue(note);

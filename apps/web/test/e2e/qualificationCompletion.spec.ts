@@ -166,9 +166,9 @@ test('real browser request and reviewed admission retain exact custody through r
   await page.getByRole('button', { name: 'Today', exact: true }).click();
   const today = todayListResponseSchema.parse(await (await todayRead).json());
   expect(today.cards.find(card => card.firmId === admitted.result.firmId)?.firmName).toBe(input.firmName);
-  const todayCard = page.getByRole('article').filter({ has: page.getByRole('button', { name: 'Open firm', exact: true }) }).filter({ hasText: input.firmName });
+  const todayCard = page.getByRole('button', { name: `Open ${input.firmName}`, exact: true });
   const firmRead = page.waitForResponse(response => response.url().endsWith('/browser/api/crm/firm-page-v3'));
-  await todayCard.getByRole('button', { name: 'Open firm', exact: true }).click();
+  await todayCard.click();
   expect(pluralFirmPageResponseSchema.parse(await (await firmRead).json()).read.firm.id).toBe(admitted.result.firmId);
   await expect(page.getByRole('region', { name: 'Firm', exact: true })).toContainText(input.firmName);
   await page.getByRole('button', { name: 'Today', exact: true }).click();

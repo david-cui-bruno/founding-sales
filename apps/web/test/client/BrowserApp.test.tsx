@@ -81,8 +81,8 @@ function navigate(name: string): void {
   fireEvent.click(within(screen.getByRole('navigation', { name: 'Workspace sections' })).getByRole('button', { name }));
 }
 async function openNotes(): Promise<void> {
-  fireEvent.click(await screen.findByRole('button', { name: 'Open firm' }));
-  await screen.findByText('Fixture Person · Owner');
+  fireEvent.click(await screen.findByRole('button', { name: `Open ${firm.name}` }));
+  await screen.findByText('Fixture Person');
   fireEvent.click(screen.getByRole('button', { name: 'Meeting notes' }));
   fireEvent.change(screen.getByLabelText('Meeting ID'), { target: { value: id } });
   fireEvent.click(screen.getByRole('button', { name: 'Read meeting notes' }));
@@ -125,7 +125,7 @@ describe('BrowserApp real shared presentation', () => {
     afterEach(() => { cleanup(); vi.unstubAllGlobals(); Reflect.deleteProperty(navigator, 'locks'); });
     async function openActualCalling(client: BrowserClient): Promise<void> {
       render(<BrowserApp client={client} />);
-      fireEvent.click(await screen.findByRole('button', { name: 'Open firm' }));
+      fireEvent.click(await screen.findByRole('button', { name: `Open ${firm.name}` }));
       fireEvent.click(await screen.findByRole('button', { name: 'Open calling brief' }));
       await waitFor(() => { expect(screen.getByLabelText('Actual outcome').matches(':disabled')).toBe(false); });
     }
@@ -175,7 +175,7 @@ describe('BrowserApp real shared presentation', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Save private follow-up' }));
         await screen.findByText(/Save outcome UNKNOWN. Exact command retained/u);
         const followUp = localStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY); expect(followUp).not.toBeNull();
-        navigate('Today'); await screen.findByRole('button', { name: 'Open firm' });
+        navigate('Today'); await screen.findByRole('button', { name: `Open ${firm.name}` });
         expect(localStorage.getItem(CALLING_PENDING_KEY)).toBe(wrap);
         expect(localStorage.getItem(CALLING_FOLLOW_UP_PENDING_KEY)).toBe(followUp);
         expect(`${wrap}${followUp}`).not.toContain('PRIVATE');
@@ -188,7 +188,7 @@ describe('BrowserApp real shared presentation', () => {
       } finally { s.client.dispose(); }
     });
     it('app cleanup only unsubscribes the new custody observers without erasing uncertainty', async () => {
-      const s = setup(); const ui = render(<BrowserApp client={s.client} />); await screen.findByRole('button', { name: 'Open firm' });
+      const s = setup(); const ui = render(<BrowserApp client={s.client} />); await screen.findByRole('button', { name: `Open ${firm.name}` });
       localStorage.setItem(CALLING_PENDING_KEY, 'opaque-calling-unknown'); localStorage.setItem(CALLING_FOLLOW_UP_PENDING_KEY, 'opaque-follow-up-unknown');
       ui.unmount();
       expect(localStorage.getItem(CALLING_PENDING_KEY)).toBe('opaque-calling-unknown');
@@ -201,7 +201,7 @@ describe('BrowserApp real shared presentation', () => {
   describe('exact navigation', () => {
     it('opens only the current exact Firm with current reads, no command or calling-readiness claim', async () => {
       const { client, send, storage } = setup(); render(<BrowserApp client={client} />);
-      fireEvent.click(await screen.findByRole('button', { name: 'Open firm' }));
+      fireEvent.click(await screen.findByRole('button', { name: `Open ${firm.name}` }));
       const open = await screen.findByRole('button', { name: 'Open calling brief' });
       const before = send.mock.calls.length;
       fireEvent.click(open);
@@ -223,7 +223,7 @@ describe('BrowserApp real shared presentation', () => {
       });
       const { client, send } = setup();
       try {
-        render(<BrowserApp client={client} />); await screen.findByRole('button', { name: 'Open firm' });
+        render(<BrowserApp client={client} />); await screen.findByRole('button', { name: `Open ${firm.name}` });
         navigate('Prospects'); const before = send.mock.calls.length;
         fireEvent.click(screen.getByRole('button', { name: 'Invalid candidate' }));
         expect(screen.queryByRole('heading', { name: 'Calling' })).toBeNull(); expect(send).toHaveBeenCalledTimes(before);
@@ -246,7 +246,7 @@ describe('BrowserApp real shared presentation', () => {
       });
       const { client, send } = setup();
       try {
-        render(<BrowserApp client={client} />); await screen.findByRole('button', { name: 'Open firm' });
+        render(<BrowserApp client={client} />); await screen.findByRole('button', { name: `Open ${firm.name}` });
         navigate('Email'); const before = send.mock.calls.length; fireEvent.click(screen.getByRole('button', { name: 'Choose exact draft' }));
         expect(screen.getByText(`Draft selection: ${id}`)).toBeTruthy(); expect(send).toHaveBeenCalledTimes(before);
         navigate('Calling'); navigate('Email'); expect(screen.getByText(`Draft selection: ${id}`)).toBeTruthy();
@@ -259,7 +259,7 @@ describe('BrowserApp real shared presentation', () => {
     it('synchronously refuses the opened Firm callback on expiry before React removes the view', async () => {
       const { client, send } = setup(); await client.refresh(); const onOpenCalling = vi.fn();
       render(<BrowserToday client={client} onOpenCalling={onOpenCalling} />);
-      fireEvent.click(await screen.findByRole('button', { name: 'Open firm' }));
+      fireEvent.click(await screen.findByRole('button', { name: `Open ${firm.name}` }));
       const open = await screen.findByRole('button', { name: 'Open calling brief' });
       const before = send.mock.calls.length;
       const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 180_000);
@@ -270,7 +270,7 @@ describe('BrowserApp real shared presentation', () => {
   it('opens Today alone and retains manual prospects and ordinary inventory behind explicit destinations', async () => {
     const { client, commands, send } = setup();
     render(<BrowserApp client={client} />);
-    await screen.findByRole('button', { name: 'Open firm' });
+    await screen.findByRole('button', { name: `Open ${firm.name}` });
     expect(screen.queryByRole('heading', { name: 'Ordinary sourcing inventory' })).toBeNull();
     expect(send.mock.calls.some(([url]) => url === '/browser/api/sourcing/candidates/prospects/priority/list')).toBe(false);
     navigate('Prospects');
@@ -286,13 +286,11 @@ describe('BrowserApp real shared presentation', () => {
     await screen.findByRole('heading', { name: 'Ordinary sourcing inventory' });
     expect(screen.queryByRole('region', { name: 'Selected prospect inspector' })).toBeNull();
     navigate('Today');
-    fireEvent.click(await screen.findByRole('button', { name: 'Open firm' }));
-    await screen.findByText('Fixture Person · Owner');
+    fireEvent.click(await screen.findByRole('button', { name: `Open ${firm.name}` }));
+    await screen.findByText('Fixture Person');
     await waitFor(() => { expect(document.activeElement).toBe(screen.getByRole('heading', { name: firm.name })); });
     expect(screen.queryByRole('heading', { name: 'Ordinary sourcing inventory' })).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: '← Back to Today' }));
-    await screen.findByRole('button', { name: 'Open firm' });
-    await waitFor(() => { expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Today' })); });
+    expect(within(screen.getByRole('complementary', { name: 'Today work list' })).getByRole('button', { name: `Open ${firm.name}` })).toBeTruthy();
     await act(async () => { client.invalidate(false); });
     await screen.findByRole('heading', { name: 'Sign in' });
     expect(screen.queryByRole('heading', { name: 'Ordinary sourcing inventory' })).toBeNull();
@@ -312,13 +310,13 @@ describe('BrowserApp real shared presentation', () => {
   it('opens reviewed replies in Email and existing preparation through Firm context without automatic generation', async () => {
     const { client, commands, send } = setup();
     render(<BrowserApp client={client} />);
-    await screen.findByRole('button', { name: 'Open firm' });
+    await screen.findByRole('button', { name: `Open ${firm.name}` });
     expect(screen.queryByRole('heading', { name: 'Replies' })).toBeNull();
     navigate('Email');
     await screen.findByRole('heading', { name: 'Replies' });
     expect(screen.getByRole('button', { name: 'Refresh replies' })).toBeTruthy();
     navigate('Today');
-    fireEvent.click(await screen.findByRole('button', { name: 'Open firm' }));
+    fireEvent.click(await screen.findByRole('button', { name: `Open ${firm.name}` }));
     fireEvent.click(await screen.findByRole('button', { name: 'Meeting preparation' }));
     await screen.findByRole('heading', { name: 'Meeting preparation' });
     expect(screen.getByRole('button', { name: 'Load existing meetings' })).toBeTruthy();

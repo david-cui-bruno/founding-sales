@@ -71,16 +71,19 @@ async function login(page: Page): Promise<void> {
   await page.getByLabel('Workspace ID', { exact: true }).fill(app.fixture.alpha.workspaceId);
   await page.getByRole('button', { name: 'Continue with Google', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Sign out', exact: true })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Reply Brief Synthetic Firm', exact: true, level: 3 })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Open Reply Brief Synthetic Firm', exact: true })).toBeVisible();
 }
 async function selectReply(page: Page): Promise<void> {
+  await page.getByRole('navigation', { name: 'Workspace sections' }).getByRole('button', { name: 'Email', exact: true }).click();
   await page.getByRole('button', { name: 'Refresh replies', exact: true }).click();
   await page.getByRole('button', { name: 'Reply Brief Synthetic Firm: Synthetic preparation question', exact: true }).click();
   await page.getByRole('button', { name: 'Refresh current reply context', exact: true }).click();
-  await expect(page.getByText('Could we discuss the synthetic maintenance plan?', { exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Reply composer', exact: true }).getByText('Could we discuss the synthetic maintenance plan?', { exact: true })).toBeVisible();
 }
 async function prepare(page: Page): Promise<void> {
-  await page.getByRole('article').filter({ has: page.getByRole('heading', { name: 'Reply Brief Synthetic Firm', exact: true, level: 3 }) }).getByRole('button', { name: 'Open firm', exact: true }).click();
+  await page.getByRole('navigation', { name: 'Workspace sections' }).getByRole('button', { name: 'Today', exact: true }).click();
+  await page.getByRole('button', { name: 'Open Reply Brief Synthetic Firm', exact: true }).click();
+  await page.getByRole('button', { name: 'Meeting preparation', exact: true }).click();
   await page.getByRole('button', { name: 'Load existing meetings', exact: true }).click();
   await page.getByRole('button', { name: 'Open preparation', exact: true }).click();
   await expect(page.getByRole('article', { name: 'Current meeting brief', exact: true })).toBeVisible();

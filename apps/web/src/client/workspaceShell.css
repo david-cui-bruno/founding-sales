@@ -1,0 +1,44 @@
+.browser-workspace { display: grid; grid-template-columns: 220px minmax(0, 1fr); height: 100dvh; min-height: 0; }
+.browser-sidebar { display: flex; flex-direction: column; min-height: 0; overflow: auto; padding: 12px 10px; background: var(--sidebar); border-right: 1px solid var(--line); }
+.browser-brand { display: flex; align-items: center; gap: 9px; padding: 4px 8px 16px; font-size: 15px; font-weight: 650; letter-spacing: -.01em; }
+.workspace-mark { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 6px; background: var(--ink); color: var(--ink-text); font-size: 12px; font-weight: 700; }
+.browser-sidebar nav { display: grid; gap: 2px; }
+.browser-sidebar nav button, .browser-session > button { width: 100%; justify-content: flex-start; border-color: transparent; background: transparent; padding: 6px 8px; color: var(--muted); border-radius: 7px; font-size: 14px; }
+.browser-sidebar button:hover:not(:disabled) { background: var(--panel-hover); }
+.browser-sidebar button[aria-current=page] { background: var(--panel); color: var(--text); border-color: var(--line); }
+.browser-sidebar .workspace-section-search { width: 100%; justify-content: flex-start; color: var(--muted); font-size: 13px; padding: 5px 8px; margin-bottom: 12px; }
+.workspace-section-search svg { width: 14px; height: 14px; }
+.workspace-section-search kbd { margin-left: auto; font-family: inherit; font-size: 11px; border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
+.browser-session { margin-top: auto; padding-top: 20px; }
+.workspace-sidebar-foot { display: flex; justify-content: space-between; gap: 6px; border-top: 1px solid var(--line); padding-top: 8px; margin-top: 8px; }
+.workspace-sidebar-foot button { background: transparent; color: var(--muted); padding: 5px 8px; border-color: transparent; font-size: 12px; }
+.workspace-shortcuts { color: var(--muted); font-size: 11px; padding: 4px 8px; }
+.workspace-canvas { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.browser-main { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; overflow: auto; overflow-wrap: anywhere; }
+.browser-main:focus { outline: none; }
+.workspace-content { min-width: 0; min-height: 0; }
+.workspace-content[data-section=today] { display: flex; flex-direction: column; flex: 1; overflow: hidden; }
+.workspace-content:not([data-section=today]) { padding: 28px 36px 48px; }
+.workspace-skip { position: fixed; top: 4px; left: 12px; transform: translateY(-160%); z-index: 100; background: var(--panel-strong); padding: 8px 14px; border-radius: 8px; }
+.workspace-skip:focus { transform: none; }
+.browser-workspace[data-signed-in=false] { grid-template-columns: minmax(0, 1fr); }
+.browser-workspace[data-signed-in=false] .browser-sidebar { display: none; }
+.browser-workspace[data-signed-in=false] .browser-main { padding: 28px 18px; }
+.workspace-notice { color: var(--sand-ink); background: var(--sand); padding: 10px 16px; margin: 0; border-bottom: 1px solid var(--line); flex: none; }
+@media (max-width: 760px) {
+  .browser-workspace { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+  .browser-sidebar { padding: 8px; border-right: 0; border-bottom: 1px solid var(--line); overflow: visible; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 6px; }
+  .browser-brand { padding: 0 6px; }
+  .browser-sidebar .workspace-section-search { width: auto; margin: 0 0 0 auto; min-height: 30px; }
+  .workspace-section-search kbd, .workspace-section-search span { display: none; }
+  .browser-sidebar nav { width: 100%; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); order: 3; }
+  .browser-sidebar nav button { justify-content: center; flex-direction: column; gap: 3px; padding: 5px 2px; font-size: 11px; }
+  .browser-sidebar nav button svg { width: 17px; height: 17px; }
+  .browser-session { margin: 0; padding: 0; display: flex; align-items: center; }
+  .browser-session > button { width: auto; font-size: 0; padding: 5px; }
+  .browser-session > button svg { width: 18px; }
+  .workspace-sidebar-foot { border: 0; padding: 0; margin: 0; }
+  .workspace-sidebar-foot button { font-size: 11px; padding: 4px; }
+  .workspace-shortcuts { display: none; }
+  .workspace-content:not([data-section=today]) { padding: 18px 16px 36px; }
+}
