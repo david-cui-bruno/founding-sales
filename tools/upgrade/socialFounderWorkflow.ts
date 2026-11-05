@@ -6,7 +6,8 @@ import {saveSocialFounderInput,readSocialFounderInput} from '@fss/domain/social/
 import {requestSocialDrafts} from '@fss/domain/social/drafts.ts';
 import {readSocialStandingPlan,readSocialStandingActivity,saveSocialStandingPlan} from '@fss/domain/social/standingPlan.ts';
 import type {SocialDraftRequest} from '@fss/contracts';
-export const SOCIAL_FOUNDER_UPGRADE_WORKFLOW='social.founder current inputs, erasure and no implicit standing authority (0163–0167, runtime role)';
+import {runSocialStandingUpgradeWorkflow} from './socialStandingWorkflow.ts';
+export const SOCIAL_FOUNDER_UPGRADE_WORKFLOW='social.founder inputs, erasure, explicit Buffer standing authority and immutable receipt lifecycle (0163–0167, runtime role)';
 /** Controlled post-upgrade domain reads/writes as app_runtime; no provider is called. */
 export async function runSocialFounderUpgradeWorkflow(owner:RepositoryContext,otherOwner:RepositoryContext):Promise<string>{
  const db=owner.db,w=owner.scope.workspaceId,actor=owner.scope.actor;
@@ -36,6 +37,8 @@ export async function runSocialFounderUpgradeWorkflow(owner:RepositoryContext,ot
  assert.deepEqual((await db.query('SELECT bullets,context,experience_date,public_safe,reason,revision FROM social_founder_inputs WHERE workspace_id=$1 AND id=$2',[w,inputId])).rows,[{bullets:null,context:null,experience_date:null,public_safe:false,reason:'removed',revision:3}]);
  assert.deepEqual((await db.query('SELECT concepts,state FROM social_draft_requests WHERE workspace_id=$1 AND id=$2',[w,requested.value.requestId])).rows,[{concepts:null,state:'review'}]);
  assert.equal(await withTransaction(db,()=>readSocialStandingPlan(owner)),null);assert.deepEqual((await db.query('SELECT * FROM workspace_settings WHERE workspace_id=$1 ORDER BY setting_key,version',[w])).rows,settings,'founder work must not alter existing controls or ceilings');
- return 'app_runtime saved private note, refused public processing until exact public-use revision, enforced cross-owner privacy/current CAS/fixed expiry, created one governed request with controlled model output, physically erased note and derived prose on removal, refused standing activation without current real account/credential/calibration, left plans/activity absent and existing settings unchanged; zero external calls';
+ const standing=await runSocialStandingUpgradeWorkflow(owner);
+ assert.deepEqual((await db.query('SELECT * FROM workspace_settings WHERE workspace_id=$1 ORDER BY setting_key,version',[w])).rows,settings,'explicit standing lifecycle must not alter existing controls or ceilings');
+ return `app_runtime saved private note, refused public processing until exact public-use revision, enforced cross-owner privacy/current CAS/fixed expiry, created one governed request with controlled model output, physically erased note and derived prose on removal, refused standing activation without current real account/credential/calibration, proved legacy plans/activity absent and existing settings unchanged; ${standing}`;
  }finally{await db.query('RESET ROLE');}
 }

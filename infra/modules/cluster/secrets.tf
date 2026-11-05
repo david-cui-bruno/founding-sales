@@ -6,11 +6,11 @@ locals {
   operations_secret_names = ["google-gmail-oauth-client"]
   publisher_secret_names  = ["social-publisher-session-key"]
   secret_environment_names = {
-    "llm-classifier-api-key"         = "FSS_LLM_CLASSIFIER_API_KEY"
-    "millionverifier-api-key"        = "FSS_MILLIONVERIFIER_API_KEY"
-    "sourcing-search"                = "FSS_TAVILY_API_KEY"
+    "llm-classifier-api-key"  = "FSS_LLM_CLASSIFIER_API_KEY"
+    "millionverifier-api-key" = "FSS_MILLIONVERIFIER_API_KEY"
+    "sourcing-search"         = "FSS_TAVILY_API_KEY"
     # Reuse the accepted encryption key/container without rotating outstanding custody.
-    "social-publisher-session-key"   = "FSS_SOCIAL_PUBLISHER_CREDENTIAL_KEY"
+    "social-publisher-session-key" = "FSS_SOCIAL_PUBLISHER_CREDENTIAL_KEY"
   }
   # Empty secret containers may exist before their values are installed. Inject
   # the encryption key only when the Buffer application configuration is ready.
