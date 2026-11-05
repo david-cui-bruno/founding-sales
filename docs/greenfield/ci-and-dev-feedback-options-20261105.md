@@ -1,6 +1,6 @@
 # CI and development feedback: measured bottlenecks and options
 
-November 5, 2026. Recommendation, not tooling adoption. No workflow, compiler, package manager, paid runner, account or production control was changed for this research. The main model retains screen-design ownership.
+November 5, 2026. Native parallel CI is implemented in this change; hosted acceptance and timing remain pending. Research did not activate a paid runner, account or production control. The main model retains screen-design ownership.
 
 ## Recommendation
 
@@ -23,9 +23,20 @@ Source: [Greenfield run 42107007773](https://github.com/david-cui-bruno/founding
 | Web tests | 2m02s |
 | Ops tests | 3m25s |
 
-[`run-selected.mjs`](../../tools/ci/run-selected.mjs) uses synchronous child processes: shared typecheck, lint, then a serial loop over suites. It already records per-command times in the GitHub summary. [`select.mjs`](../../tools/ci/select.mjs) already chooses affected suites/dependent consumers for PRs and broad coverage on main. Neither mechanism should be replaced by a weaker changed-file heuristic.
+[`select.mjs`](../../tools/ci/select.mjs) already chooses affected suites/dependent consumers for PRs and broad coverage on main. Preserve that conservative selection. The former [`run-selected.mjs`](../../tools/ci/run-selected.mjs) ran shared typecheck, lint and selected suites serially; its replacement exposes separate plan/static/suite invocations and retains actual per-command timings.
 
 The measured critical-path opportunity is overlapping independent work, not shaving dependency-install seconds. Image workflows run separately; container-build acceleration does not directly shorten this test step. This Greenfield step invokes Vitest/Node tests, not the Playwright spec runner.
+
+## Native implementation and acceptance
+
+The workflow validates the existing selector's output, runs repository typecheck/lint once, and overlaps six isolated machine groups: domain, API, ops, web, worker and the three small packages. Each selected suite runs once; ops remains mandatory, and broad plans require all eight suites. The always-present required `greenfield` aggregate refuses missing, skipped, cancelled, failed or invalid prerequisites. Upgrade, workflow and secret gates remain separate and unchanged. PR cancellation is limited to the same attempt; main runs are not superseded.
+
+The retained-original PostgreSQL authority now recognizes only the hosted `suites` job with `CI_MACHINE=domain`, preserving Linux/hosted-runner, pgvector, matching canonical template/service and local explicit-grant restrictions. The old job identity is not a compatibility alias. Its regression went from two failures before correction to23 passes afterward without allocating PostgreSQL. Four focused CI ops files passed43 checks; repository typecheck, lint, actionlint and workflow budgets passed. An actual selector→CLI publication produced six groups covering all eight suites; aggregate success exited0 while cancelled work and an unselected machine each refused with exit1. Temporary smoke inputs were removed. Combined and security reviews closed; hosted matrix semantics, timing and cancellation/rerun observations still need actual GitHub runs.
+
+The corrected pre-parallel [PR941 gate](https://github.com/david-cui-bruno/founding-sales/actions/runs/42127508768) took25m36s; this is another serial observation, not the speed of the new matrix. Benchmark PR and main elapsed feedback, each job's duration, aggregate job-minutes and failures before considering a paid pilot.
+
+This CI/source change takes the existing protected `review_prepare`→`reviewed` release route when the useful M1/M2 application bundle is ready. CI-only merges do not publish new application images. Keep the application-only operator's audited CI-byte guard intact; neither a merge nor older images establish the new production baseline. See [the release procedure](../operations/lean-release-workflow.md#reviewed-infrastructure-or-protected-changes). No shell-only M1 release, production dispatch, hold change or spending follows.
+
 
 ## Tools and fit
 
