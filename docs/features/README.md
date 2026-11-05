@@ -26,6 +26,8 @@ Supply also includes the [retained phone/person/office reading aid](selling.md#s
 
 Browser shell/navigation source: [BrowserApp](../../apps/web/src/client/BrowserApp.tsx), [sections](../../apps/web/src/client/workspaceNavigation.ts). Secondary destinations are linked where actually supported, not invented new routes. API/worker composition: [processes](../greenfield/processes.md). [ADR0027](../adr/0027-web-product.md) retires desktop; design from the selling goal, not screen parity.
 
+Approved November5 replacement, **not yet delivered:** [workspace design system](../greenfield/workspace-design-system.md), [M0–M8 delivery roadmap](../greenfield/workspace-redesign-roadmap.md), and [runnable fictional reference](../greenfield/workspace-prototype/index.html), tracked in [#939](https://github.com/david-cui-bruno/founding-sales/issues/939). Five primary destinations retain existing capabilities in context; Pipeline becomes separate and Calling joins Prospects. Use these for the target design and the journey rows above for actual delivered coverage.
+
 Technical failure diagnostics are separate from selling authority and product analytics: [error-only observability](../greenfield/processes.md#error-only-diagnostics) locates the shared privacy boundary, private source-map publication and provider controls. Diagnostic capture grants no Gmail capture, prospect contact or new alerting authority; activation status remains in current-state.
 
 ## Drive and interpret
