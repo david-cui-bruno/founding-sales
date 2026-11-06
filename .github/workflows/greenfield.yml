@@ -5,14 +5,95 @@ on:
     branches: [main]
 permissions:
   contents: read
+# PR pushes cancel predecessors. Attempts are isolated so an old rerun cannot cancel a new push.
+# Main uses commit groups and never requests in-progress cancellation.
+concurrency:
+  group: greenfield-${{ github.event_name == 'pull_request' && format('pr-{0}-attempt-{1}', github.event.pull_request.number, github.run_attempt) || format('push-{0}', github.sha) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
-  greenfield:
-    # Typecheck, lint (the workspace and the root scripts, one ESLint config), the
-    # workspace tests and the release suite.
+  plan:
+    # Which suites this change needs (tools/ci/select.mjs, unchanged policy: main and any
+    # shared, unknown or empty change is broad) and the machines that will run them. Needs
+    # no dependencies; the selector and plan check use only Node's own modules.
     runs-on: ubuntu-24.04
-    # Full broad gate reached ops near minute16; its measured live progress needs
-    # bounded room for the remaining real lifecycle checks and evaluation suite.
-    timeout-minutes: 35
+    timeout-minutes: 5
+    defaults:
+      run:
+        shell: bash
+    outputs:
+      plan: ${{ steps.plan.outputs.plan }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version-file: .node-version
+      - name: Select affected suites and dependent consumers
+        env:
+          EVENT_KIND: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_KIND" = push ]; then
+            printf '' | node tools/ci/select.mjs --main > "$RUNNER_TEMP/ci-selection.json"
+          elif git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            git diff --name-only --no-renames "$(git merge-base "$BASE_SHA" HEAD)" HEAD | node tools/ci/select.mjs > "$RUNNER_TEMP/ci-selection.json"
+          else
+            printf '' | node tools/ci/select.mjs > "$RUNNER_TEMP/ci-selection.json"
+          fi
+          cat "$RUNNER_TEMP/ci-selection.json" >> "$GITHUB_STEP_SUMMARY"
+      - name: Validate the selection and publish the plan
+        # The plan output carries only validated suite names and booleans, never the
+        # selector's reasons (which can quote changed file names).
+        id: plan
+        run: node tools/ci/run-selected.mjs plan "$RUNNER_TEMP/ci-selection.json"
+
+  validate:
+    # Workflow budget, typecheck and lint, once for the whole run; the suites do not repeat them.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version-file: .node-version
+      - name: Install
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Workflow documentation and code-size fast gate
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          node --test scripts/checkWorkflowBudget.test.mjs
+          if [ -n "$BASE_SHA" ] && git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            node scripts/checkWorkflowBudget.mjs "$BASE_SHA"
+          else
+            node scripts/checkWorkflowBudget.mjs
+          fi
+      - name: Typecheck and lint (the workspace and the root scripts, one ESLint config)
+        run: node tools/ci/run-selected.mjs static
+
+  suites:
+    # The selected suites, one machine per entry of the plan's matrix, each with its own
+    # database. Every selected suite runs exactly once; the `greenfield` job below refuses
+    # unless this whole job succeeded.
+    name: suites (${{ matrix.machine }})
+    needs: plan
+    runs-on: ubuntu-24.04
+    # The longest suite (domain) measured near seven minutes alone; this bounds a hang.
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     defaults:
       run:
         shell: bash
@@ -48,17 +129,6 @@ jobs:
         # Dependency lifecycle scripts are held; only the pinned database native
         # library is hydrated below for owned local lifecycle checks.
         run: npm ci --ignore-scripts --no-audit --no-fund
-      - name: Workflow documentation and code-size fast gate
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-        run: |
-          set -euo pipefail
-          node --test scripts/checkWorkflowBudget.test.mjs
-          if [ -n "$BASE_SHA" ] && git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
-            node scripts/checkWorkflowBudget.mjs "$BASE_SHA"
-          else
-            node scripts/checkWorkflowBudget.mjs
-          fi
       - name: Hydrate only the pinned embedded PostgreSQL native library links
         # This exact dependency postinstall restores required .so symlinks omitted
         # by ignore-scripts. Other dependency scripts remain held.
@@ -77,6 +147,8 @@ jobs:
             -c 'ALTER SYSTEM SET full_page_writes = off' \
             -c 'SELECT pg_reload_conf()'
       - name: Meeting media test tools
+        # Only the worker suite transcodes meeting audio.
+        if: matrix.machine == 'worker'
         timeout-minutes: 4
         run: |
           set -euo pipefail
@@ -106,22 +178,36 @@ jobs:
           fi
           ffmpeg -version
           ffprobe -version
-      - name: Select affected suites and dependent consumers
+      - name: Selected suites
         env:
-          EVENT_KIND: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-        run: |
-          set -euo pipefail
-          if [ "$EVENT_KIND" = push ]; then
-            printf '' | node tools/ci/select.mjs --main > "$RUNNER_TEMP/ci-selection.json"
-          elif git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
-            git diff --name-only --no-renames "$(git merge-base "$BASE_SHA" HEAD)" HEAD | node tools/ci/select.mjs > "$RUNNER_TEMP/ci-selection.json"
-          else
-            printf '' | node tools/ci/select.mjs > "$RUNNER_TEMP/ci-selection.json"
-          fi
-          cat "$RUNNER_TEMP/ci-selection.json" >> "$GITHUB_STEP_SUMMARY"
-      - name: Greenfield gate
-        run: node tools/ci/run-selected.mjs "$RUNNER_TEMP/ci-selection.json"
+          CI_PLAN: ${{ needs.plan.outputs.plan }}
+          CI_MACHINE: ${{ matrix.machine }}
+        run: node tools/ci/run-selected.mjs suite
+
+  greenfield:
+    # The one required check. It reports success only when the plan, the shared validation
+    # and every machine of the selected-suite matrix succeeded: a failed, cancelled or
+    # skipped prerequisite (or a matrix that never started) fails it. `always()` makes it run
+    # in those cases instead of being skipped, which a required check would treat as passing.
+    if: ${{ always() }}
+    needs: [plan, validate, suites]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          sparse-checkout: tools/ci
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version-file: .node-version
+      - name: Require every prerequisite
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: node tools/ci/aggregate.mjs
 
   upgrade:
     # The automated upgrade test that replaced the schema rehearsal (lane RS, 29
