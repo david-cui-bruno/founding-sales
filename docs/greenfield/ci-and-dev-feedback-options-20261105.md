@@ -1,6 +1,6 @@
 # CI and development feedback: measured bottlenecks and options
 
-November 5–6, 2026. Native parallel CI passed its first hosted broad PR run; main timing remains pending. No paid runner, account or production control was activated. The main model retains screen-design ownership.
+November 5–6, 2026. Native parallel CI passed broad PR and main runs; focused local loops and explicit finite signed-browser rebuild are implemented. No paid runner, account or production control was activated. The main model retains screen-design ownership.
 
 ## Recommendation
 
@@ -33,15 +33,18 @@ The workflow validates the existing selector's output, runs repository typecheck
 
 The retained-original PostgreSQL authority now recognizes only the hosted `suites` job with `CI_MACHINE=domain`, preserving Linux/hosted-runner, pgvector, matching canonical template/service and local explicit-grant restrictions. The old job identity is not a compatibility alias. Its regression went from two failures before correction to23 passes afterward without allocating PostgreSQL. Four focused CI ops files passed43 checks; repository typecheck, lint, actionlint and workflow budgets passed. An actual selector→CLI publication produced six groups covering all eight suites; aggregate success exited0 while cancelled work and an unselected machine each refused with exit1. Temporary smoke inputs were removed. Combined/security reviews closed. The real hosted broad matrix, domain PostgreSQL authority and required aggregate all passed; live cancellation/rerun behavior was not independently exercised.
 
-The corrected pre-parallel [PR941 serial gate](https://github.com/david-cui-bruno/founding-sales/actions/runs/42127508768) took25m36s. The first [parallel broad PR run42132834751](https://github.com/david-cui-bruno/founding-sales/actions/runs/42132834751) passed all12 jobs on standard free runners:
+Completed Greenfield observations on standard free runners; elapsed time is run start through completion metadata, summed job time excludes the separate images workflow:
 
-| Metric | Observed first parallel PR |
-| --- | ---: |
-| Full workflow, run start through completion metadata | 9m55s |
-| Longest job, domain | 9m22s |
-| Summed duration of all12 jobs, excluding images workflow | 28m29s |
+| Run | Shape | Workflow elapsed | Summed job time | Outcome |
+| --- | --- | ---: | ---: | --- |
+| [Serial main42131241245](https://github.com/david-cui-bruno/founding-sales/actions/runs/42131241245) | 4 jobs | 27m45s | 29m15s | Passed |
+| [First parallel PR42132834751](https://github.com/david-cui-bruno/founding-sales/actions/runs/42132834751) | 12 jobs | 9m55s | 28m29s | Passed |
+| [Final CI PR42135670578](https://github.com/david-cui-bruno/founding-sales/actions/runs/42135670578) | 12 jobs | 7m42s | 25m45s | Passed |
+| [Parallel main42137468096](https://github.com/david-cui-bruno/founding-sales/actions/runs/42137468096) | 12 jobs | 7m02s | 25m48s | Passed |
 
-This is one successful observation, not a controlled benchmark or a reliability guarantee. Parallelism reduces elapsed feedback, not necessarily aggregate runner time. Main timing and later failure observations remain acceptance work before considering a paid pilot.
+The same main commit's [images workflow42137467967](https://github.com/david-cui-bruno/founding-sales/actions/runs/42137467967) passed in5m58s; publication is not production deployment. The longest suite varied between Domain and API across these runs. These are successful observations, not a controlled benchmark, median/tail or reliability guarantee. Parallelism reduces elapsed feedback, not necessarily aggregate runner time; future failure/queue observations still matter. No paid pilot is needed to obtain the observed target.
+
+The subsequent [main42140214111](https://github.com/david-cui-bruno/founding-sales/actions/runs/42140214111) correctly failed the required aggregate after a Web privacy assertion mistook the digits214 in an allowed expiry timestamp ending `.214Z` for phone data. The captured record contained no phone, source label or URL. The regression now fixes that clock case and excludes the actual private fixture values from commands and storage, retaining same-command unknown recovery; runtime custody is unchanged. This failure is evidence of fail-closed aggregation, not another successful timing sample.
 
 This CI/source change takes the existing protected `review_prepare`→`reviewed` release route when the useful M1/M2 application bundle is ready. Its domain-config and app-documentation paths also trigger the images workflow; published images are not a production release. Keep the application-only operator's audited CI-byte guard intact; neither a merge nor image publication establishes the new production baseline. See [the release procedure](../operations/lean-release-workflow.md#reviewed-infrastructure-or-protected-changes). No shell-only M1 release, production dispatch, hold change or spending follows.
 
@@ -77,22 +80,22 @@ Namespace also advertises a **Developer plan with no monthly commitment**. This 
 
 Ubicloud's current docs permit disabling premium; an older announcement said standard was closed to new customers, superseded by an August changelog. Confirm console availability before relying on the standard rate. Its source registers repository-level runners, suggesting personal-account compatibility, but no account installation or job verified that inference. The advertised free credit is per account, not per runner.
 
-Recommendation: after the free native-parallel benchmark, request a **$25 total bounded pilot**, using only explicitly selected trusted runs and no production/provider credentials. This is a proposed budget, not a guaranteed vendor-enforced cap; neither vendor's researched docs established a dollar hard stop. Verify billing, permissions and stop controls before enabling. Full-volume ongoing spend is a separate decision, not included in that pilot budget. No signup, GitHub App installation, runner trial or spending occurred.
+Defer a paid pilot: the recorded native PR/main runs already met the feedback target. If later measurements justify another runner, propose a **$25 total bounded pilot** using selected trusted runs without production/provider credentials. That is a proposed budget, not a guaranteed vendor-enforced cap; neither vendor's researched docs established a dollar hard stop. Verify billing, permissions and stop controls before enabling. Full-volume ongoing spend needs a separate decision. No signup, GitHub App installation, runner trial or spending occurred.
 
 ## Faster local loops using the existing stack
 
 1. **Focused checks during edits.** Use the implemented web watch command documented in the [design system](workspace-design-system.md#enforcement-during-implementation), selecting one relevant test file. [`--changed` and `related`](https://vitest.dev/guide/cli) remain optional feedback shortcuts, not replacements for broad acceptance: dynamic fixtures and cross-package contracts can escape static selection.
 2. **Incremental static feedback.** The web incremental/no-emit watcher checks source, tests and scripts; content-cached lint and per-worktree buildinfo use ignored `node_modules/.cache`. Commands and actual acceptance are in the design system. Keep final gates cold. LSP symbol navigation also needs the locked TypeScript SDK in the harness workspace; a neighboring worktree's installation alone did not satisfy discovery. Installing locked dependencies with lifecycle scripts held restored it without changing harness settings or tracked source.
 3. **Fast presentation loop.** The actual shared-module `dev:patterns` gallery now uses [esbuild watch/rebuild](https://esbuild.github.io/api/#rebuild), successful-output reload and last-good preservation. Process-unique HTML/SSE markers detect server restarts at the same build ordinal. Real Chrome acceptance covered CSS/TSX changes, failure/recovery and offline-edit/restart; temporary changes were restored. This remains a development-only gallery without product connections.
-4. **Real authenticated browser loop.** Reuse the existing finite, exact-owned synthetic session for edits instead of restarting Postgres, migrations, TLS, OIDC and Chrome each time. Dev-only asset rebuild/reload support is required: the host captures assets at construction. Preserve the current lifetime limits, real sign-in/CSRF/CSP and `app_runtime` role, fake providers, no-send assertions and exact teardown. A listener/runtime reuse mechanism needs smoke proof before adoption. Reload must respect unsaved-work and calling custody; do not silently discard it on every file save.
+4. **Real authenticated browser loop.** [Foreground opt-in rebuild](../../apps/web/scripts/localdemo.md#opt-in-frontend-rebuild-without-restarting-plain-foreground-only) reuses the finite exact-owned runtime. Explicit `r` builds validated frontend assets and replaces only the product handler on the same HTTPS listener; it never reloads Chrome. Actual signed acceptance covered dirty-note/page preservation, busy refusal, failed-build last-good bytes, recovery, manual reload/authentication and saved-note readback; all four pre-resource refusals and exact teardown passed. Preserve the existing lifetime, CSRF/CSP, `app_runtime`, fake providers and no-send checks. Reload discards memory-only scratch; do it deliberately, never on every file save.
 5. **Cold acceptance remains distinct.** Run the affected signed-browser journey with a clean disposable database and browser context before merge/release. Reusing a dev session must not become acceptance evidence for clean startup, reload, sign-out or unknown-write recovery.
 
 Do not start with a Vite/HMR migration. esbuild rebuild plus reload is the smaller change. Stateful hot refresh can preserve or recreate React state/effects that differ from production reload and call-custody behavior. Do not relax product CSP/authentication to make development work. Do not blanket-enable multiple browser workers through the existing exclusive owned-lane guards.
 
-## Proposed order and success criteria
+## Current implementation and success criteria
 
-First, split independent CI suites while preserving existing check names/coverage through an aggregate gate. Then measure whether Domain needs sharding. In parallel, add focused watch/incremental local checks and gallery rebuild support; prove any owned authenticated reload seam separately.
+Native parallel CI, focused watch/incremental checks and gallery rebuild are implemented; the exact-owned authenticated rebuild seam has runtime proof and combined/privacy review. Monitor the longest actual suite before adding sharding or another platform; do not assume Domain is always the bottleneck.
 
-The target remains a required PR feedback path around or below ten minutes, evaluated over representative PRs and broad-main runs. The first native-parallel broad PR met it; that observation does not establish a median, tail or reliability guarantee, and main timing is still pending. Compare queue/setup, aggregate job minutes, failures and coverage before/after. Migration-heavy runs may have an independent critical path.
+The target remains required PR feedback around or below ten minutes over representative PRs and broad-main runs. The recorded native-parallel PR/main observations met it; they do not establish a median, tail or reliability guarantee. Continue comparing queue/setup, aggregate job minutes, failures and unchanged coverage. Migration-heavy runs may have an independent critical path.
 
 Do not switch package managers to optimize this run's seven-second install. Do not purchase a CI platform or cache integration-test success to obtain a green timing number. No decision or credentials are needed from David for the current recommendation; a paid pilot would require approval.
