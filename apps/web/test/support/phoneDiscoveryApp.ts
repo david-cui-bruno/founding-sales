@@ -136,7 +136,7 @@ export async function openPhoneDiscoveryCandidate(page: Page, candidateId: strin
   await page.locator(`#manual-row-${candidateId}`).click();
   await expect(page.getByRole('article', { name: `Manual prospect ${candidateId}`, exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Open calling brief', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Calling', exact: true, level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Prospects', exact: true, level: 1 })).toBeVisible();
   const brief = page.getByRole('region', { name: 'Current calling brief', exact: true });
   await expect(brief).toContainText(phoneDiscoveryCase.name);
   await expect(brief).toContainText('Retained observation · unverified');

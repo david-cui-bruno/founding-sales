@@ -7,6 +7,7 @@ import { browserRequest } from './browser.ts';
 import { privateDraftCanonicalJson } from '../../src/client/PrivateDraftCustody.ts';
 import { assertGlassStorage, navigateGlass, type GlassWorkspaceApp } from './glassWorkspaceApp.ts';
 import type { GlassWorkspaceSeed } from './glassWorkspaceSeed.ts';
+import { chooseWorkspaceRadio } from './workspaceChoice.ts';
 
 export const glassWrapAcceptance = z.strictObject({ status: z.literal('accepted'), replayed: z.boolean(), result: callingWrapResultSchema });
 export const glassSaveAcceptance = z.strictObject({ status: z.literal('accepted'), replayed: z.boolean(), result: callingFollowUpSavedSchema });
@@ -34,9 +35,9 @@ export async function acceptGlassCandidateContract(page: Page, app: GlassWorkspa
   await expect(page.getByRole('article', { name: `Manual prospect ${seed.candidateId}`, exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Open calling brief', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Current calling brief' })).toContainText('Retained observation · unverified');
-  await page.getByRole('combobox', { name: 'Actual outcome', exact: true }).selectOption('conversation');
+  await chooseWorkspaceRadio(page, 'Actual outcome', 'conversation');
   await page.getByRole('textbox', { name: 'Private call notes', exact: true }).fill(note);
-  await page.getByRole('combobox', { name: 'Next action', exact: true }).selectOption('promised_email');
+  await chooseWorkspaceRadio(page, 'Next action', 'promised_email');
   await expect(page.getByRole('textbox', { name: 'Promised email body', exact: true })).toHaveValue('');
   await page.getByRole('textbox', { name: 'Promised email subject', exact: true }).fill(subject);
   await page.getByRole('textbox', { name: 'Promised email body', exact: true }).fill(body);

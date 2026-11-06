@@ -2,7 +2,7 @@ import {test as base,expect} from 'playwright/test';
 import {repositoryContext,workspaceScope} from '@fss/domain/db/workspaceScope.ts';
 import {withTransaction} from '@fss/domain/db/queryable.ts';
 import {requestProspectPhoneDiscovery} from '@fss/domain/sourcing/prospectPhoneDiscovery.ts';
-import {startGlassWorkspace,containGlass,signInGlass,navigateGlass,assertGlassStorage,assertGlassNoExternalActions} from '../support/glassWorkspaceApp.ts';
+import {startGlassWorkspace,containGlass,signInGlass,openGlassWorkingList,assertGlassStorage,assertGlassNoExternalActions} from '../support/glassWorkspaceApp.ts';
 import {launchGlassContext} from '../support/glassWorkspaceBrowser.ts';
 import {seedPhoneDiscoveryCandidate,setPhoneDiscoveryResearch,drivePhoneDiscoveryJob,phoneDiscoveryCase} from '../support/phoneDiscoveryApp.ts';
 
@@ -28,7 +28,7 @@ test.afterAll(async()=>{if(owned)try{await assertGlassNoExternalActions(owned.ap
 test('signed manual choice persists through current read, kept navigation and browser reload without calling effects',async({context,page})=>{
  await containGlass(context,owned.app);const effects:string[]=[];
  page.on('request',request=>{if(/\/calls\/(?:access-token|session)$|\/calling\/wrap$/u.test(new URL(request.url()).pathname))effects.push(request.url());});
- await signInGlass(page,owned.app);await navigateGlass(page,'Calling');
+ await signInGlass(page,owned.app);await openGlassWorkingList(page);
  await expect(page.getByRole('button',{name:'Kept prospects',exact:true})).toHaveAttribute('aria-pressed','true');
  await page.getByRole('button',{name:'Retained list',exact:true}).click();await page.locator('.calling-queue li button').filter({hasText:phoneDiscoveryCase.name}).click();
  const brief=page.getByRole('region',{name:'Current calling brief'});
@@ -39,7 +39,7 @@ test('signed manual choice persists through current read, kept navigation and br
  await expect(brief.getByLabel('Chosen manual number')).toContainText(phoneDiscoveryCase.phone);
  await page.getByRole('button',{name:'Next prospect →',exact:true}).click();
  await expect(page.locator('.calling-queue li button').filter({hasText:phoneDiscoveryCase.name})).toContainText(phoneDiscoveryCase.phone);
- await page.reload();await navigateGlass(page,'Calling');
+ await page.reload();await openGlassWorkingList(page);
  const kept=page.locator('.calling-queue li button').filter({hasText:phoneDiscoveryCase.name});await expect(kept).toContainText(phoneDiscoveryCase.phone);
  await kept.click();await expect(page.getByLabel('Chosen manual number')).toContainText(phoneDiscoveryCase.phone);
  await assertGlassStorage(page,[phoneDiscoveryCase.name,phoneDiscoveryCase.text,phoneDiscoveryCase.phone,phoneDiscoveryCase.website]);

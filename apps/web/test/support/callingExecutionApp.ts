@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {execFileSync} from 'node:child_process';
+import {access,constants} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import {randomBytes} from 'node:crypto';
 import {build} from 'esbuild';
@@ -10,7 +10,8 @@ import {withTransaction} from '@fss/domain/db/queryable.ts';
 import {publishTestRegistrySnapshot} from '../../../../packages/domain/test/support/nationalRegistry.ts';
 import {seedPolicy} from '../../../../packages/domain/test/db/support/policyFixtures.ts';
 import type {TwoWorkspaces} from '../../../../packages/domain/test/db/support/fixtures.ts';
-import {requireGlassRuntimeGrant,glassCase} from './glassWorkspaceApp.ts';
+import {requireCallingM2Admission,glassCase} from './glassWorkspaceApp.ts';
+import {assertForeignPostgresPreserved,CALLING_M2_GRANT,CALLING_M2_GRANT_ENV} from './soleDisposableLane.ts';
 import {reserveLocalBrowserDatabase} from './database.ts';
 import {startReplyBriefApp} from './replyBriefApp.ts';
 import {absent,listenerAbsent} from './founderHostResources.ts';
@@ -23,9 +24,9 @@ async function fakeSDKAssets(){
  return (original:BrowserAssets):BrowserAssets=>new Map([...original,['/renderer.js',{body:js.contents,contentType:'text/javascript; charset=utf-8'}],['/styles.css',{body:css.contents,contentType:'text/css; charset=utf-8'}]]);
 }
 export async function startCallingExecutionApp(){
- requireGlassRuntimeGrant();const grant=process.env['FSS_CALLING_EXECUTION_RUNTIME_GRANT'];assert(grant==='aefb95a4d'||grant==='229d9a53d');
- const homebrew=execFileSync('ps',['-p','1106','-o','command='],{encoding:'utf8'}).trim();assert(homebrew.includes('/opt/homebrew/opt/postgresql@17/bin/postgres'));
- console.log('CALLING_EXECUTION_RESOURCES_RESERVED',JSON.stringify({owner:'swan',grant,resources:['sole disposable PG/template/fixture','loopback HTTPS/signed OIDC','isolated installed Chrome'],artifacts:process.env['FSS_GLASS_PRIVATE_ARTIFACTS'],homebrew1106:homebrew,workers:1,provider:'FAKE ONLY',audio:'FAKE ONLY'}));
+ // Fresh M2 synthetic grant, then sole-lane and installed-Chrome checks, all before any allocation.
+ const foreignPostgres=requireCallingM2Admission();await access(process.env['FSS_LOCAL_BROWSER_EXECUTABLE']!,constants.X_OK);
+ console.log('CALLING_EXECUTION_RESOURCES_RESERVED',JSON.stringify({grant:{env:CALLING_M2_GRANT_ENV,value:CALLING_M2_GRANT},resources:['sole disposable PG/template/fixture','loopback HTTPS/signed OIDC','isolated installed Chrome'],artifacts:process.env['FSS_GLASS_PRIVATE_ARTIFACTS'],foreignPostgres,workers:1,provider:'FAKE ONLY',audio:'FAKE ONLY'}));
  const decorateAssets=await fakeSDKAssets();const release=await reserveLocalBrowserDatabase();let app:Awaited<ReturnType<typeof startReplyBriefApp>>|undefined;
  const counters={tokens:0,connects:0,providerNetwork:0,externalBrowser:0,externalNode:0};
  const originalFetch=globalThis.fetch;
@@ -35,7 +36,7 @@ export async function startCallingExecutionApp(){
   app=await startReplyBriefApp({conversation:glassCase,requestDatabaseRole:'app_runtime',decorateAssets,apiIntegrations:{publicOrigin:null,calcom:null,decisionAt:()=>at,twilio:{accountSid:`AC${'0'.repeat(32)}`,twimlAppSid:`AP${'0'.repeat(32)}`,callerIdE164:'+14015550100',verifySignature:()=>false,mintAccessToken:(_identity,now)=>{counters.tokens++;return {token:'FICTIONAL-CALLING-TOKEN-NOT-A-CREDENTIAL',expiresAtSeconds:now+3600};},fetchRecording:async()=>{counters.providerNetwork++;throw Error('Recording forbidden');}}}});
   const owned=app,httpsPort=Number(new URL(owned.origin).port),oidcPort=Number(new URL(owned.fixture.google.issuer).port);
   console.log('CALLING_EXECUTION_RUNTIME_REGISTERED',JSON.stringify({origin:owned.origin,oidc:owned.fixture.google.issuer,database:owned.fixture.database.name,template:process.env['FSS_TEST_TEMPLATE_DATABASE'],postgresPid:owned.postgresPid,storage:owned.storagePath,tls:owned.tlsPath}));
-  const stop=createOwnedTeardown([()=>owned.stop(),async()=>{await listenerAbsent(httpsPort,'localhost');await listenerAbsent(oidcPort,'localhost');},release,async()=>{globalThis.fetch=originalFetch;await absent(owned.storagePath);await absent(owned.tlsPath);assert.throws(()=>process.kill(owned.postgresPid,0),{code:'ESRCH'});assert.equal(execFileSync('ps',['-p','1106','-o','command='],{encoding:'utf8'}).trim(),homebrew);console.log('CALLING_EXECUTION_ALL_RESOURCES_ABSENT_HOME BREW1106_UNCHANGED');}]);
+  const stop=createOwnedTeardown([()=>owned.stop(),async()=>{await listenerAbsent(httpsPort,'localhost');await listenerAbsent(oidcPort,'localhost');},release,async()=>{globalThis.fetch=originalFetch;await absent(owned.storagePath);await absent(owned.tlsPath);assert.throws(()=>process.kill(owned.postgresPid,0),{code:'ESRCH'});assertForeignPostgresPreserved(foreignPostgres);console.log('CALLING_EXECUTION_ALL_RESOURCES_ABSENT_FOREIGN_POSTGRES_UNCHANGED');}]);
   return {app:owned,counters,at,stop};
  }catch(error){try{await createOwnedTeardown([async()=>{await app?.stop();},release])();}finally{globalThis.fetch=originalFetch;}throw error;}
 }

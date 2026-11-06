@@ -1,8 +1,10 @@
-import {useEffect,useMemo,useRef,useState,type JSX} from 'react';
+import {useCallback, useEffect,useMemo,useRef,useState,type JSX} from 'react';
 import {callingIdentityListSchema,type CallingIdentityDto,createAudioTestSessionCommandSchema} from '@fss/contracts';
 import type {BrowserClient} from './BrowserClient.ts';
 import {CallingExecutionCustody,type CallingExecutionPending} from './CallingExecutionPending.ts';
 import {CallingExecutionController,type CallingExecutionState,type CallingExecutionPorts} from './CallingExecutionDispatch.ts';
+import { WorkspaceChoice } from './WorkspaceChoice.tsx';
+import { useWorkspaceLeaveGuard } from './WorkspaceNavigationGuard.tsx';
 
 const idle:CallingExecutionState={phase:'idle',message:'No audio test has started.',muted:false,link:null};
 /** Test recipients stay out of CRM; number entry stays only in this signed-in view. */
@@ -21,6 +23,17 @@ export function CallingAudioTest({client,paused,onBlockedChange,ports}:{client:B
   return()=>{active.current=false;controller.dispose();storage();session();callbacks.current(false);};
  },[client,controller,custody]);
  const live=['starting','ringing','connected'].includes(state.phase),blocked=error||held!==null||live;
+ useWorkspaceLeaveGuard(useCallback(()=>{
+  if(!live&&!busy)return true;
+  setNotice('Keep Audio test open while its media or receipt operation is active. Hang up and check its status before leaving.');
+  return false;
+ },[busy,live]));
+ useEffect(()=>{
+  if(!live&&!busy)return;
+  const warn=(event:BeforeUnloadEvent):void=>event.preventDefault();
+  window.addEventListener('beforeunload',warn);
+  return()=>window.removeEventListener('beforeunload',warn);
+ },[busy,live]);
  const ownBlocked=error||live||held?.operation==='create_audio_test_session';
  useEffect(()=>{onBlockedChange(ownBlocked);},[ownBlocked,onBlockedChange]);
  const mine=generation.current,current=()=>active.current&&generation.current===mine&&client.current?.status==='signed_in';
@@ -40,7 +53,7 @@ export function CallingAudioTest({client,paused,onBlockedChange,ports}:{client:B
   <p role="status">{state.message}</p>{notice?<p role="alert">{notice}</p>:null}
   {error?<p role="alert">Calling storage is unavailable. Calls are held so the original attempt can be checked.</p>:null}
   {held&&held.operation!=='create_audio_test_session'?<p>A business call is active or uncertain. Finish that call before an audio test.</p>:null}
-  {admin?<fieldset disabled={blocked||paused||busy}><label>Test phone number<input type="tel" aria-label="Test phone number" autoComplete="off" inputMode="tel" maxLength={32} value={number} onChange={e=>setNumber(e.target.value)}/></label><label>Your calling identity<select aria-label="Audio test calling identity" value={identityId} onChange={e=>setIdentity(e.target.value)}><option value="">Choose your own number</option>{identities.map(i=><option key={i.id} value={i.id}>{i.e164}</option>)}</select></label><button disabled={!number.trim()||!identityId} onClick={start}>Start audio test</button></fieldset>:<p>A workspace admin can start an audio test.</p>}
+  {admin?<fieldset disabled={blocked||paused||busy}><label>Test phone number<input type="tel" aria-label="Test phone number" autoComplete="off" inputMode="tel" maxLength={32} value={number} onChange={event=>setNumber(event.target.value)}/></label><label>Your calling identity<WorkspaceChoice label="Audio test calling identity" value={identityId} disabled={blocked||paused||busy} placeholder="Choose your own number" options={identities.map(identity=>({value:identity.id,label:identity.e164}))} onChange={setIdentity}/></label><button disabled={!number.trim()||!identityId} onClick={start}>Start audio test</button></fieldset>:<p>A workspace admin can start an audio test.</p>}
   {live?<div className="calling-inline"><button onClick={()=>controller.stop()}>Hang up / abandon test</button>{state.phase!=='starting'?<button aria-pressed={state.muted} onClick={()=>controller.mute()}>{state.muted?'Unmute':'Mute'}</button>:null}</div>:null}
   {held?.operation==='create_audio_test_session'&&!live?<button disabled={busy||error} onClick={()=>{void recover();}}>Check test call status</button>:null}
   {state.audioTestSessionId?<button disabled={busy||error} onClick={()=>{void finish();}}>Finish audio test</button>:null}

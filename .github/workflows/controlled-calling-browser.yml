@@ -1,0 +1,105 @@
+name: Controlled calling browser
+# The M2 Prospects and calling browser acceptance: real bundled product, signed local OIDC,
+# `app_runtime` requests, an owned disposable PostgreSQL cluster, the fake-only calling SDK
+# and one installed Chrome, all on a fresh GitHub-hosted runner with no services and no
+# secrets. It is the controlled-fixture check only; the Greenfield gate keeps its own
+# selection and is unchanged. Only call-path changes start it, so it is not a branch
+# protection check and never blocks an unrelated change.
+on:
+  pull_request:
+    paths:
+      - apps/web/**
+      - apps/api/**
+      - packages/contracts/**
+      - packages/domain/**
+      - package.json
+      - package-lock.json
+      - .node-version
+      - .github/workflows/controlled-calling-browser.yml
+  push:
+    branches: [main]
+    paths:
+      - apps/web/**
+      - apps/api/**
+      - packages/contracts/**
+      - packages/domain/**
+      - package.json
+      - package-lock.json
+      - .node-version
+      - .github/workflows/controlled-calling-browser.yml
+permissions:
+  contents: read
+# PR pushes cancel predecessors; attempts are isolated so an old rerun cannot cancel a new
+# push. Main uses commit groups and never requests in-progress cancellation.
+concurrency:
+  group: controlled-calling-browser-${{ github.event_name == 'pull_request' && format('pr-{0}-attempt-{1}', github.event.pull_request.number, github.run_attempt) || format('push-{0}', github.sha) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  browser:
+    name: Controlled calling browser smoke
+    runs-on: ubuntu-24.04
+    # One worker, no retries, 120 s per test. This bounds a hang, not a normal run.
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version-file: .node-version
+      - name: Install
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Hydrate only the pinned embedded PostgreSQL native library links
+        # This exact dependency postinstall restores required .so symlinks omitted by
+        # ignore-scripts. Other dependency scripts remain held.
+        run: npm rebuild @embedded-postgres/linux-x64 --ignore-scripts=false --no-audit --no-fund
+      - name: Installed Chrome and private artifact directory
+        id: prepare
+        # The runner image's own Chrome, resolved to its real executable. There is no
+        # download and no fallback: a missing Chrome fails here. The artifact directory is
+        # under the actor's ~/.jcode/scratch, the rule the fixture enforces, mode 0700.
+        run: |
+          set -euo pipefail
+          chrome="$(command -v google-chrome || true)"
+          [ -n "$chrome" ] || { echo '::error::Installed google-chrome is required on this runner'; exit 1; }
+          chrome="$(readlink -f "$chrome")"
+          test -x "$chrome"
+          "$chrome" --version
+          umask 077
+          artifacts="$HOME/.jcode/scratch/m2-calling-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir -p "$artifacts"
+          printf 'chrome=%s\nartifacts=%s\n' "$chrome" "$artifacts" >> "$GITHUB_OUTPUT"
+      - name: Controlled calling browser acceptance
+        # A clean environment: no runner variables, secrets or provider settings reach the
+        # app, the database lane or Chrome. The fake-only grant and the synthetic marker are
+        # explicit, as the fixture requires. No PostgreSQL service is requested. Admission
+        # still refuses any foreign server before allocating the owned embedded cluster.
+        timeout-minutes: 20
+        working-directory: apps/web
+        env:
+          CHROME: ${{ steps.prepare.outputs.chrome }}
+          ARTIFACTS: ${{ steps.prepare.outputs.artifacts }}
+        run: |
+          set -euo pipefail
+          env -i \
+            HOME="$HOME" PATH="$PATH" LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+            FSS_CALLING_M2_FAKE_PROVIDER_GRANT=workspace-m2-20261106-fake-provider \
+            FSS_SYNTHETIC_LOCAL_DEMO=1 \
+            FSS_LOCAL_BROWSER_EXECUTABLE="$CHROME" \
+            FSS_GLASS_PRIVATE_ARTIFACTS="$ARTIFACTS" \
+            FSS_PROSPECTS_SCREENSHOTS="$ARTIFACTS" \
+            npx --no-install playwright test --config test/support/callingExecutionBrowser.config.ts
+      - name: Upload synthetic screenshots
+        # Only the fixture's synthetic PNGs. Traces, video and profiles are never uploaded,
+        # and the browser profile is removed by the fixture before this step.
+        if: ${{ always() && steps.prepare.outputs.artifacts != '' }}
+        # actions/upload-artifact v4, the pin the other workflows use.
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: controlled-calling-screenshots-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.prepare.outputs.artifacts }}/*.png
+          if-no-files-found: ignore
+          retention-days: 7

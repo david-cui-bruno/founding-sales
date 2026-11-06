@@ -1,16 +1,16 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
 import { access, chmod, mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { chromium, type BrowserContext } from 'playwright/test';
+import { hasExplicitLaneGrant, privateArtifactsDirectory, processCommands } from './soleDisposableLane.ts';
 
 /** Own one installed Chrome process and one private profile per acceptance case.
  * No browser allocation occurs during module import or source checking. */
 export async function launchGlassContext() {
-  assert.equal(process.env['FSS_GLASS_WORKSPACE_EXCLUSIVE_LANE'], '783');
+  assert(hasExplicitLaneGrant(), 'Explicit sole-lane or M2 fake-provider grant required before launching Chrome');
   const executablePath = process.env['FSS_LOCAL_BROWSER_EXECUTABLE'];
-  const directory = process.env['FSS_GLASS_PRIVATE_ARTIFACTS'];
-  assert(executablePath && directory && directory.startsWith('/Users/davidcui824/.jcode/scratch/'));
+  assert(executablePath, 'Use the installed, explicitly selected Chrome');
+  const directory = privateArtifactsDirectory();
   await mkdir(directory, { recursive: true, mode: 0o700 });
   await chmod(directory, 0o700);
   const profile = await mkdtemp(join(directory, 'chrome-profile-'));
@@ -19,7 +19,7 @@ export async function launchGlassContext() {
     context = await chromium.launchPersistentContext(profile, { executablePath, headless: true, ignoreHTTPSErrors: true, viewport: { width: 1440, height: 1000 }, serviceWorkers: 'block' });
     context.setDefaultTimeout(15_000);
     const owned = context;
-    const processes = execFileSync('ps', ['-axo', 'pid,command'], { encoding: 'utf8' }).split('\n').filter(line => line.includes(`--user-data-dir=${profile}`));
+    const processes = processCommands().split('\n').filter(line => line.includes(`--user-data-dir=${profile}`));
     const pids = processes.map(line => Number(line.trim().split(/\s+/u)[0]));
     assert(pids.length > 0 && pids.every(Number.isSafeInteger), 'Exact owned Chrome PID required');
     console.log('GLASS783_CHROME_REGISTERED', JSON.stringify({ executablePath, profile, pids, headless: true }));

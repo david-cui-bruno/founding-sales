@@ -1,6 +1,6 @@
 # Single-workspace implementation roadmap
 
-November 5, 2026. Parent [#939](https://github.com/david-cui-bruno/founding-sales/issues/939), under [#783](https://github.com/david-cui-bruno/founding-sales/issues/783). Design direction is approved; real-product cutover is not implemented. [Design system](workspace-design-system.md) owns visual/interaction rules; [selling roadmap](../sourcing/roadmap-20261007.md) owns business priorities; [current state](../operations/current-state.md) owns dated runtime observations. This roadmap supersedes #939's earlier unordered checklist and prototype shortcuts, not domain safeguards.
+November 5, 2026. Parent [#939](https://github.com/david-cui-bruno/founding-sales/issues/939), under [#783](https://github.com/david-cui-bruno/founding-sales/issues/783). Design direction is approved; real-product cutover is not released. [Design system](workspace-design-system.md) owns visual/interaction rules; [selling roadmap](../sourcing/roadmap-20261007.md) owns business priorities; [current state](../operations/current-state.md) owns dated runtime observations. This roadmap supersedes #939's earlier unordered checklist and prototype shortcuts, not domain safeguards.
 
 ## Decisions settled
 
@@ -23,6 +23,9 @@ Each milestone is an end-to-end usable slice with real data, not a layer-only sc
 | **M8 — Integrated cutover** | Complete retained-capability map, delete superseded views/CSS/obsolete-only tests, journeys/docs updated, normal release | All shipped scopes and risk reviews | Real browser completes daily queue → conversation → outcome → follow-through → deal, with signed local acceptance and protected hosted smoke; no orphaned feature or fake fallback |
 
 M0 design and M1 source are merged; M2 is the active product milestone. M1/M2 form the first useful release; M3 the next commercial workflow. M4 is the next sending priority, not postponed behind Social styling. M5/M6 complete follow-through. M7 can progress after shared patterns settle without delaying reply work. M8 means final acceptance, not postponing reviews, removals or production verification until the end.
+
+M2 is locally composed, not accepted: initial types/web1199 passed; review corrections and signed workflow proof remain. A fresh free hosted browser lane preserves exclusive-runtime admission while leaving the unrelated local Cal sandbox untouched. Pattern-only Chrome proof is not full-loop acceptance.
+
 
 ## Existing implementation versus real gaps
 

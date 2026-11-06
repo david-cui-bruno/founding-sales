@@ -31,30 +31,36 @@ test('signed administrator opens the default prepared view and a useful source-b
  const response=await browserRequest(page,'/sourcing/prepared-prospects/list',{body:{offset:0}});expect(response).toMatchObject({status:200});
  const initial=preparedProspectListSchema.parse(response.body);expect(initial.prospects).toHaveLength(3);
  const grouped=page.getByRole('group',{name:'Records with the same website',exact:true});await expect(grouped).toBeVisible();
- await expect(grouped.getByRole('heading',{name:fixture.label,exact:true})).toBeVisible();await expect(grouped.getByRole('heading',{name:sameWebsite.label,exact:true})).toBeVisible();
- await expect(grouped.getByRole('link',{name:fixture.website,exact:true})).toHaveCount(2);
- await expect(page.getByText('2 prepared · 1 need research on this page.',{exact:false})).toBeVisible();
- await grouped.getByRole('button',{name:`Open company brief for ${sameWebsite.label}`,exact:true}).click();
- const alternative=page.getByRole('article',{name:'Prepared company brief'});await expect(alternative.getByRole('heading',{name:sameWebsite.label,exact:true})).toBeVisible();
- await alternative.getByText('Source and record details',{exact:true}).click();await expect(alternative.getByText(`Candidate ${sameWebsite.candidateId} · Revision 1 · Run ${sameWebsite.runId}`,{exact:true})).toBeVisible();
- await page.getByRole('button',{name:'Back to companies',exact:true}).click();
+await expect(grouped.getByRole('button',{name:`Open company brief for ${fixture.label}`,exact:true})).toBeVisible();await expect(grouped.getByRole('button',{name:`Open company brief for ${sameWebsite.label}`,exact:true})).toBeVisible();
+await expect(page.getByText('2 prepared · 1 need research on this page.',{exact:false})).toBeVisible();
+// The exact listed record must carry its run; the diagnostics are checked against that exact target.
+const sameTarget=initial.prospects.find(row=>row.target.candidateId===sameWebsite.candidateId)?.target;if(!sameTarget||sameTarget.runId===null)throw Error('The same-website record must be listed with its exact run');
+await grouped.getByRole('button',{name:`Open company brief for ${sameWebsite.label}`,exact:true}).click();
+const alternative=page.getByRole('article',{name:'Prepared company brief'});await expect(alternative.getByRole('heading',{name:sameWebsite.label,exact:true})).toBeVisible();
+// The brief selects the exact conversation beside the still-mounted list; research grants no call or reply authority.
+await expect(page.getByRole('region',{name:'Current calling brief'})).toBeVisible();await expect(page.getByRole('complementary',{name:'Company research list',exact:true})).toBeVisible();await expect(grouped).toBeVisible();
+await expect(page.getByRole('button',{name:'Open in Calling'})).toHaveCount(0);await expect(page.getByRole('button',{name:'Call in browser',exact:true})).toHaveCount(0);await expect(page.getByRole('region',{name:'Browser call execution'})).toHaveCount(0);
+// Retained passages and technical record details live in the Sources view.
+await page.getByRole('navigation',{name:'Company detail views',exact:true}).getByRole('button',{name:'Sources',exact:true}).click();await alternative.getByRole('button',{name:'Source diagnostics',exact:true}).click();const diagnostics=page.getByRole('dialog',{name:'Source diagnostics',exact:true});await expect(diagnostics).toContainText(sameWebsite.candidateId);await expect(diagnostics).toContainText(sameTarget.runId);await expect(diagnostics.locator('dt:has-text("Revision") + dd')).toHaveText('1');
+await diagnostics.getByRole('button',{name:'Close',exact:true}).click();await expect(diagnostics).toHaveCount(0);
  const selected=initial.prospects.find(row=>row.target.candidateId===fixture.candidateId)!;expect(selected.state).toBe('prepared');
  await page.getByRole('button',{name:`Open company brief for ${selected.displayName}`,exact:true}).click();
- const brief=page.getByRole('article',{name:'Prepared company brief'});await expect(brief).toBeVisible();
+ await page.getByRole('navigation',{name:'Company detail views',exact:true}).getByRole('button',{name:'Sources',exact:true}).click();const brief=page.getByRole('article',{name:'Prepared company brief'});await expect(brief).toBeVisible();
  await expect(brief.getByText(`${fixture.name} manages residential homes in Boston, Massachusetts.`,{exact:true})).toBeVisible();
  await expect(brief.getByText('This independently operated franchise office serves Boston. National network totals are not this office portfolio.',{exact:true})).toBeVisible();
  await expect(brief.getByText('Intact retained passages are shown, but source coverage is incomplete.',{exact:false})).toBeVisible();
- await expect(brief.getByText('Discovery label; company identity is unverified.',{exact:true})).toBeVisible();
- await expect(brief.getByText('Research context only.',{exact:false})).toBeVisible();
+await expect(brief.getByText('Discovery label; company identity is unverified.',{exact:true})).toBeVisible();await expect(brief.getByRole('region',{name:'Discovery hints',exact:true})).toContainText('do not confirm the business name, office location or service market');
+await expect(brief.getByText('Research context only.',{exact:false})).toBeVisible();
  const read=await browserRequest(page,'/sourcing/prepared-prospects/read',{body:selected.target});expect(read.status).toBe(200);
  expect(preparedProspectBriefSchema.parse(read.body)).toMatchObject({target:selected.target,contactAuthority:'not_granted'});
- await brief.getByText('Source and record details',{exact:true}).click();await expect(brief.getByText(new RegExp(fixture.observations[0]!.id,'u')).first()).toBeVisible();
- await brief.getByText('Source and record details',{exact:true}).click();
+await brief.getByRole('button',{name:'Source diagnostics',exact:true}).click();await expect(diagnostics).toContainText(fixture.observations[0]!.id);await diagnostics.getByRole('button',{name:'Close',exact:true}).click();await expect(diagnostics).toHaveCount(0);
  const screenshot=process.env['FSS_PREPARED_PROSPECTS_SCREENSHOTS'];if(screenshot){await mkdir(screenshot,{recursive:true});await page.evaluate(()=>{if(document.activeElement instanceof HTMLElement)document.activeElement.blur();scrollTo(0,0);});await page.screenshot({path:`${screenshot}/prepared-company-desktop.png`,fullPage:true});}
  await page.setViewportSize({width:390,height:844});
  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
  if(screenshot){await page.evaluate(()=>scrollTo(0,0));await page.screenshot({path:`${screenshot}/prepared-company-mobile.png`,fullPage:true});}
- await page.getByRole('button',{name:'Back to companies',exact:true}).click();await page.getByRole('button',{name:'Refresh companies',exact:true}).click();
+// At 390px the selected company folds the list away; the real toggle brings it back before the list is refreshed.
+const chooseCompany=page.getByRole('button',{name:'Choose company',exact:true});await expect(chooseCompany).toBeVisible();await chooseCompany.click();
+await page.getByRole('button',{name:'Refresh companies',exact:true}).click();
  await expect(page.getByRole('button',{name:`Open company brief for ${selected.displayName}`,exact:true})).toBeVisible();
  expect(await preparedProspectsBusinessSnapshot(await context())).toEqual(before);expect(app.runtimeRequests()).toBeGreaterThan(0);
  await page.reload();await page.getByRole('button',{name:'Prospects',exact:true}).click();await expect(page.getByRole('heading',{name:'Prepared companies',exact:true})).toBeVisible();

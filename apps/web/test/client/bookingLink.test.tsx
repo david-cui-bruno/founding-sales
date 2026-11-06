@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { BrowserClient } from '../../src/client/BrowserClient.ts';
 import { BrowserSettings } from '../../src/client/BrowserSettings.tsx';
 
@@ -12,6 +12,8 @@ function setup(role: 'admin' | 'salesperson', stored: string | null = null, refu
   const commands: Record<string, unknown>[] = [];
   const send = vi.fn<typeof fetch>(async (url, init) => {
     if (url === '/browser/session') return json(session);
+    if (url === '/browser/api/calling/setup') return json({ callingProvider: { provider: 'tel', version: 0 }, telephonyBudget: { dailyCeilingCents: 0, maxMinutesPerCall: 30, unitPriceMicros: 14000, version: 0 }, spentTodayCents: 0, configured: false });
+    if (url === '/browser/api/calling-identities') return json({ identities: [] });
     if (url === '/browser/api/settings/booking-link/read') return json({ settingKey: 'booking_link', current: { value: { url: stored }, version: stored === null ? 0 : 1 }, versions: [] });
     if (url === '/browser/api/settings/booking-link/update') {
       commands.push(JSON.parse(String(init?.body)));
@@ -53,7 +55,7 @@ describe('the Settings booking link', () => {
     await vi.waitFor(() => { expect(input.disabled).toBe(false); });
     fireEvent.change(input, { target: { value: 'http://cal.example.test/demo' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save booking link' }));
-    expect(screen.getByRole('status').textContent).toContain('public https link');
+    expect(within(screen.getByRole('region', { name: 'Booking link' })).getByRole('status').textContent).toContain('public https link');
     expect(scope.commands).toHaveLength(0);
   });
 

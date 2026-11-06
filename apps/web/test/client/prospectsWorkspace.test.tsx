@@ -4,7 +4,8 @@ import {priorityFixturePage} from './support/priorityFixture.ts';
 import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { automaticResearchFirmSchema, manualProspectSchema, qualifiedResearchFirmSchema, type CallingSubject } from '@fss/contracts';
+import { automaticResearchFirmSchema, manualProspectSchema, qualifiedResearchFirmSchema } from '@fss/contracts';
+import type { CallingSelection } from '../../src/client/workspaceNavigation.ts';
 import { BrowserClient } from '../../src/client/BrowserClient.ts';
 import { BrowserProspectsWorkspace } from '../../src/client/BrowserProspectsWorkspace.tsx';
 import { BrowserResearchQueue } from '../../src/client/BrowserResearchQueue.tsx';
@@ -24,11 +25,6 @@ const selection = { discoveryCandidateId: id, discoveryRevision: 1, candidateId:
 const qualified = qualifiedResearchFirmSchema.parse({ selection, promotionId: id, source: { provider: 'first_party', release: 'synthetic', recordId: 'record' }, firmName: 'Qualified synthetic Firm', website: proof.website, locality: 'Dallas', region: 'TX', policyVersion: 'native-firm-eligibility-v1', evidenceFingerprint: 'c'.repeat(64), validUntil: proof.validUntil, citations: proof.citations, emailFit: 'eligible', channelAuthority: 'not_granted', maintenanceNeed: 'not_established', firmId: other, ownerUserId: id, nextStep: proof.nextStep, question: proof.question });
 const raw = manualProspectSchema.parse({ candidateId: id, revision: 4, observedName: 'Raw retained observation', website: null, locality: null, region: null, observedPhone: null, phoneBasis: 'unknown', sources: [{ label: 'Exact retained source', url: 'https://example.test/observed', observedAt: at }], sourceNotices: [{ label: 'Retained license', url: null }], retainedAt: at, state: 'new', unknowns: ['Identity unknown'], possibleDuplicateCount: 0, qualification: 'unverified', contactAuthority: 'not_granted' });
 const json = (value: unknown, status = 200): Response => new Response(JSON.stringify(value), { status });
-function deferred() {
-  let resolve!: (value: Response) => void;
-  const promise = new Promise<Response>(yes => { resolve = yes; });
-  return { promise, resolve };
-}
 const queue = (actions: unknown[] = [action, legacy]) => ({ version: 4, workspaceId: id, businessTimeZone: 'America/Chicago', asOf: at, actions, promiseCoverage: { scope: 'current_authorized_work', truncated: false, nextAfterId: null } });
 function setup(kind: 'automatic' | 'qualified' = 'automatic') {
   const values = new Map<string, string>();
@@ -37,7 +33,7 @@ function setup(kind: 'automatic' | 'qualified' = 'automatic') {
   const qualifiedTarget = { ...selection, kind: 'qualified_research', firmId: qualified.firmId, promotionId: qualified.promotionId, evidenceFingerprint: qualified.evidenceFingerprint };
   let response: unknown = kind === 'automatic' ? queue() : queue([{ ...action, subject: qualified.firmName, reason: 'qualified_research_ready', target: qualifiedTarget }]), failQueue = false, lost = false;
   let rows = [raw];
-  let delayed: ReturnType<typeof deferred> | undefined;
+  let delayed: PromiseWithResolvers<Response> | undefined;
   const requests: Array<{ url: string; body: unknown }> = [];
   const send = vi.fn<typeof fetch>(async (url, init) => {
     if (url === '/browser/session') return json(session);
@@ -59,10 +55,10 @@ function setup(kind: 'automatic' | 'qualified' = 'automatic') {
   });
   const randomUUID = vi.fn(() => crypto.randomUUID());
   const client = new BrowserClient({ fetch: send, storage, navigate: vi.fn(), randomUUID });
-  return { client, send, requests, storage, randomUUID, session, values, rows: (value: typeof rows) => { rows = value; }, fail: () => { failQueue = true; }, empty: () => { response = queue([legacy]); }, lose: () => { lost = true; }, delay: () => { delayed = deferred(); return delayed; } };
+  return { client, send, requests, storage, randomUUID, session, values, rows: (value: typeof rows) => { rows = value; }, fail: () => { failQueue = true; }, empty: () => { response = queue([legacy]); }, lose: () => { lost = true; }, delay: () => { delayed = Promise.withResolvers<Response>(); return delayed; } };
 }
-function renderQualified(client:BrowserClient,strict=false,onOpenCalling?: (subject:CallingSubject)=>void){
-  const view=render(strict?<StrictMode><BrowserProspectsWorkspace client={client} {...(onOpenCalling?{onOpenCalling}:{})}/></StrictMode>:<BrowserProspectsWorkspace client={client} {...(onOpenCalling?{onOpenCalling}:{})}/>);
+function renderQualified(client:BrowserClient,strict=false,onSelectionChange?: (selection:CallingSelection|null)=>void){
+  const view=render(strict?<StrictMode><BrowserProspectsWorkspace client={client} {...(onSelectionChange?{onSelectionChange}:{})}/></StrictMode>:<BrowserProspectsWorkspace client={client} {...(onSelectionChange?{onSelectionChange}:{})}/>);
   fireEvent.click(screen.getByRole('button',{name:'Qualified publications'}));
   return view;
 }
@@ -78,7 +74,7 @@ describe('prepared Prospects workspace, pure mounted composition', () => {
     await screen.findByText(proof.firmName); await ready();
     expect(screen.getByText('1 source-backed research items in this read · Not a callable count.')).toBeTruthy();
     expect(screen.queryByText(legacy.subject)).toBeNull();
-    expect(screen.queryByRole('button', { name: /pause|refill|start calling/iu })).toBeNull();
+    expect(screen.queryByRole('button', { name: /refill|start calling|call in browser/iu })).toBeNull();
     expect(screen.getByText('Qualified selection and existing research requests').closest('details')?.open).toBe(false);
     expect(s.requests).toEqual([{ url: '/browser/api/today/actions/v4?include=callingPreparation', body: undefined }]);
     expect(s.randomUUID).not.toHaveBeenCalled(); expect(s.storage.setItem).not.toHaveBeenCalled();
@@ -162,12 +158,12 @@ describe('prepared Prospects workspace, pure mounted composition', () => {
     await act(async () => { late.resolve(json({ version: 4, target, research: null, automaticResearch: proof })); });
     expect(screen.queryByRole('region', { name: 'Current automatic research proof' })).toBeNull();
     if (kind === 'navigate') expect(screen.getByRole('heading', { name: raw.observedName })).toBeTruthy();
-    else expect(screen.getByText(/Sign in to read/u)).toBeTruthy();
+    else expect(screen.queryByRole('button', { name: 'Review current research' })).toBeNull();
     await act(async () => { s.client.dispose(); });
   });
   it('unmount during pre-dispatch refresh prevents the abandoned read', async () => {
     const s = setup(); await s.client.refresh();
-    const late = deferred(); s.send.mockImplementation(async () => await late.promise);
+    const late = Promise.withResolvers<Response>(); s.send.mockImplementation(async () => await late.promise);
     const view = render(<BrowserResearchQueue client={s.client} />); view.unmount();
     await act(async () => { late.resolve(json(s.session)); });
     expect(s.send.mock.calls.filter(([url]) => url !== '/browser/session')).toHaveLength(0);
@@ -186,7 +182,7 @@ describe('prepared Prospects workspace, pure mounted composition', () => {
   });
 });
 
-describe('Prospects to Calling exact navigation composition', () => {
+describe('Prospects tools to exact conversation selection composition', () => {
   it('expired prepared proof cannot open a brief even while the session remains current', async () => {
     const s = setup(), open = vi.fn(); s.session.expiresAt = '2026-10-29T00:00:00.000Z';
     await s.client.refresh(); renderQualified(s.client,false,open); await ready();

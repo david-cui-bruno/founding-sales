@@ -17,20 +17,15 @@ const other = '00000000-0000-4000-8000-000000000002';
 const card = { firmId: id, firmName: '<private firm>', lane: 'reply', dueAt: '2026-10-25T12:00:00.000Z', counts: { replies: 2, callsDue: 0, emailsDue: 1 } };
 const today = { workspaceId: id, snapshotDate: '2026-10-25', businessTimeZone: 'America/New_York', cards: [card] };
 const json = (value: unknown, status = 200): Response => new Response(JSON.stringify(value), { status });
-function deferred() {
-  let resolve!: (response: Response) => void;
-  const promise = new Promise<Response>(yes => { resolve = yes; });
-  return { promise, resolve };
-}
 const clients: BrowserClient[] = [];
 function setup() {
   let status: 'signed_in' | 'signed_out' = 'signed_in';
   let revision = 'one', role: 'admin' | 'member' = 'admin';
   let todayAnswer: unknown = today;
   let todayStatus = 200;
-  let todayWait: ReturnType<typeof deferred> | undefined;
-  let sessionWait: ReturnType<typeof deferred> | undefined;
-  let firmWait: ReturnType<typeof deferred> | undefined;
+  let todayWait: PromiseWithResolvers<Response> | undefined;
+  let sessionWait: PromiseWithResolvers<Response> | undefined;
+  let firmWait: PromiseWithResolvers<Response> | undefined;
   let signoutFails = false;
   const navigate = vi.fn();
   const send = vi.fn<typeof fetch>(async url => {
@@ -58,9 +53,9 @@ function setup() {
   return { client, send, navigate,
     answer: (answer: unknown, code = 200) => { todayAnswer = answer; todayStatus = code; },
     anonymous: () => { status = 'signed_out'; }, changeRevision: () => { revision = 'two'; }, member: () => { role = 'member'; },
-    delayToday: () => { todayWait = deferred(); return todayWait; },
-    delaySession: () => { sessionWait = deferred(); return sessionWait; },
-    delayFirm: () => { firmWait = deferred(); return firmWait; },
+    delayToday: () => { todayWait = Promise.withResolvers<Response>(); return todayWait; },
+    delaySession: () => { sessionWait = Promise.withResolvers<Response>(); return sessionWait; },
+    delayFirm: () => { firmWait = Promise.withResolvers<Response>(); return firmWait; },
     uncertainLogout: () => { signoutFails = true; },
   };
 }
@@ -94,39 +89,36 @@ describe('issue787 mounted real-client shell', () => {
     expect(screen.getByRole('region', { name: 'Retained public conversations' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Read retained public threads' }).hasAttribute('disabled')).toBe(false);
     expect(screen.queryByRole('textbox', { name: 'Private social text' })).toBeNull();
-    navigate('Calling');
-    expect(screen.getByRole('heading', { name: 'Your next conversation starts with context.' })).toBeTruthy();
+    navigate('Prospects');
+    expect(screen.getByRole('heading', { name: 'Prospects', level: 1 })).toBeTruthy();
     expect(screen.queryByText('Unsaved private text')).toBeNull();
-    await waitFor(() => expect(s.send.mock.calls.filter(([url]) => url === '/browser/api/calling/setup')).toHaveLength(1));
-    await waitFor(()=>expect(s.send.mock.calls.filter(([url])=>url==='/browser/api/calling-identities')).toHaveLength(1));
+    await waitFor(() => expect(s.send.mock.calls.filter(([url]) => url === '/browser/api/sourcing/prepared-prospects/list')).toHaveLength(2));
     const routes = s.send.mock.calls.map(([url]) => String(url));
     const preparedReads=s.send.mock.calls.filter(([url])=>url==='/browser/api/sourcing/prepared-prospects/list');
-    expect(preparedReads).toHaveLength(1);
-    expect(preparedReads[0]?.[1]?.method).toBe('POST');
-    expect(JSON.parse(String(preparedReads[0]?.[1]?.body))).toEqual({offset:0});
+    expect(preparedReads.map(([,init])=>[init?.method,JSON.parse(String(init?.body))])).toEqual([['POST',{offset:0}],['POST',{offset:0}]]);
     expect(routes.filter(url => url === '/browser/api/social/private-drafts/list')).toHaveLength(1);
-    const setupReads = s.send.mock.calls.filter(([url]) => url === '/browser/api/calling/setup');
-    expect(setupReads).toHaveLength(1);
-    expect(setupReads.every(([, init]) => (init?.method ?? 'GET') === 'GET' && init?.body === undefined)).toBe(true);
-    const identityReads=s.send.mock.calls.filter(([url])=>url==='/browser/api/calling-identities');
-    expect(identityReads).toHaveLength(1);expect(identityReads.every(([,init])=>(init?.method??'GET')==='GET'&&init?.body===undefined)).toBe(true);
+    // Browser calling setup and the calling identity are Settings or selected-company reads, never a bare Prospects mount.
+    expect(routes).not.toContain('/browser/api/calling/setup');
+    expect(routes).not.toContain('/browser/api/calling-identities');
   });
-  it('mounts only real Today, escapes content and uses the shared five destinations', async () => {
+  it('mounts only real Today, escapes content and uses the shared four destinations', async () => {
     const s = setup(); render(<BrowserApp client={s.client} />);
     await screen.findByText(card.firmName);
-    expect(within(screen.getByRole('navigation')).getAllByRole('button').map(button => button.textContent)).toEqual(['Today', 'Prospects', 'Calling', 'Email', 'Social']);
+    expect(within(screen.getByRole('navigation')).getAllByRole('button').map(button => button.textContent)).toEqual(['Today', 'Prospects', 'Email', 'Social']);
     expect(within(screen.getByRole('navigation')).getByRole('button', { name: 'Today' }).getAttribute('aria-current')).toBe('page');
     expect(s.send.mock.calls.every(([url]) => url === '/browser/session' || String(url).startsWith('/browser/api/today?'))).toBe(true);
     expect(screen.queryByRole('heading', { name: 'Replies' })).toBeNull();
     expect(screen.queryByRole('heading', { name: /social/iu })).toBeNull();
   });
-  it('keeps calling honest and dispatches no readiness/provider/dial request', async () => {
+  it('keeps Prospects honest and dispatches no selection/readiness/provider/dial request', async () => {
     const s = setup(); render(<BrowserApp client={s.client} />); await screen.findByText(card.firmName);
-    const count = s.send.mock.calls.length; navigate('Calling');
-    expect(screen.getByRole('heading', { name: 'Your next conversation starts with context.' })).toBeTruthy();
+    const count = s.send.mock.calls.length; navigate('Prospects');
+    expect(screen.getByRole('heading', { name: 'Prospects', level: 1 })).toBeTruthy();
+    await screen.findByRole('region', { name: 'Prepared company research' });
+    expect(screen.queryByRole('region', { name: 'Current calling brief' })).toBeNull();
     expect(screen.queryByRole('button', { name: /start call/iu })).toBeNull();
     expect(screen.queryByText(card.firmName)).toBeNull();
-    expect(s.send.mock.calls.slice(count).every(([url]) => url === '/browser/session' || url === '/browser/api/today/actions/v4?include=callingPreparation')).toBe(true);
+    expect(s.send.mock.calls.slice(count).every(([url, init]) => url === '/browser/session' || (url === '/browser/api/sourcing/prepared-prospects/list' && init?.method === 'POST'))).toBe(true);
     expect(document.activeElement).toBe(screen.getByRole('main'));
   });
   it('switches day/night in the shell and settings without storing private or preference state', async () => {
@@ -143,10 +135,12 @@ describe('issue787 mounted real-client shell', () => {
   });
   it('supports number navigation and settings keyboard shortcut, not typing or modifiers', async () => {
     const s = setup(); render(<BrowserApp client={s.client} />); await screen.findByText(card.firmName);
-    fireEvent.keyDown(document.body, { key: '3' });
-    expect(screen.getByRole('heading', { name: 'Calling' })).toBeTruthy();
+    fireEvent.keyDown(document.body, { key: '2' });
+    expect(screen.getByRole('heading', { name: 'Prospects', level: 1 })).toBeTruthy();
+    fireEvent.keyDown(document.body, { key: '5' });
+    expect(screen.getByRole('heading', { name: 'Prospects', level: 1 })).toBeTruthy();
     fireEvent.keyDown(document.body, { key: '1', ctrlKey: true });
-    expect(screen.getByRole('heading', { name: 'Calling' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Prospects', level: 1 })).toBeTruthy();
     fireEvent.keyDown(document.body, { key: ',', metaKey: true });
     expect(screen.getByRole('heading', { name: 'Settings' })).toBeTruthy();
     const input = document.createElement('input'); document.body.append(input);
@@ -217,7 +211,7 @@ describe('issue787 mounted real-client shell', () => {
   });
   it('ignores late Today after page navigation, then loads a fresh Today on return', async () => {
     const s = setup(); const held = s.delayToday(); render(<BrowserApp client={s.client} />); await screen.findByText('Loading Today…');
-    navigate('Calling'); await act(async () => { held.resolve(json(today)); });
+    navigate('Prospects'); await act(async () => { held.resolve(json(today)); });
     expect(screen.queryByText(card.firmName)).toBeNull(); navigate('Today'); await screen.findByText(card.firmName);
     expect(s.send.mock.calls.filter(([url]) => String(url).startsWith('/browser/api/today?'))).toHaveLength(2);
   });
@@ -225,13 +219,13 @@ describe('issue787 mounted real-client shell', () => {
     const s = setup(); const held = s.delayFirm(); render(<BrowserApp client={s.client} />); await screen.findByText(card.firmName);
     fireEvent.click(screen.getByRole('button', { name: `Open ${card.firmName}` }));
     await waitFor(() => { expect(s.send.mock.calls.some(([url]) => url === '/browser/api/crm/firm-page-v3')).toBe(true); });
-    navigate('Calling'); await act(async () => { held.resolve(json({})); });
-    expect(screen.getByRole('heading', { name: 'Calling' })).toBeTruthy();
+    navigate('Prospects'); await act(async () => { held.resolve(json({})); });
+    expect(screen.getByRole('heading', { name: 'Prospects', level: 1 })).toBeTruthy();
     expect(screen.queryByText(/Current view unavailable/u)).toBeNull();
   });
   it('does not dispatch a Firm read after navigation during its session wait', async () => {
     const s = setup(); render(<BrowserApp client={s.client} />); await screen.findByText(card.firmName);
-    const held = s.delaySession(); fireEvent.click(screen.getByRole('button', { name: `Open ${card.firmName}` })); navigate('Calling');
+    const held = s.delaySession(); fireEvent.click(screen.getByRole('button', { name: `Open ${card.firmName}` })); navigate('Prospects');
     await act(async () => { held.resolve(json({ status: 'signed_in', workspaceId: id, userId: id, deviceId: id, role: 'admin', revision: 'one', csrfToken: 'c'.repeat(40), expiresAt: new Date(Date.now() + 120_000).toISOString() })); });
     expect(s.send.mock.calls.some(([url]) => url === '/browser/api/crm/firm-page-v3')).toBe(false);
   });

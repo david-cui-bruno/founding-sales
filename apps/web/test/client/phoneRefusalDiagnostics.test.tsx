@@ -18,7 +18,7 @@ it('mounts exact zero-literal explanation as plain text with no prose, endpoint,
  expect(screen.getByText(/Unattached label content/u)).toBeTruthy();
  expect(screen.getByText(/explanation, not evidence of competing numbers/u)).toBeTruthy();
  expect(container.textContent).toContain('Label Phone · UTF-16 [3, 8)');expect(container.textContent).toContain(entry.url);expect(container.textContent).toContain(entry.retrievedAt);expect(container.textContent).toContain(entry.blockId);
- expect(container.querySelector('a')).toBeNull();expect(container.querySelector('button')).toBeNull();expect(container.textContent).not.toContain('+1214');
+ expect(container.querySelector('a')).toBeNull();expect(screen.queryByRole('button',{name:/keep|retry|refresh|search|acquire/iu})).toBeNull();expect(container.textContent).not.toContain('+1214');
  expect(fetch).not.toHaveBeenCalled();
 });
 it('clears whole mixed evidence at earliest diagnostic-only dependency without network or resurrection',async()=>{

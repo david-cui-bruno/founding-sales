@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import {priorityFixturePage} from './support/priorityFixture.ts';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { chooseWorkspace, workspaceChoiceDisabled } from './support/workspaceChoice.ts';
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { webcrypto } from 'node:crypto';
 import { TextEncoder } from 'node:util';
 import { callingSetupSchema, callingWrapInputSchema } from '@fss/contracts';
@@ -9,7 +10,7 @@ import { BrowserApp } from '../../src/client/BrowserApp.tsx';
 import { BrowserToday } from '../../src/client/BrowserToday.tsx';
 import * as EmailWorkspace from '../../src/client/BrowserEmailWorkspace.tsx';
 import * as ProspectsWorkspace from '../../src/client/BrowserProspectsWorkspace.tsx';
-import type { EmailWorkspaceProps, WorkspaceScreenProps } from '../../src/client/workspaceNavigation.ts';
+import type { EmailWorkspaceProps, ProspectsWorkspaceProps } from '../../src/client/workspaceNavigation.ts';
 import { BrowserClient, PENDING_KEY } from '../../src/client/BrowserClient.ts';
 import { REPLY_PENDING_KEY } from '../../src/client/ReplyAttempt.ts';
 import { CALLING_PENDING_KEY } from '../../src/client/CallingPending.ts';
@@ -80,6 +81,15 @@ afterEach(() => { cleanup(); sessionStorage.clear(); localStorage.clear(); });
 function navigate(name: string): void {
   fireEvent.click(within(screen.getByRole('navigation', { name: 'Workspace sections' })).getByRole('button', { name }));
 }
+/** Prospects opens on Prepared research for an admin; wait for its one bounded read to settle. */
+async function openProspects(send: Mock<typeof fetch>): Promise<void> {
+  navigate('Prospects');
+  const research = await screen.findByRole('region', { name: 'Prepared company research' });
+  await waitFor(() => {
+    expect(send.mock.calls.some(([url]) => url === '/browser/api/sourcing/prepared-prospects/list')).toBe(true);
+    expect(research.getAttribute('aria-busy')).toBe('false');
+  });
+}
 async function openNotes(): Promise<void> {
   fireEvent.click(await screen.findByRole('button', { name: `Open ${firm.name}` }));
   await screen.findByText('Fixture Person');
@@ -127,15 +137,15 @@ describe('BrowserApp real shared presentation', () => {
       render(<BrowserApp client={client} />);
       fireEvent.click(await screen.findByRole('button', { name: `Open ${firm.name}` }));
       fireEvent.click(await screen.findByRole('button', { name: 'Open calling brief' }));
-      await waitFor(() => { expect(screen.getByLabelText('Actual outcome').matches(':disabled')).toBe(false); });
+      await waitFor(() => { expect(workspaceChoiceDisabled('Actual outcome')).toBe(false); });
     }
     it('opens the accepted exact promised draft in the real Email editor with current revision, never sends', async () => {
       const s = setup();
       try {
         await openActualCalling(s.client);
-        fireEvent.change(screen.getByLabelText('Actual outcome'), { target: { value: 'interested' } });
+        chooseWorkspace('Actual outcome', 'interested');
         fireEvent.change(screen.getByLabelText('Private call notes'), { target: { value: 'PRIVATE internal context' } });
-        fireEvent.change(screen.getByLabelText('Next action'), { target: { value: 'promised_email' } });
+        chooseWorkspace('Next action', 'promised_email');
         fireEvent.change(screen.getByLabelText('Promised email subject'), { target: { value: 'Independent promised material' } });
         fireEvent.change(screen.getByLabelText('Promised email body'), { target: { value: 'Independently written recipient-facing body' } });
         fireEvent.click(screen.getByRole('checkbox', { name: /I personally performed/u }));
@@ -161,7 +171,7 @@ describe('BrowserApp real shared presentation', () => {
       const s = setup(); s.loseWrap(); s.loseFollowUp();
       try {
         await openActualCalling(s.client);
-        fireEvent.change(screen.getByLabelText('Actual outcome'), { target: { value: 'no_answer' } });
+        chooseWorkspace('Actual outcome', 'no_answer');
         fireEvent.click(screen.getByRole('checkbox', { name: /I personally performed/u }));
         fireEvent.click(screen.getByRole('button', { name: 'Save outcome' }));
         await screen.findByText('Outcome UNKNOWN for this exact subject.');
@@ -205,37 +215,43 @@ describe('BrowserApp real shared presentation', () => {
       const open = await screen.findByRole('button', { name: 'Open calling brief' });
       const before = send.mock.calls.length;
       fireEvent.click(open);
+      await screen.findByRole('heading', { name: 'Prospects', level: 1 });
       await screen.findByRole('heading', { name: firm.name, level: 2 });
       expect(screen.getByRole('button', { name: 'Check call readiness' })).toBeTruthy();
       expect(screen.getByRole('heading', { name: 'After your conversation' })).toBeTruthy();
-      expect(send.mock.calls.slice(before).every(([url, init]) => url === '/browser/session' || url === '/browser/api/today/actions/v4' || url === '/browser/api/crm/firm-page-v3' || url === '/browser/api/calling-identities' || (url === '/browser/api/calling/setup' && (init?.method ?? 'GET') === 'GET' && init?.body === undefined))).toBe(true);
+      const reads = send.mock.calls.slice(before), allowed = new Set(['/browser/session', '/browser/api/today/actions/v4', '/browser/api/crm/firm-page-v3', '/browser/api/calling-identities', '/browser/api/sourcing/candidates/prospects/priority/list']);
+      expect(reads.filter(([url, init]) => { const path = String(url).split('?')[0]!; return !allowed.has(path) && !(path === '/browser/api/sourcing/prepared-prospects/list' && init?.method === 'POST'); }).map(([url]) => String(url))).toEqual([]);
+      // The activity timeline belongs to the Activity view alone; the current Brief never reads it.
+      expect(reads.some(([, init]) => String(init?.body ?? '').includes('"timeline"'))).toBe(false);
+      expect(reads.some(([url]) => String(url).includes('/calls/'))).toBe(false);
       expect(storage.getItem(PENDING_KEY)).toBeNull();
       expect(sessionStorage.length + localStorage.length).toBe(0);
-      navigate('Email'); navigate('Calling');
+      navigate('Email'); navigate('Prospects');
       await screen.findByRole('heading', { name: firm.name, level: 2 });
       client.dispose();
     });
     it('keeps exact candidate/revision selection across pages and clears it after a new auth epoch', async () => {
-      let oldOpen: WorkspaceScreenProps['onOpenCalling'];
-      const probe = vi.spyOn(ProspectsWorkspace, 'BrowserProspectsWorkspace').mockImplementation(({ onOpenCalling }: WorkspaceScreenProps) => {
-        oldOpen = onOpenCalling;
-        return <><button onClick={() => { onOpenCalling?.({ kind: 'candidate', candidateId: id, expectedCandidateRevision: 7 }); }}>Exact candidate</button><button onClick={() => { onOpenCalling?.({ kind: 'candidate', candidateId: id, expectedCandidateRevision: 0 }); }}>Invalid candidate</button></>;
+      let oldSelect: ProspectsWorkspaceProps['onSelectionChange'];
+      const Real = ProspectsWorkspace.BrowserProspectsWorkspace;
+      const probe = vi.spyOn(ProspectsWorkspace, 'BrowserProspectsWorkspace').mockImplementation((props: ProspectsWorkspaceProps) => {
+        oldSelect = props.onSelectionChange;
+        return <><button onClick={() => { props.onSelectionChange?.({ kind: 'candidate', candidateId: id, expectedCandidateRevision: 7 }); }}>Exact candidate</button><button onClick={() => { props.onSelectionChange?.({ kind: 'candidate', candidateId: id, expectedCandidateRevision: 0 }); }}>Invalid candidate</button><Real {...props} /></>;
       });
       const { client, send } = setup();
       try {
         render(<BrowserApp client={client} />); await screen.findByRole('button', { name: `Open ${firm.name}` });
-        navigate('Prospects'); const before = send.mock.calls.length;
+        await openProspects(send); const before = send.mock.calls.length;
         fireEvent.click(screen.getByRole('button', { name: 'Invalid candidate' }));
-        expect(screen.queryByRole('heading', { name: 'Calling' })).toBeNull(); expect(send).toHaveBeenCalledTimes(before);
+        expect(screen.queryByRole('region', { name: 'Current calling brief' })).toBeNull(); expect(send).toHaveBeenCalledTimes(before);
         fireEvent.click(screen.getByRole('button', { name: 'Exact candidate' }));
         await screen.findByRole('heading', { name: 'Selected retained observation' });
-        await waitFor(() => expect(send.mock.calls.slice(before).filter(([url]) => url === '/browser/api/calling-identities')).toHaveLength(1));
-        expect(send.mock.calls.slice(before).every(([url, init]) => url === '/browser/session' || url === '/browser/api/today/actions/v4' || url === '/browser/api/sourcing/candidates/prospects/priority/list' || url === '/browser/api/sourcing/candidates/prospects/list' || ((url === '/browser/api/calling/setup' || url === '/browser/api/calling-identities') && (init?.method ?? 'GET') === 'GET' && init?.body === undefined))).toBe(true);
-        navigate('Email'); navigate('Calling');
+        await waitFor(() => expect(send.mock.calls.slice(before).some(([url]) => url === '/browser/api/sourcing/candidates/prospects/list')).toBe(true));
+        expect(send.mock.calls.slice(before).every(([url, init]) => url === '/browser/session' || url === '/browser/api/today/actions/v4' || url === '/browser/api/sourcing/candidates/prospects/priority/list' || url === '/browser/api/sourcing/candidates/prospects/list' || url === '/browser/api/sourcing/prepared-prospects/list' || (url === '/browser/api/calling-identities' && (init?.method ?? 'GET') === 'GET' && init?.body === undefined))).toBe(true);
+        navigate('Email'); navigate('Prospects');
         await screen.findByRole('heading', { name: 'Selected retained observation' });
         await act(async () => { client.invalidate(); await client.refresh(); });
-        act(() => { oldOpen?.({ kind: 'candidate', candidateId: id, expectedCandidateRevision: 7 }); });
-        navigate('Calling'); expect(screen.queryByRole('region', { name: 'Current calling brief' })).toBeNull();
+        act(() => { oldSelect?.({ kind: 'candidate', candidateId: id, expectedCandidateRevision: 7 }); });
+        navigate('Prospects'); expect(screen.queryByRole('region', { name: 'Current calling brief' })).toBeNull();
       } finally { probe.mockRestore(); client.dispose(); }
     });
     it('passes memory-only Email selection props and clears them on logout and reauthentication', async () => {
@@ -249,7 +265,7 @@ describe('BrowserApp real shared presentation', () => {
         render(<BrowserApp client={client} />); await screen.findByRole('button', { name: `Open ${firm.name}` });
         navigate('Email'); const before = send.mock.calls.length; fireEvent.click(screen.getByRole('button', { name: 'Choose exact draft' }));
         expect(screen.getByText(`Draft selection: ${id}`)).toBeTruthy(); expect(send).toHaveBeenCalledTimes(before);
-        navigate('Calling'); navigate('Email'); expect(screen.getByText(`Draft selection: ${id}`)).toBeTruthy();
+        await openProspects(send); navigate('Email'); expect(screen.getByText(`Draft selection: ${id}`)).toBeTruthy();
         fireEvent.click(screen.getByRole('button', { name: 'Sign out' })); await screen.findByRole('heading', { name: 'Sign in' });
         await act(async () => { await client.refresh(); });
         act(() => { oldSelect?.(id); }); navigate('Email');
@@ -265,6 +281,39 @@ describe('BrowserApp real shared presentation', () => {
       const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 180_000);
       try { fireEvent.click(open); expect(onOpenCalling).not.toHaveBeenCalled(); expect(send).toHaveBeenCalledTimes(before); }
       finally { clock.mockRestore(); client.dispose(); }
+    });
+  });
+  describe('Settings calling setup', () => {
+    async function expectCallingSetupInSettings(send: Mock<typeof fetch>): Promise<void> {
+      await screen.findByRole('heading', { name: 'Settings', level: 1 });
+      const setupRegion = await screen.findByRole('region', { name: 'Browser calling setup' });
+      await waitFor(() => { expect(within(setupRegion).getByRole('button', { name: 'Enable browser calling' }).hasAttribute('disabled')).toBe(false); });
+      const audio = screen.getByRole('region', { name: 'Audio test' });
+      expect(within(audio).getByRole('button', { name: 'Start audio test' }).hasAttribute('disabled')).toBe(true);
+      const reads = send.mock.calls.filter(([url]) => url === '/browser/api/calling/setup');
+      expect(reads).toHaveLength(1);
+      expect(reads.every(([, init]) => (init?.method ?? 'GET') === 'GET' && init?.body === undefined)).toBe(true);
+      expect(send.mock.calls.some(([url]) => /\/calls\/|\/calling\/(?:execution|audio-test|wrap)|setup\/(?:provider|budget)/u.test(String(url)))).toBe(false);
+    }
+    it('shows the real browser calling setup and audio test to a signed-in user in Settings, starting nothing', async () => {
+      const { client, send } = setup();
+      try {
+        render(<BrowserApp client={client} />); await screen.findByRole('button', { name: `Open ${firm.name}` });
+        expect(screen.queryByRole('region', { name: 'Browser calling setup' })).toBeNull();
+        fireEvent.click(screen.getByRole('button', { name: 'Settings & account' }));
+        await expectCallingSetupInSettings(send);
+      } finally { client.dispose(); }
+    });
+    it('reaches the same Settings setup from Prospects through Calling settings without selecting a company', async () => {
+      const { client, send } = setup();
+      try {
+        render(<BrowserApp client={client} />); await screen.findByRole('button', { name: `Open ${firm.name}` });
+        await openProspects(send);
+        expect(screen.queryByRole('region', { name: 'Browser calling setup' })).toBeNull();
+        fireEvent.click(screen.getByRole('button', { name: 'Calling settings' }));
+        await expectCallingSetupInSettings(send);
+        expect(screen.queryByRole('region', { name: 'Current calling brief' })).toBeNull();
+      } finally { client.dispose(); }
     });
   });
   it('opens Today alone and retains manual prospects and ordinary inventory behind explicit destinations', async () => {
