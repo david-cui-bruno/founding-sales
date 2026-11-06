@@ -11,12 +11,14 @@ import {projectProspectPhoneDiscovery} from '@fss/domain/sourcing/prospectPhoneD
 import {phoneSupplyObservation,phoneSupplyRun} from '../../../../packages/domain/test/sourcing/phoneSupplyFixtures.ts';
 const id='10000000-0000-4000-8000-000000000001',clients:BrowserClient[]=[];
 function fixture(){
- const run=phoneSupplyRun([phoneSupplyObservation(['Office phone: 214-555-0123'])]);run.expires_at=new Date(Date.now()+60000);
+ const literal='214-555-0123',label='Office phone';
+ const run=phoneSupplyRun([phoneSupplyObservation([`${label}: ${literal}`])]);run.expires_at=new Date(Date.now()+60000);
  const evidence=projectProspectPhoneDiscovery(run,Date.now());if(evidence.state!=='observed')throw Error('Expected controlled phone');
  const source=evidence.sources[0]!;if(!('method'in source))throw Error('Expected literal');
  const choice:ManualPhoneChoice={runId:source.runId,observationId:source.observationId,blockId:source.blockId,labelStart:source.labelStart,labelEnd:source.labelEnd,start:source.start,end:source.end,contentHash:source.contentHash,relevantTextHash:source.relevantTextHash};
  const p=manualProspectSchema.parse({candidateId:id,revision:1,observedName:'FICTIONAL Kept818 Company',website:null,locality:'Dallas',region:'TX',observedPhone:evidence.value,phoneBasis:'retained_observation',phoneEvidence:evidence,sources:[{label:'Fictional source',url:null,observedAt:null}],sourceNotices:[],retainedAt:new Date().toISOString(),state:'new',unknowns:['Unverified identity'],possibleDuplicateCount:0,qualification:'unverified',contactAuthority:'not_granted'});
- const phone={value:evidence.value,choice,sourceUrl:source.url,retrievedAt:source.retrievedAt,expiresAt:run.expires_at.toISOString()};return {p,choice,phone};
+ const phone={value:evidence.value,choice,sourceUrl:source.url,retrievedAt:source.retrievedAt,expiresAt:run.expires_at.toISOString()};
+ return {p,choice,phone,privateValues:[evidence.value,literal,label,source.url,new URL(source.url).hostname,p.observedName]};
 }
 function client(fetcher:typeof fetch,role='admin'){
  const wrapped:typeof fetch=async(url,init)=>String(url)==='/browser/session'?Response.json({status:'signed_in',workspaceId:id,userId:id,deviceId:id,role,revision:'one',csrfToken:'c'.repeat(40),expiresAt:new Date(Date.now()+120000).toISOString()}):fetcher(url,init);
@@ -24,6 +26,7 @@ function client(fetcher:typeof fetch,role='admin'){
 }
 afterEach(()=>{cleanup();clients.splice(0).forEach(c=>c.dispose());sessionStorage.clear();localStorage.clear();vi.useRealTimers();});
 it.each([false,true])('saves and current-reads chosen source metadata, with same-UUID unknown recovery=%s',async unknown=>{
+ vi.useFakeTimers({toFake:['Date']});vi.setSystemTime(new Date('2026-11-06T00:57:27.214Z'));
  const f=fixture(),writes:unknown[]=[],reads:unknown[]=[];let attempts=0;
  const c=client(async(url,init)=>{
   const body=JSON.parse(String(init?.body));
@@ -38,7 +41,9 @@ it.each([false,true])('saves and current-reads chosen source metadata, with same
  await screen.findByLabelText('Chosen manual number');
  expect(reads).toEqual([{state:'all',offset:0,candidateId:id,expectedRevision:1,includeManualPhone:true}]);
  expect(writes).toHaveLength(unknown?2:1);if(unknown)expect(writes[1]).toEqual(writes[0]);
- expect(JSON.stringify(writes)).not.toMatch(/214|Office phone|capacity\.example/u);expect(JSON.stringify({...sessionStorage,...localStorage})).not.toMatch(/214|Office phone|capacity\.example/u);
+ for(const serialized of [JSON.stringify(writes),JSON.stringify({...sessionStorage,...localStorage})]){
+  for(const value of f.privateValues)expect(serialized).not.toContain(value);
+ }
 });
 it('offers company saving for a kept prepared-page number exactly as for a discovery-run number',async()=>{
  const f=fixture(),source=f.p.phoneEvidence?.state==='observed'?f.p.phoneEvidence.sources[0]!:null;if(!source||!('method' in source))throw Error('Expected literal');

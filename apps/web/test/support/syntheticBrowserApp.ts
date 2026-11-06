@@ -47,12 +47,12 @@ export function syntheticAssets(assets: BrowserAssets): BrowserAssets {
   return decorated;
 }
 
-export async function startSyntheticBrowser({manualPreparation=false}:{manualPreparation?:boolean}={}) {
+export async function startSyntheticBrowser({manualPreparation=false,rebuildableAssets=false}:{manualPreparation?:boolean;rebuildableAssets?:boolean}={}) {
   requireLocalDemo(process.env);
   const release = await reserveLocalBrowserDatabase();
   let app: ReplyBriefApp | undefined;
   try {
-    app = await startReplyBriefApp({ conversation: syntheticBrowserCase, decorateAssets: manualPreparation?assets=>manualProspectPreparationDemoAssets(syntheticAssets(assets)):syntheticAssets, requestDatabaseRole: 'app_runtime' });
+    app = await startReplyBriefApp({ conversation: syntheticBrowserCase, decorateAssets: manualPreparation?assets=>manualProspectPreparationDemoAssets(syntheticAssets(assets)):syntheticAssets, requestDatabaseRole: 'app_runtime', rebuildableAssets });
     app.setAnswer(scriptedReply);
     // Replace the generic fixture's brief material with literal case A observations.
     const firstInbound = syntheticBrowserCase.messages[0]!;

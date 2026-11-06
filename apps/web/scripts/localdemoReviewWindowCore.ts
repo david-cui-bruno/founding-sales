@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { lstat, readFile, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { localDemoManualPreparation } from './localdemoMode.ts';
+import { localDemoManualPreparation, localDemoRebuild } from './localdemoMode.ts';
 
 export type ReviewReceipt = {
   version: 1;
@@ -29,6 +29,7 @@ export function checkReviewStart(env: NodeJS.ProcessEnv, platform = process.plat
   if (platform !== 'darwin') throw Error('Independent review windows require macOS launchd. Use plain foreground localdemo elsewhere.');
   if (env['FSS_SYNTHETIC_LOCAL_DEMO'] !== '1') throw Error('Explicit FSS_SYNTHETIC_LOCAL_DEMO=1 required');
   localDemoManualPreparation(env);
+  if (localDemoRebuild(env)) throw Error('FSS_LOCAL_DEMO_REBUILD is plain-foreground only: the review window has no interactive terminal. Unset it, or run plain foreground localdemo.');
   if (Object.keys(env).some(key => /^(?:FSS_TEST_(?:POSTGRES_URL|CLUSTER_URL|TEMPLATE_DATABASE)|DATABASE_URL|PGHOST|PGPORT|PGDATABASE|PGUSER|PGPASSWORD|AWS_|GOOGLE_|VERTEX_|FSS_BROWSER_|FSS_PRODUCTION_)/u.test(key) && (key.startsWith('FSS_TEST_') || env[key]))) throw Error('Inherited database/provider/browser configuration refused. Use a clean environment.');
   const minutes = Number(env['FSS_LOCAL_DEMO_MINUTES'] ?? '20');
   if (!Number.isInteger(minutes) || minutes < 1 || minutes > 30) throw Error('Demo lifetime must be 1..30 minutes');

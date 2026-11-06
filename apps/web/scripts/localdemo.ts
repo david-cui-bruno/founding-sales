@@ -2,15 +2,54 @@ import { pathToFileURL } from 'node:url';
 import { access, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createInterface } from 'node:readline';
 import { chromium, type BrowserContext } from 'playwright';
 import { assertSyntheticNoSend, containSyntheticBrowser, signInSyntheticBrowser, startSyntheticBrowser, requireLocalDemo, prepareSyntheticCliDependency } from '../test/support/syntheticBrowserApp.ts';
 import { syntheticBrowserCase, syntheticReplySource } from '../test/support/syntheticBrowserCase.ts';
-import { localDemoManualPreparation } from './localdemoMode.ts';
+import { localDemoManualPreparation, localDemoRebuild } from './localdemoMode.ts';
+
+const rebuildHelp = 'SYNTHETIC_BROWSER_REBUILD_CONTROLS: type r then Enter in this terminal to rebuild the frontend assets from current source. It never reloads, navigates or clears Chrome, the session or any drafts: reload the tab yourself when ready. A browser reload discards memory-only scratch (reply drafts, manual drafts and reviews); saved meeting notes and reports persist until shutdown. Any other input is ignored and changes nothing. A failed build keeps the last good assets. Rebuild does not extend the lifetime, and Ctrl-C still stops and erases the demo.';
+
+interface RebuildControls { dispose(): void }
+
+/** Explicit foreground request only: no file watcher, no injected client, no automatic reload. */
+function startRebuildControls(app: { rebuildAssets(): Promise<void> }): RebuildControls {
+  const lines = createInterface({ input: process.stdin, terminal: false, crlfDelay: Infinity });
+  let active = true;
+  let busy = false;
+  lines.on('line', line => {
+    const command = line.trim();
+    if (!active || command === '') return;
+    if (command !== 'r') {
+      console.error('SYNTHETIC_BROWSER_REBUILD_IGNORED: type r then Enter to rebuild assets. Nothing was changed.');
+      return;
+    }
+    if (busy) {
+      console.error('SYNTHETIC_BROWSER_REBUILD_BUSY: a rebuild is already running. Nothing else was changed.');
+      return;
+    }
+    busy = true;
+    void app.rebuildAssets().then(
+      () => { if (active) console.error('SYNTHETIC_BROWSER_REBUILD_OK: new assets are served at the same origin. Chrome was not touched; reload the tab to use them (this discards memory-only scratch).'); },
+      (error: unknown) => { if (active) console.error('SYNTHETIC_BROWSER_REBUILD_FAILED: last good assets remain served; nothing was changed.', error instanceof Error ? error.message : String(error)); },
+    ).finally(() => { busy = false; });
+  });
+  lines.on('close', () => {
+    if (!active) return;
+    active = false;
+    console.error('SYNTHETIC_BROWSER_REBUILD_CONTROLS_CLOSED: terminal input ended; rebuild is no longer available. The demo and its lifetime are unchanged.');
+  });
+  return { dispose: () => { active = false; lines.close(); } };
+}
 
 // See localdemo.md for the clean-environment command and exact-owned stop policy.
 export async function runLocalDemo(options: { reviewWindow?: boolean; stopCommand?: string; onReady?: (receipt: Record<string, unknown>) => Promise<void>; onStopping?: () => Promise<void> } = {}): Promise<void> {
   requireLocalDemo(process.env);
   const manualPreparation = localDemoManualPreparation(process.env);
+  // Opt-in controls are validated before any signal handler, timer or resource exists.
+  const rebuild = localDemoRebuild(process.env);
+  if (rebuild && options.reviewWindow) throw Error('FSS_LOCAL_DEMO_REBUILD is plain-foreground only: the supervised review window has no interactive terminal.');
+  if (rebuild && !process.stdin.isTTY) throw Error('FSS_LOCAL_DEMO_REBUILD requires an interactive terminal on stdin to type r. Run plain foreground localdemo in a terminal, or unset it.');
   // initdb inherits locale. A clean shell otherwise creates SQL_ASCII on macOS.
   process.env['LC_ALL'] = 'en_US.UTF-8';
   const lifetime = Number(process.env['FSS_LOCAL_DEMO_MINUTES'] ?? '20');
@@ -19,12 +58,12 @@ export async function runLocalDemo(options: { reviewWindow?: boolean; stopComman
   let profile: string | undefined;
   let runtime: Awaited<ReturnType<typeof startSyntheticBrowser>> | undefined;
   let context: BrowserContext | undefined;
+  let controls: RebuildControls | undefined;
   let stopping: Promise<void> | undefined;
   const publishStopping = (): Promise<void> => stopping ??= Promise.resolve().then(() => options.onStopping?.());
   let shutdownRequested = false;
-  let finish = (): void => {};
-  const closed = new Promise<void>(resolve => { finish = resolve; });
-  const requestShutdown = (): void => { shutdownRequested = true; finish(); };
+  const closed = Promise.withResolvers<void>();
+  const requestShutdown = (): void => { shutdownRequested = true; closed.resolve(); };
   const onSignal = (): void => {
     console.error('SYNTHETIC_BROWSER_SHUTDOWN_REQUESTED', JSON.stringify({ duringStartup: runtime === undefined }));
     requestShutdown();
@@ -50,7 +89,7 @@ export async function runLocalDemo(options: { reviewWindow?: boolean; stopComman
     profile = await mkdtemp(join(tmpdir(), 'fss-synthetic-781-chrome-'));
     console.error('SYNTHETIC_BROWSER_STARTING', JSON.stringify({ pid: process.pid, profile, expiresAt }));
     if (cancelled()) return;
-    runtime = await startSyntheticBrowser({ manualPreparation });
+    runtime = await startSyntheticBrowser({ manualPreparation, rebuildableAssets: rebuild });
     // A signal during startup lets existing owners finish safely, then unwinds.
     // It never launches Chrome or announces a ready demo after cancellation.
     if (cancelled()) return;
@@ -90,11 +129,17 @@ export async function runLocalDemo(options: { reviewWindow?: boolean; stopComman
     if (cancelled()) return;
     console.error('SYNTHETIC_BROWSER_DEMO_READY', JSON.stringify(receipt));
     console.error(manualPreparation ? 'Use the labeled Chrome window. The selected prospect is fictional. Prepare and review a manual NO SEND draft, then deliberately record a fictional report only under the simulation instructions. Callback intentions are display-only, not reminders. All data is erased at shutdown.' : 'Use the labeled Chrome window. Fictional input is open in Replies. Generate is an explicit scripted action. Ctrl-C stops and erases this entire disposable demo.');
-    await closed;
+    if (rebuild) {
+      controls = startRebuildControls(runtime.app);
+      console.error(rebuildHelp);
+    }
+    await closed.promise;
+    controls?.dispose();
     await publishStopping();
     await assertSyntheticNoSend(runtime.app);
   } finally {
     clearTimeout(timer);
+    controls?.dispose();
     try { await publishStopping(); }
     finally {
       try { await context?.close(); }
