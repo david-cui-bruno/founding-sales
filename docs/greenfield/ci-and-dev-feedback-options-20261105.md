@@ -1,6 +1,6 @@
 # CI and development feedback: measured bottlenecks and options
 
-November 5, 2026. Native parallel CI is implemented in this change; hosted acceptance and timing remain pending. Research did not activate a paid runner, account or production control. The main model retains screen-design ownership.
+November 5–6, 2026. Native parallel CI passed its first hosted broad PR run; main timing remains pending. No paid runner, account or production control was activated. The main model retains screen-design ownership.
 
 ## Recommendation
 
@@ -31,11 +31,19 @@ The measured critical-path opportunity is overlapping independent work, not shav
 
 The workflow validates the existing selector's output, runs repository typecheck/lint once, and overlaps six isolated machine groups: domain, API, ops, web, worker and the three small packages. Each selected suite runs once; ops remains mandatory, and broad plans require all eight suites. The always-present required `greenfield` aggregate refuses missing, skipped, cancelled, failed or invalid prerequisites. Upgrade, workflow and secret gates remain separate and unchanged. PR cancellation is limited to the same attempt; main runs are not superseded.
 
-The retained-original PostgreSQL authority now recognizes only the hosted `suites` job with `CI_MACHINE=domain`, preserving Linux/hosted-runner, pgvector, matching canonical template/service and local explicit-grant restrictions. The old job identity is not a compatibility alias. Its regression went from two failures before correction to23 passes afterward without allocating PostgreSQL. Four focused CI ops files passed43 checks; repository typecheck, lint, actionlint and workflow budgets passed. An actual selector→CLI publication produced six groups covering all eight suites; aggregate success exited0 while cancelled work and an unselected machine each refused with exit1. Temporary smoke inputs were removed. Combined and security reviews closed; hosted matrix semantics, timing and cancellation/rerun observations still need actual GitHub runs.
+The retained-original PostgreSQL authority now recognizes only the hosted `suites` job with `CI_MACHINE=domain`, preserving Linux/hosted-runner, pgvector, matching canonical template/service and local explicit-grant restrictions. The old job identity is not a compatibility alias. Its regression went from two failures before correction to23 passes afterward without allocating PostgreSQL. Four focused CI ops files passed43 checks; repository typecheck, lint, actionlint and workflow budgets passed. An actual selector→CLI publication produced six groups covering all eight suites; aggregate success exited0 while cancelled work and an unselected machine each refused with exit1. Temporary smoke inputs were removed. Combined/security reviews closed. The real hosted broad matrix, domain PostgreSQL authority and required aggregate all passed; live cancellation/rerun behavior was not independently exercised.
 
-The corrected pre-parallel [PR941 gate](https://github.com/david-cui-bruno/founding-sales/actions/runs/42127508768) took25m36s; this is another serial observation, not the speed of the new matrix. Benchmark PR and main elapsed feedback, each job's duration, aggregate job-minutes and failures before considering a paid pilot.
+The corrected pre-parallel [PR941 serial gate](https://github.com/david-cui-bruno/founding-sales/actions/runs/42127508768) took25m36s. The first [parallel broad PR run42132834751](https://github.com/david-cui-bruno/founding-sales/actions/runs/42132834751) passed all12 jobs on standard free runners:
 
-This CI/source change takes the existing protected `review_prepare`→`reviewed` release route when the useful M1/M2 application bundle is ready. CI-only merges do not publish new application images. Keep the application-only operator's audited CI-byte guard intact; neither a merge nor older images establish the new production baseline. See [the release procedure](../operations/lean-release-workflow.md#reviewed-infrastructure-or-protected-changes). No shell-only M1 release, production dispatch, hold change or spending follows.
+| Metric | Observed first parallel PR |
+| --- | ---: |
+| Full workflow, run start through completion metadata | 9m55s |
+| Longest job, domain | 9m22s |
+| Summed duration of all12 jobs, excluding images workflow | 28m29s |
+
+This is one successful observation, not a controlled benchmark or a reliability guarantee. Parallelism reduces elapsed feedback, not necessarily aggregate runner time. Main timing and later failure observations remain acceptance work before considering a paid pilot.
+
+This CI/source change takes the existing protected `review_prepare`→`reviewed` release route when the useful M1/M2 application bundle is ready. Its domain-config and app-documentation paths also trigger the images workflow; published images are not a production release. Keep the application-only operator's audited CI-byte guard intact; neither a merge nor image publication establishes the new production baseline. See [the release procedure](../operations/lean-release-workflow.md#reviewed-infrastructure-or-protected-changes). No shell-only M1 release, production dispatch, hold change or spending follows.
 
 
 ## Tools and fit
