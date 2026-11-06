@@ -1,7 +1,7 @@
 import {afterEach,expect,it,vi} from 'vitest';
 import config,{phoneRefusalOriginalPgDeferredLocally,requirePhoneRefusalOriginalPgAuthority} from '../../vitest.phoneRefusalOriginal.pg.config.ts';
 const service='postgresql://postgres@127.0.0.1:5432/postgres';
-const hosted=():NodeJS.ProcessEnv=>({CI:'true',GITHUB_ACTIONS:'true',RUNNER_ENVIRONMENT:'github-hosted',RUNNER_OS:'Linux',GITHUB_JOB:'greenfield',FSS_TEST_REQUIRE_PGVECTOR:'1',FSS_TEST_POSTGRES_URL:service,FSS_TEST_CLUSTER_URL:service,FSS_TEST_TEMPLATE_DATABASE:`fss_template_${'a'.repeat(32)}`});
+const hosted=():NodeJS.ProcessEnv=>({CI:'true',GITHUB_ACTIONS:'true',RUNNER_ENVIRONMENT:'github-hosted',RUNNER_OS:'Linux',GITHUB_JOB:'suites',CI_MACHINE:'domain',FSS_TEST_REQUIRE_PGVECTOR:'1',FSS_TEST_POSTGRES_URL:service,FSS_TEST_CLUSTER_URL:service,FSS_TEST_TEMPLATE_DATABASE:`fss_template_${'a'.repeat(32)}`});
 afterEach(()=>vi.unstubAllEnvs());
 it('retained PG guard admits explicit local grant, but CI or service variables alone cannot replace it',()=>{
  expect(()=>requirePhoneRefusalOriginalPgAuthority({FSS_PHONE_REFUSAL_ORIGINAL_PG_GRANT:'retained-only'},'darwin')).not.toThrow();
@@ -10,7 +10,7 @@ it('retained PG guard admits explicit local grant, but CI or service variables a
 it('retained PG guard admits canonical hosted service after matching canonical globalSetup, without mutating its environment',()=>{
  const env=hosted(),before={...env};expect(()=>requirePhoneRefusalOriginalPgAuthority(env,'linux')).not.toThrow();expect(env).toEqual(before);
 });
-it.each(['CI','GITHUB_ACTIONS','RUNNER_ENVIRONMENT','RUNNER_OS','GITHUB_JOB','FSS_TEST_REQUIRE_PGVECTOR','FSS_TEST_POSTGRES_URL','FSS_TEST_CLUSTER_URL','FSS_TEST_TEMPLATE_DATABASE'])('retained PG guard refuses incomplete hosted authority: %s',key=>{
+it.each(['CI','GITHUB_ACTIONS','RUNNER_ENVIRONMENT','RUNNER_OS','GITHUB_JOB','CI_MACHINE','FSS_TEST_REQUIRE_PGVECTOR','FSS_TEST_POSTGRES_URL','FSS_TEST_CLUSTER_URL','FSS_TEST_TEMPLATE_DATABASE'])('retained PG guard refuses incomplete hosted authority: %s',key=>{
  const env=hosted();delete env[key];expect(()=>requirePhoneRefusalOriginalPgAuthority(env,'linux')).toThrow('Fresh Root');
 });
 it.each(['not-a-url','postgresql://postgres@production.example.test:5432/postgres','postgresql://postgres@127.0.0.1:5433/postgres','postgresql://postgres@127.0.0.1:5432/live'])('retained PG guard refuses a noncanonical service destination',url=>{
@@ -18,6 +18,9 @@ it.each(['not-a-url','postgresql://postgres@production.example.test:5432/postgre
 });
 it.each([{FSS_TEST_CLUSTER_URL:`${service}?different=1`},{FSS_TEST_TEMPLATE_DATABASE:'not-a-canonical-template'},{RUNNER_ENVIRONMENT:'self-hosted'}])('retained PG guard refuses mismatched setup or runner authority',change=>{
  expect(()=>requirePhoneRefusalOriginalPgAuthority({...hosted(),...change},'linux')).toThrow('Fresh Root');
+});
+it.each([{GITHUB_JOB:'greenfield'},{CI_MACHINE:'ops'}])('retained PG guard refuses another job or matrix allocation',change=>{
+ expect(()=>requirePhoneRefusalOriginalPgAuthority({...hosted(),...change},'linux')).toThrow();
 });
 it('retained isolated config still refuses before globalSetup without local grant, including hosted-looking variables',async()=>{
  for(const [key,value] of Object.entries(hosted()))vi.stubEnv(key,value);
