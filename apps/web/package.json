@@ -7,6 +7,8 @@
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run --config vitest.config.ts",
+    "dev:test": "vitest --watch --config vitest.config.ts",
+    "dev:types": "tsc --noEmit --watch --incremental --tsBuildInfoFile ../../node_modules/.cache/tsbuildinfo/web.tsbuildinfo -p tsconfig.json",
     "test:e2e": "playwright test --config playwright.config.ts",
     "localdemo": "node --experimental-transform-types --disable-warning=ExperimentalWarning scripts/localdemo.ts",
     "dev:patterns": "node --experimental-transform-types scripts/pattern-gallery.ts"
