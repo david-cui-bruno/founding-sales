@@ -36,7 +36,7 @@ it('shows all supported retained alternatives without choosing a canonical phone
   expect(within(entries[index]!).getByRole('link',{name:url}).getAttribute('href')).toBe(url);
   expect(entries[index]!.querySelector('time')?.getAttribute('datetime')).toBe(new Date(now-1000).toISOString());
  }
- expect(view.container.querySelector('a[href^="tel:"]')).toBeNull();expect(screen.queryByRole('button')).toBeNull();
+ expect(view.container.querySelector('a[href^="tel:"]')).toBeNull();expect(screen.queryByRole('button',{name:/^Keep /u})).toBeNull();
  expect(fetch).not.toHaveBeenCalled();expect(JSON.stringify(phone)).toBe(original);
 });
 it('keeps supported alternatives beside unresolved labels, but never turns unsupported personal/fax literals into alternatives',()=>{

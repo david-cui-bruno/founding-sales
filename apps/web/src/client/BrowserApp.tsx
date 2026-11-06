@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type JSX } from 'react';
-import { callingSubjectSchema, uuid } from '@fss/contracts';
+import { uuid } from '@fss/contracts';
 import { BrowserClient } from './BrowserClient.ts';
 import { BrowserSignIn } from './BrowserSignIn.tsx';
 import { BrowserProspectsWorkspace } from './BrowserProspectsWorkspace.tsx';
@@ -13,7 +13,6 @@ import { ReplyAttempt } from './ReplyAttempt.ts';
 import { EmailCampaignClient } from './EmailCampaignClient.ts';
 import { PrivateDraftCustody } from './PrivateDraftCustody.ts';
 import { VoicePreferenceCustody } from './VoicePreferenceCustody.ts';
-import { CallingWorkspace } from './CallingWorkspace.tsx';
 import {installCallingSetupCustody} from './CallingSetupCustody.ts';
 import { installCallingCustody } from './CallingPending.ts';
 import { installCallingFollowUpCustody } from './CallingFollowUpPending.ts';
@@ -32,14 +31,15 @@ function AuthenticatedWorkspace({ client, section, onNavigate, settings }: {
   client: BrowserClient; section: WorkspaceSection; onNavigate: (section: WorkspaceSection) => void; settings: JSX.Element;
 }): JSX.Element {
   const epoch = useRef(client.epoch).current;
+  const canLeave = useWorkspaceNavigation();
   const [callingSelection, setCallingSelection] = useState<CallingSelection | null>(null);
   const [selectedEmailDraftId, setSelectedEmailDraftId] = useState<string | null>(null);
   const current = (): boolean => client.current?.status === 'signed_in' && client.isCurrent(epoch);
   const openCalling = (selection: CallingSelection): void => {
-    if (!current()) return;
+    if (!current() || (section === 'prospects' && !canLeave())) return;
     const exact = callingSelectionSchema.safeParse(selection);
     if (!exact.success || !current()) return;
-    setCallingSelection(exact.data); onNavigate('calling');
+    setCallingSelection(exact.data); onNavigate('prospects');
   };
   const emailProps: EmailWorkspaceProps = {
     client, onNavigate, selectedFollowUpDraftId: selectedEmailDraftId,
@@ -49,11 +49,10 @@ function AuthenticatedWorkspace({ client, section, onNavigate, settings }: {
   };
   return <div className="workspace-content" data-section={section}>
     {section === 'today' ? <BrowserToday client={client} onNavigate={onNavigate} onOpenCalling={openCalling} /> : null}
-    {section === 'prospects' ? <BrowserProspectsWorkspace client={client} onNavigate={onNavigate} onOpenCalling={openCalling} /> : null}
-    {section === 'calling' ? <CallingWorkspace client={client} selection={callingSelection} onSelectionChange={selection => {
+    {section === 'prospects' ? <BrowserProspectsWorkspace client={client} selection={callingSelection} onSelectionChange={selection => {
       if (!current()) return;
       if (selection === null) setCallingSelection(null);
-      else { const exact = callingSubjectSchema.safeParse(selection); if (exact.success && current()) setCallingSelection(exact.data); }
+      else { const exact = callingSelectionSchema.safeParse(selection); if (exact.success && current()) setCallingSelection(exact.data); }
     }} onOpenEmailDraft={draftId => {
       if (!current()) return;
       const exact = uuid.safeParse(draftId);

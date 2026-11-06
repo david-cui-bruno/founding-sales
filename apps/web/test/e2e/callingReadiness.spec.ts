@@ -1,8 +1,9 @@
-import {test as base,expect} from 'playwright/test';
+import {test as base,expect,type Page} from 'playwright/test';
 import {dialCheckResponseSchema} from '@fss/contracts';
 import {startCallingExecutionApp,seedCallingExecution,installCallingFake,type CallingExecutionApp} from '../support/callingExecutionApp.ts';
 import {launchGlassContext} from '../support/glassWorkspaceBrowser.ts';
-import {signInGlass,navigateGlass} from '../support/glassWorkspaceApp.ts';
+import {signInGlass,openGlassWorkingList} from '../support/glassWorkspaceApp.ts';
+import {chooseFirstWorkspaceOption,expectWorkspaceOption} from '../support/workspaceChoice.ts';
 import {containSyntheticBrowser} from '../support/syntheticBrowserApp.ts';
 
 const test=base.extend({context:async({browserName},use)=>{
@@ -20,16 +21,20 @@ test.beforeAll(async()=>{
  }catch(error){await owned.stop();throw error;}
 });
 test.afterAll(async()=>{if(owned)await owned.stop();});
+async function openReadiness(page:Page){
+ await openGlassWorkingList(page);
+ await page.getByRole('button',{name:'Prepared queue',exact:true}).click();
+ await page.locator('.calling-queue li button').filter({hasText:seed.name}).click();
+ const identity=(await owned.app.fixture.db.query<{e164:string}>('SELECT e164 FROM calling_identities WHERE id=$1',[seed.identityId])).rows[0]!.e164;
+ await expectWorkspaceOption(page,'Browser calling identity',seed.identityId,identity);
+ await chooseFirstWorkspaceOption(page,'Browser call route');
+}
 
 test('signed read-only readiness exposes provider OFF before microphone setup at desktop and narrow widths',async({context,page})=>{
  await containSyntheticBrowser(context,owned.app);await installCallingFake(context,owned);
  const effects:string[]=[];
  page.on('request',request=>{if(/\/calls\/(?:access-token|session)$|\/calling\/wrap$/u.test(new URL(request.url()).pathname))effects.push(request.url());});
- await signInGlass(page,owned.app);await navigateGlass(page,'Calling');
- await page.getByRole('button',{name:'Prepared queue',exact:true}).click();
- await page.locator('.calling-queue li button').filter({hasText:seed.name}).click();
- await expect(page.getByRole('combobox',{name:'Browser calling identity'})).toHaveValue(seed.identityId);
- await page.getByRole('combobox',{name:'Browser call route'}).selectOption({index:1});
+ await signInGlass(page,owned.app);await openReadiness(page);
  const region=page.getByRole('region',{name:'Call readiness'}),button=region.getByRole('button',{name:'Check call readiness',exact:true});
  const response=page.waitForResponse(r=>new URL(r.url()).pathname==='/browser/api/dial/check');
  await button.click();const read=await response;expect(read.status()).toBe(200);
@@ -50,11 +55,7 @@ test('signed read-only readiness exposes provider OFF before microphone setup at
 
 test('remote version drift clears readiness even when the route ID and number stay unchanged',async({context,page})=>{
  await containSyntheticBrowser(context,owned.app);await installCallingFake(context,owned);
- await signInGlass(page,owned.app);await navigateGlass(page,'Calling');
- await page.getByRole('button',{name:'Prepared queue',exact:true}).click();
- await page.locator('.calling-queue li button').filter({hasText:seed.name}).click();
- await expect(page.getByRole('combobox',{name:'Browser calling identity'})).toHaveValue(seed.identityId);
- await page.getByRole('combobox',{name:'Browser call route'}).selectOption({index:1});
+ await signInGlass(page,owned.app);await openReadiness(page);
  const region=page.getByRole('region',{name:'Call readiness'});
  await page.route('**/browser/api/dial/check',async route=>{
   const result=await route.fetch();expect(result.status()).toBe(200);
@@ -72,11 +73,7 @@ test('Firm merge during an actual registry wait erases private advice before ret
  const f=owned.app.fixture;
  owned.app.chooseIdentity(f.alpha.admin);
  await containSyntheticBrowser(context,owned.app);await installCallingFake(context,owned);
- await signInGlass(page,owned.app);await navigateGlass(page,'Calling');
- await page.getByRole('button',{name:'Prepared queue',exact:true}).click();
- await page.locator('.calling-queue li button').filter({hasText:seed.name}).click();
- await expect(page.getByRole('combobox',{name:'Browser calling identity'})).toHaveValue(seed.identityId);
- await page.getByRole('combobox',{name:'Browser call route'}).selectOption({index:1});
+ await signInGlass(page,owned.app);await openReadiness(page);
  const observer=await f.database.appRuntimeSession();
  const blocker=(await f.db.query<{pid:number}>('SELECT pg_backend_pid() AS pid')).rows[0]!.pid;
  await f.db.query('BEGIN');

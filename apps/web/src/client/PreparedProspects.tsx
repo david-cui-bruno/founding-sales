@@ -3,8 +3,9 @@ import {manualProspectListInputSchema,preparedProspectListResponseSchema,prepare
 import type {z} from 'zod';
 import {BrowserBoundaryError,type BrowserClient} from './BrowserClient.ts';
 import {groupAdjacentPreparedRecords} from './preparedResearchGroups.ts';
-import type {WorkspaceScreenProps} from './workspaceNavigation.ts';
+import type {CallingSelection, WorkspaceScreenProps} from './workspaceNavigation.ts';
 import './preparedProspects.css';
+import { useWorkspaceNavigation } from './WorkspaceNavigationGuard.tsx';
 
 type Order='priority'|'callable';
 type Page=Extract<z.infer<typeof preparedProspectListResponseSchema>,{prospects:unknown}> & {offset:number;order:Order};
@@ -21,7 +22,7 @@ const refusalMessage=(reason:string)=>reason==='view_changed'?'The company list 
 
 function SourceNotices({notices}:{notices:PreparedProspectSummary['sourceNotices']}):JSX.Element|null{
  if(!notices.length)return null;
- return <details><summary>Source notices</summary><ul>{notices.map((notice,index)=><li key={index}>{notice.url&&sourceHref(notice.url)?<a href={sourceHref(notice.url)} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer">{notice.label}</a>:notice.label}</li>)}</ul></details>;
+ return <section className="prepared-source-notices" aria-label="Source notices"><h4>Source notices</h4><ul>{notices.map((notice,index)=><li key={index}>{notice.url&&sourceHref(notice.url)?<a href={sourceHref(notice.url)} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer">{notice.label}</a>:notice.label}</li>)}</ul></section>;
 }
 
 /** Research readiness only (ADR0034): a published phone is text, never a dial link or contact permission. */
@@ -32,22 +33,24 @@ function CallableFacts({callable}:{callable:PreparedProspectCallable}):JSX.Eleme
 }
 
 function ResearchRecord({row,busy,onOpen}:{row:PreparedProspectSummary;busy:boolean;onOpen:(row:PreparedProspectSummary)=>Promise<void>}):JSX.Element {
- return <><div><span className="prepared-company-state">{row.state==='prepared'?'Prepared brief':'Needs research'}</span> <CallableFacts callable={row.callable}/>{row.namedPerson?<p className="prepared-company-callable-facts">Ask for {row.namedPerson.name.split(' ')[0]} — {row.namedPerson.title}</p>:null}<h3>{row.displayName}</h3>
-  <p className="prepared-company-note">Discovery label; company identity is unverified.</p>
-  {row.website&&sourceHref(row.website)?<p className="prepared-company-source">Website: <a href={sourceHref(row.website)} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer">{row.website}</a></p>:null}
-  <p>{row.summary}</p>{row.unknowns.length?<p className="prepared-company-note">Still unknown: {row.unknowns.slice(0,2).join(' · ')}</p>:null}<SourceNotices notices={row.sourceNotices}/>
- </div><button type="button" disabled={busy} aria-label={`Open company brief for ${row.displayName}`} onClick={()=>{void onOpen(row);}}>Open company brief</button></>;
+ return <><button className="workspace-work-row" type="button" disabled={busy} aria-label={`Open company brief for ${row.displayName}`} onClick={()=>{void onOpen(row);}}>
+  <span className="workspace-work-row-content"><strong>{row.displayName}</strong>
+   <span>{[row.targetingLocality,row.targetingRegion].filter(Boolean).join(', ')||'Location unknown'}</span>
+   <small>{row.callable.state==='callable'?'Callable research':row.state==='prepared'?'Prepared brief':'Needs research'} · Unverified identity</small>
+   {row.namedPerson?<small>Ask for {row.namedPerson.name.split(' ')[0]} — {row.namedPerson.title}</small>:null}
+  </span>
+ </button><SourceNotices notices={row.sourceNotices}/></>;
 }
 
-function CompanyBrief({brief,heading,onOpenCalling}:{brief:PreparedProspectBrief;heading:RefObject<HTMLHeadingElement|null>;onOpenCalling:(()=>void)|null}):JSX.Element {
+function CompanyBrief({brief,heading,section='sources'}:{brief:PreparedProspectBrief;heading:RefObject<HTMLHeadingElement|null>;section?:'brief'|'sources'}):JSX.Element {
  const callable=brief.policyVersion==='prepared-prospect-v2'?brief.callable:null;
+ const [diagnostics,setDiagnostics]=useState(false);
  return <article className="prepared-company" aria-label="Prepared company brief">
   <header className="prepared-company-heading"><span className="prepared-company-state">{brief.state==='prepared'?'Prepared brief':'Needs research'}</span> {callable?<CallableFacts callable={callable}/>:null}
    <h2 ref={heading} tabIndex={-1}>{brief.displayName}</h2><p className="prepared-company-note">Discovery label; company identity is unverified.</p><p>{brief.summary}</p>
    {brief.website&&sourceHref(brief.website)?<p className="prepared-company-source">Website: <a href={sourceHref(brief.website)} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer">{brief.website}</a></p>:null}
-   {callable?.state==='callable'&&onOpenCalling?<p className="prepared-company-calling"><button type="button" onClick={onOpenCalling}>Open in Calling</button> <span className="prepared-company-note">Calling's own preparation, route, suppression and consent checks decide any call.</span></p>:null}
   </header>
-  {sections.map(([kind,label])=>{
+  {section==='sources'?sections.map(([kind,label])=>{
    const passages=brief.passages.filter(p=>p.kind===kind);
    if(!passages.length)return null;
    return <section key={kind} className="prepared-company-passages" aria-label={label}><h3>{label}</h3>
@@ -55,46 +58,61 @@ function CompanyBrief({brief,heading,onOpenCalling}:{brief:PreparedProspectBrief
      <blockquote>{passage.quote}</blockquote><figcaption>Captured {dateLabel(passage.retrievedAt)} · <a href={sourceHref(passage.url)} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer">{passage.url}</a>{passage.sourceCoverage==='partial_page'?<> · <span>Partial page</span></>:null}</figcaption>
     </figure>)}
    </section>;
-  })}
-  {!brief.passages.length?<p>No usable retained company passages are available in this read. This item needs further research.</p>:null}
+  }):null}
+  {section==='sources'&&!brief.passages.length?<p>No usable retained company passages are available in this read. This item needs further research.</p>:null}
   <section className="prepared-company-next" aria-label="Next research action"><h3>Next research action</h3><p>{brief.nextAction}</p>
    <p className="prepared-company-note">Research context only. No permission to call or email; buying authority, current route ownership and maintenance need are not established.</p></section>
   {brief.unknowns.length?<section aria-label="What remains unknown"><h3>What remains unknown</h3><ul>{brief.unknowns.map(item=><li key={item}>{item}</li>)}</ul></section>:null}
   <p className="prepared-company-note">{brief.coverage==='partial_retained_pages'?'Intact retained passages are shown, but source coverage is incomplete. Omitted content may contain qualifications or contrary context; missing fields and current business conditions remain unknown.':brief.coverage==='complete_retained_pages'?'Supported by the complete retained pages shown here; other pages and current business conditions may be unknown.':'No usable retained pages support a company brief in this read.'}</p>
   <SourceNotices notices={brief.sourceNotices}/>
-  <details><summary>Discovery hints</summary><dl><dt>Search label</dt><dd>{brief.discoveryLabel}</dd><dt>Search location</dt><dd>{[brief.targetingLocality,brief.targetingRegion].filter(Boolean).join(', ')||'Unknown'}</dd></dl>
-   <p>The search label and location are discovery hints. They do not confirm the business name, office location or service market.</p></details>
-  <details><summary>Source and record details</summary><p>Read {dateLabel(brief.checkedAt)}{brief.validUntil?` · Evidence valid until ${dateLabel(brief.validUntil)}`:''}</p>
-   <p>Candidate {brief.target.candidateId} · Revision {brief.target.candidateRevision} · Run {brief.target.runId??'not available'}</p>
-   <ul>{brief.passages.map((passage,index)=><li key={`${passage.observationId}:${passage.blockId}:${index}`}>{passage.kind}: observation {passage.observationId}, block {passage.blockId} · {passage.url}</li>)}</ul>
-  </details>
+  {section==='sources'?<><section className="prepared-discovery-context" aria-label="Discovery hints"><h3>Discovery context</h3>
+   <p>{brief.discoveryLabel} · {[brief.targetingLocality,brief.targetingRegion].filter(Boolean).join(', ')||'Unknown location'}</p>
+   <p className="prepared-company-note">These discovery hints do not confirm the business name, office location or service market.</p>
+  </section>
+  <button type="button" className="workspace-secondary" onClick={()=>setDiagnostics(true)}>Source diagnostics</button></>:null}
+  {diagnostics?<SourceDiagnostics brief={brief} onClose={()=>setDiagnostics(false)}/>:null}
  </article>;
 }
 
+function SourceDiagnostics({brief,onClose}:{brief:PreparedProspectBrief;onClose:()=>void}):JSX.Element {
+ const dialog=useRef<HTMLDialogElement>(null);
+ useEffect(()=>{const current=dialog.current;current?.showModal();return()=>current?.close();},[]);
+ return <dialog ref={dialog} className="workspace-source-diagnostics" aria-label="Source diagnostics" onCancel={event=>{event.preventDefault();onClose();}}>
+  <header><h2>Source diagnostics</h2><button type="button" onClick={onClose}>Close</button></header>
+  <p>Read {dateLabel(brief.checkedAt)}{brief.validUntil?` · Evidence valid until ${dateLabel(brief.validUntil)}`:''}</p>
+  <dl><dt>Candidate</dt><dd>{brief.target.candidateId}</dd><dt>Revision</dt><dd>{brief.target.candidateRevision}</dd><dt>Run</dt><dd>{brief.target.runId??'Not available'}</dd></dl>
+  <ul>{brief.passages.map((passage,index)=><li key={`${passage.observationId}:${passage.blockId}:${index}`}>{passage.kind}: observation {passage.observationId}, block {passage.blockId} · {passage.url}</li>)}</ul>
+ </dialog>;
+}
+
 /** One bounded candidate page and one exact retained read. No command custody or provider work. */
-export function PreparedProspects({client,onOpenCalling}:{client:BrowserClient;onOpenCalling?:WorkspaceScreenProps['onOpenCalling']}):JSX.Element {
+export function usePreparedProspects({client,selection,enabled=true,onOpenCalling}:{client:BrowserClient;selection:CallingSelection|null;enabled?:boolean;onOpenCalling?:WorkspaceScreenProps['onOpenCalling']}) {
  const mounted=useRef(false),operation=useRef<Operation|null>(null),listHeading=useRef<HTMLHeadingElement>(null),detailHeading=useRef<HTMLHeadingElement>(null),returnFocus=useRef(false);
  const [page,setPage]=useState<Page|null>(null),[brief,setBrief]=useState<PreparedProspectBrief|null>(null),[busy,setBusy]=useState<'list'|'detail'|null>(null),[notice,setNotice]=useState(''),[order,setOrder]=useState<Order>('priority');
  const renderEpoch=client.epoch;
+ const canLeave=useWorkspaceNavigation();
  const permitted=()=>client.current?.status==='signed_in'&&client.current.role==='admin';
  const active=useCallback((held:Operation)=>mounted.current&&operation.current===held&&client.isCurrent(held.epoch)&&client.current?.status==='signed_in'&&client.current.role==='admin',[client]);
  const clear=useCallback(()=>{operation.current=null;setPage(null);setBrief(null);setBusy(null);},[]);
  const readPage=useCallback(async(offset:number,viewRevision:string|undefined,view:Order)=>{
-  if(!mounted.current||client.current?.status!=='signed_in'||client.current.role!=='admin'||!client.isCurrent(client.epoch)||operation.current)return;
+  if(!mounted.current||client.current?.status!=='signed_in'||client.current.role!=='admin'||!client.isCurrent(client.epoch)||operation.current)return null;
   const held={epoch:client.epoch,token:Symbol('prepared-list')};operation.current=held;setBusy('list');setNotice('');setPage(null);setBrief(null);
   try{
    const answer=await client.request('/sourcing/prepared-prospects/list',preparedProspectListResponseSchema,{offset,...(viewRevision?{viewRevision}:{}),...(view==='callable'?{order:view}:{})},()=>{if(!active(held))throw new BrowserBoundaryError('refused');});
-   if(!active(held))return;
-   if('error' in answer){setNotice(refusalMessage(answer.error));return;}
-   if(answer.prospects.some(row=>!current(row))){setNotice(refusalMessage('source_expired'));return;}
+   if(!active(held))return null;
+   if('error' in answer){setNotice(refusalMessage(answer.error));return null;}
+   if(answer.prospects.some(row=>!current(row))){setNotice(refusalMessage('source_expired'));return null;}
    setPage({...answer,offset,order:view});
-  }catch{if(active(held))setNotice('Company research could not be read. Refresh companies to try a current read.');}
+   return answer.prospects;
+  }catch{if(active(held))setNotice('Company research could not be read. Refresh companies to try a current read.');return null;}
   finally{if(operation.current===held){operation.current=null;if(mounted.current)setBusy(null);}}
  },[active,client]);
  const open=async(summary:PreparedProspectSummary)=>{
-  if(!permitted()||!mounted.current||operation.current||!client.isCurrent(renderEpoch))return;
+  if(!enabled||!permitted()||!mounted.current||operation.current||!client.isCurrent(renderEpoch)||!canLeave())return;
   if(!current(summary)){clear();setNotice(refusalMessage('source_expired'));return;}
   const held={epoch:renderEpoch,token:Symbol('prepared-detail')};operation.current=held;setBusy('detail');setBrief(null);setNotice('');
+  const {candidateId,candidateRevision}=summary.target;
+  onOpenCalling?.({kind:'candidate',candidateId,expectedCandidateRevision:candidateRevision,prospectPage:manualProspectListInputSchema.parse({state:'all',offset:0,candidateId,expectedRevision:candidateRevision})});
   try{
    const answer=await client.request('/sourcing/prepared-prospects/read',preparedProspectReadResponseSchema,summary.target,()=>{if(!active(held))throw new BrowserBoundaryError('refused');});
    if(!active(held))return;
@@ -105,18 +123,13 @@ export function PreparedProspects({client,onOpenCalling}:{client:BrowserClient;o
   }catch{if(active(held)){setPage(null);setNotice('This company could not be read. Refresh companies to read current research.');}}
   finally{if(operation.current===held){operation.current=null;if(mounted.current)setBusy(null);}}
  };
- // Hands the exact candidate subject to the existing Calling selection; Calling re-reads and decides everything.
- const openCalling=brief&&onOpenCalling?()=>{
-  if(!permitted()||!mounted.current||operation.current||!client.isCurrent(renderEpoch)||!current(brief))return;
-  const {candidateId,candidateRevision}=brief.target;
-  onOpenCalling({kind:'candidate',candidateId,expectedCandidateRevision:candidateRevision,prospectPage:manualProspectListInputSchema.parse({state:'all',offset:0,candidateId,expectedRevision:candidateRevision})});
- }:null;
  useEffect(()=>{
-  mounted.current=true;clear();setNotice('');let epoch=client.epoch;
+  mounted.current=enabled;clear();setNotice('');let epoch=client.epoch;
+  if(!enabled)return;
   const unsubscribe=client.subscribe(()=>{if(epoch!==client.epoch||client.current?.status!=='signed_in'||client.current.role!=='admin'){epoch=client.epoch;clear();setNotice('');}});
   setOrder('priority');void readPage(0,undefined,'priority');
   return()=>{mounted.current=false;operation.current=null;unsubscribe();};
- },[clear,client,readPage]);
+ },[clear,client,enabled,readPage]);
  useEffect(()=>{
   if(brief)detailHeading.current?.focus();
   else if(returnFocus.current&&busy!=='detail'){returnFocus.current=false;listHeading.current?.focus();}
@@ -128,17 +141,25 @@ export function PreparedProspects({client,onOpenCalling}:{client:BrowserClient;o
   const timer=setTimeout(()=>{clear();setNotice(refusalMessage('source_expired'));},Math.min(2_147_483_647,Math.max(0,expires-Date.now())));
   return()=>clearTimeout(timer);
  },[brief,clear,page]);
- if(!permitted())return <p role="status">Prepared company research requires current administrator access.</p>;
- const showingDetail=brief!==null||busy==='detail';
+ const back=():void=>{operation.current=null;returnFocus.current=true;setBrief(null);setBusy(null);setNotice('');};
  const prepared=page?.prospects.filter(row=>row.state==='prepared').length??0,needsResearch=(page?.prospects.length??0)-prepared;
  // Research rows stay intact in the normal view; the callable view counts companies, not records.
  const callableToday=page?.order==='callable',rows=page?(callableToday?callableCompanies(page.prospects):page.prospects):[];
  const chooseOrder=(next:Order)=>{if(busy!==null)return;setOrder(next);void readPage(0,undefined,next);};
- return <section className="prepared-companies" aria-label="Prepared company research" aria-busy={busy!==null}>
-  {showingDetail?<div className="prepared-company-detail"><button type="button" onClick={()=>{operation.current=null;returnFocus.current=true;setBrief(null);setBusy(null);setNotice('');}}>Back to companies</button>
-   {brief?<CompanyBrief brief={brief} heading={detailHeading} onOpenCalling={openCalling}/>:<p role="status">Opening company brief…</p>}
-  </div>:<div className="prepared-companies-surface">
-   <div className="prepared-companies-toolbar"><div><h2 ref={listHeading} tabIndex={-1}>Prepared companies</h2><p>Retained business evidence, useful context and what to research next.</p></div>
+ const position=selection?.kind==='candidate'?rows.findIndex(row=>row.target.candidateId===selection.candidateId&&row.target.candidateRevision===selection.expectedCandidateRevision):-1;
+ const canAdvance=selection!==null&&busy===null&&(position+1<rows.length||!!page?.hasMore&&page.offset<1_000_000);
+ const advance=async():Promise<void>=>{
+  if(!canAdvance||!page)return;
+  const next=rows[position+1];
+  if(next){await open(next);return;}
+  const answer=await readPage(page.offset+50,page.viewRevision,page.order);
+  const first=(page.order==='callable'&&answer?callableCompanies(answer):answer)?.[0];
+  if(first)await open(first);
+ };
+ if(!enabled)return {list:null,detail:null,overview:null,target:null,back,busy:false,advance,canAdvance:false};
+ if(!permitted())return {list:<p role="status">Prepared company research requires current administrator access.</p>,detail:null,overview:null,target:null,back,busy:false,advance,canAdvance:false};
+ const list=<section className="prepared-companies" aria-label="Prepared company research" aria-busy={busy!==null}>
+   <div className="prepared-companies-toolbar workspace-list-head"><div><h2 ref={listHeading} tabIndex={-1}>Prepared companies</h2><p>Source-backed research. Identity remains unverified.</p></div>
     <div className="prepared-companies-actions"><button type="button" aria-pressed={order==='callable'} disabled={busy!==null} onClick={()=>chooseOrder(order==='callable'?'priority':'callable')}>Callable today</button>
      <button type="button" disabled={busy!==null} onClick={()=>{void readPage(0,undefined,order);}}>Refresh companies</button></div></div>
    {busy==='list'?<div className="prepared-companies-loading" role="status">Reading current companies…</div>:null}
@@ -153,7 +174,9 @@ export function PreparedProspects({client,onOpenCalling}:{client:BrowserClient;o
      <span>Page {Math.floor(page.offset/50)+1} · Up to 50 {callableToday?'ranked companies':'companies'}</span><button type="button" disabled={busy!==null||!page.hasMore||page.offset>=1_000_000} onClick={()=>{void readPage(page.offset+50,page.viewRevision,page.order);}}>Next companies</button></nav>
    </>:null}
    <p className="prepared-company-note">Unknown email, phone, buyer or buying intent can remain unknown. Opening a brief does not create a Firm or authorize outreach.</p>
-  </div>}
   {notice?<p role="status" className="prepared-companies-notice">{notice}</p>:null}
  </section>;
+ const detail=brief?<CompanyBrief brief={brief} heading={detailHeading}/>:busy==='detail'?<p role="status">Opening company brief…</p>:null;
+ const overview=brief?<CompanyBrief brief={brief} heading={detailHeading} section="brief"/>:null;
+ return {list,detail,overview,target:brief?.target??null,back,busy:busy!==null,advance,canAdvance};
 }

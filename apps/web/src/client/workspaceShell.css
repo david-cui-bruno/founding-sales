@@ -17,8 +17,8 @@
 .browser-main { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; overflow: auto; overflow-wrap: anywhere; }
 .browser-main:focus { outline: none; }
 .workspace-content { min-width: 0; min-height: 0; }
-.workspace-content[data-section=today] { display: flex; flex-direction: column; flex: 1; overflow: hidden; }
-.workspace-content:not([data-section=today]) { padding: 28px 36px 48px; }
+.workspace-content:is([data-section=today],[data-section=prospects]) { display: flex; flex-direction: column; flex: 1; overflow: hidden; }
+.workspace-content:not(:is([data-section=today],[data-section=prospects])) { padding: 28px 36px 48px; }
 .workspace-skip { position: fixed; top: 4px; left: 12px; transform: translateY(-160%); z-index: 100; background: var(--panel-strong); padding: 8px 14px; border-radius: 8px; }
 .workspace-skip:focus { transform: none; }
 .browser-workspace[data-signed-in=false] { grid-template-columns: minmax(0, 1fr); }
@@ -31,7 +31,7 @@
   .browser-brand { padding: 0 6px; }
   .browser-sidebar .workspace-section-search { width: auto; margin: 0 0 0 auto; min-height: 30px; }
   .workspace-section-search kbd, .workspace-section-search span { display: none; }
-  .browser-sidebar nav { width: 100%; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); order: 3; }
+  .browser-sidebar nav { width: 100%; display: grid; grid-template-columns: repeat(auto-fit,minmax(60px,1fr)); order: 3; }
   .browser-sidebar nav button { justify-content: center; flex-direction: column; gap: 3px; padding: 5px 2px; font-size: 11px; }
   .browser-sidebar nav button svg { width: 17px; height: 17px; }
   .browser-session { margin: 0; padding: 0; display: flex; align-items: center; }
@@ -40,5 +40,5 @@
   .workspace-sidebar-foot { border: 0; padding: 0; margin: 0; }
   .workspace-sidebar-foot button { font-size: 11px; padding: 4px; }
   .workspace-shortcuts { display: none; }
-  .workspace-content:not([data-section=today]) { padding: 18px 16px 36px; }
+  .workspace-content:not(:is([data-section=today],[data-section=prospects])) { padding: 18px 16px 36px; }
 }

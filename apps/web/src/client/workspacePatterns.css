@@ -70,3 +70,23 @@
   .workspace-detail-content { padding: 18px 18px 56px; }
   .workspace-list-pane { border-right: 0; }
 }
+.workspace-choice { min-width: 0; position: relative; }
+.workspace-choice > button,.workspace-choice > input[role=combobox] { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; text-align: left; padding: 9px 11px; border: 1px solid var(--line-strong); border-radius: 7px; color: var(--text); background: var(--panel); font: inherit; }
+.workspace-choice > button small { flex: none; color: var(--muted); font-size: 11px; font-weight: 400; }
+.workspace-choice > [aria-expanded=true] { outline: 2px solid var(--ink); outline-offset: 1px; }
+.workspace-choice-menu { z-index: 100; max-height: 280px; overflow: auto; padding: 5px; border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow); color: var(--text); background: var(--panel); font-size: 13px; }
+.workspace-choice-menu [role=option] { padding: 8px 10px; border-radius: 5px; cursor: pointer; overflow-wrap: anywhere; }
+.workspace-choice-menu [role=option][aria-selected=true] { color: var(--sage-ink); background: var(--sage); font-weight: 600; }
+.workspace-choice-menu [role=option][data-active=true] { outline: 1px solid var(--ink); outline-offset: -1px; }
+.workspace-choice-menu [aria-disabled=true] { color: var(--muted); cursor: not-allowed; opacity: .6; }
+.workspace-choice-group { min-width: 0; padding: 0; margin: 0; border: 0; }
+.workspace-choice-group legend { margin: 0 0 8px; padding: 0; font-size: 13px; font-weight: 600; }
+.workspace-choice-group > div { display: flex; gap: 6px; flex-wrap: wrap; }
+.workspace-choice-group label { position: relative; display: inline-flex !important; align-items: center; gap: 0 !important; padding: 6px 10px; border: 1px solid var(--line); border-radius: 7px; font-size: 12px !important; font-weight: 450 !important; cursor: pointer; background: var(--panel); }
+.workspace-choice-group label[data-selected=true] { background: var(--sage); border-color: var(--sage-ink); color: var(--sage-ink); }
+.workspace-choice-group label:has(input:disabled) { opacity: .55; cursor: not-allowed; }
+.workspace-choice-group label:has(input:focus-visible) { outline: 2px solid var(--ink); outline-offset: 2px; }
+.workspace-choice-group input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.workspace-choice > input[role=combobox] { padding-right: 62px; margin: 0; }
+.workspace-choice-hint { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); color: var(--muted); font-size: 11px; font-weight: 400; pointer-events: none; }
+.workspace-choice-mark { display: inline-block; width: 16px; margin-right: 3px; font-weight: 600; }

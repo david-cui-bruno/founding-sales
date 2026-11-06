@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
 import { access, chmod, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, type BrowserContext, type Page } from 'playwright/test';
@@ -10,6 +9,7 @@ import { startReplyBriefApp, type ReplyBriefApp } from './replyBriefApp.ts';
 import { containSyntheticBrowser, requireLocalDemo } from './syntheticBrowserApp.ts';
 import type { SyntheticCase } from './syntheticBusinessFixture.ts';
 import { listenerAbsent } from './founderHostResources.ts';
+import { CALLING_M2_GRANT, CALLING_M2_GRANT_ENV, assertForeignPostgresPreserved, hasCallingM2Grant, privateArtifactsDirectory, requireSoleDisposableLane } from './soleDisposableLane.ts';
 
 export const glassCase: SyntheticCase = {
   id: 'A', title: 'FICTIONAL GLASS783, no contact', firm: 'FICTIONAL Glassbrook Property Team',
@@ -22,21 +22,30 @@ export const glassCase: SyntheticCase = {
 };
 
 /** This guard is intentionally before every resource allocation. Setting it is a
- * root-coordinator action after schema composition, not permission inferred by a test. */
-export function requireGlassRuntimeGrant(): void {
-  assert.equal(process.env['FSS_GLASS_WORKSPACE_EXCLUSIVE_LANE'], '783', 'Explicit root sole-lane grant required');
+ * root-coordinator action after schema composition, not permission inferred by a test.
+ * Admits the legacy glass lane marker or the current M2 fake-provider grant. Returns the
+ * pre-allocation PostgreSQL server snapshot that teardown must find unchanged. */
+export function requireGlassRuntimeGrant(): readonly string[] {
+  assert(process.env['FSS_GLASS_WORKSPACE_EXCLUSIVE_LANE'] === '783' || hasCallingM2Grant(), 'Explicit root sole-lane grant required');
+  return requireSyntheticLane();
+}
+
+/** Fresh M2 calling admission: only the exact synthetic fake-provider grant (no historical
+ * lane or runtime tokens), before any allocation. Returns the PostgreSQL snapshot. */
+export function requireCallingM2Admission(): readonly string[] {
+  assert.equal(process.env[CALLING_M2_GRANT_ENV], CALLING_M2_GRANT, `Explicit ${CALLING_M2_GRANT_ENV} fake-provider grant required`);
+  return requireSyntheticLane();
+}
+
+function requireSyntheticLane(): readonly string[] {
   requireLocalDemo(process.env);
   assert(process.env['FSS_LOCAL_BROWSER_EXECUTABLE'], 'Use the installed, explicitly selected Chrome');
-  const servers = execFileSync('ps', ['-axo', 'pid,ppid,command'], { encoding: 'utf8' }).split('\n')
-    .filter(line => /(?:^|\s)(?:\S*\/)?postgres(?:\s|$)/u.test(line) && !/postgres: /u.test(line));
-  assert(servers.every(line => line.includes('/opt/homebrew/opt/postgresql@17/bin/postgres -D /opt/homebrew/var/postgresql@17')), 'Another disposable PostgreSQL lane is active');
+  return requireSoleDisposableLane();
 }
 
 export async function startGlassWorkspace() {
-  requireGlassRuntimeGrant();
+  const foreignPostgres = requireGlassRuntimeGrant();
   await access(process.env['FSS_LOCAL_BROWSER_EXECUTABLE']!);
-  const homebrew1106 = execFileSync('ps', ['-p', '1106', '-o', 'command='], { encoding: 'utf8' }).trim();
-  assert(homebrew1106.includes('/opt/homebrew/opt/postgresql@17/bin/postgres'), 'Preserve root-designated Homebrew1106');
   const release = await reserveLocalBrowserDatabase();
   let app: ReplyBriefApp | undefined;
   try {
@@ -45,7 +54,7 @@ export async function startGlassWorkspace() {
     app = await startReplyBriefApp({ conversation: glassCase, requestDatabaseRole: 'app_runtime' });
     const owned = app;
     const httpsPort = Number(new URL(owned.origin).port), oidcPort = Number(new URL(owned.fixture.google.issuer).port);
-    console.log('GLASS783_REGISTERED_RUNTIME', JSON.stringify({ origin: owned.origin, oidcIssuer: owned.fixture.google.issuer, httpsPort, oidcPort, clientVersion: CURRENT_CLIENT_VERSION, supportedClientVersions: owned.fixture.deps.config.supportedClientVersions, database: owned.fixture.database.name, template: process.env['FSS_TEST_TEMPLATE_DATABASE'], postgresPid: owned.postgresPid, storagePath: owned.storagePath, tlsPath: owned.tlsPath, requestRole: 'app_runtime', sendingEnabled: false, homebrew1106 }));
+    console.log('GLASS783_REGISTERED_RUNTIME', JSON.stringify({ origin: owned.origin, oidcIssuer: owned.fixture.google.issuer, httpsPort, oidcPort, clientVersion: CURRENT_CLIENT_VERSION, supportedClientVersions: owned.fixture.deps.config.supportedClientVersions, database: owned.fixture.database.name, template: process.env['FSS_TEST_TEMPLATE_DATABASE'], postgresPid: owned.postgresPid, storagePath: owned.storagePath, tlsPath: owned.tlsPath, requestRole: 'app_runtime', sendingEnabled: false, foreignPostgres }));
     return { app: owned, stop: createOwnedTeardown([
       () => owned.stop(),
       async () => { await listenerAbsent(httpsPort, 'localhost'); await listenerAbsent(oidcPort, 'localhost'); },
@@ -53,8 +62,8 @@ export async function startGlassWorkspace() {
       async () => {
         await access(owned.storagePath).then(() => { throw Error('Owned PG storage remains'); }, error => { assert.equal((error as NodeJS.ErrnoException).code, 'ENOENT'); });
         assert.throws(() => process.kill(owned.postgresPid, 0), { code: 'ESRCH' });
-        assert.equal(execFileSync('ps', ['-p', '1106', '-o', 'command='], { encoding: 'utf8' }).trim(), homebrew1106, 'Homebrew1106 remains untouched');
-        console.log('GLASS783_RUNTIME_RELEASED', JSON.stringify({ postgresPid: owned.postgresPid, storagePath: owned.storagePath, httpsPort, oidcPort, homebrew1106Unchanged: true }));
+        assertForeignPostgresPreserved(foreignPostgres);
+        console.log('GLASS783_RUNTIME_RELEASED', JSON.stringify({ postgresPid: owned.postgresPid, storagePath: owned.storagePath, httpsPort, oidcPort, foreignPostgresUnchanged: true }));
       },
     ]) };
   } catch (error) {
@@ -83,10 +92,21 @@ export async function signInGlass(page: Page, app: GlassWorkspaceApp, identity: 
   await page.getByRole('button', { name: 'Continue with Google', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Sign out', exact: true })).toBeVisible();
 }
-export async function navigateGlass(page: Page, name: 'Today' | 'Prospects' | 'Calling' | 'Email' | 'Social'): Promise<void> {
+export async function navigateGlass(page: Page, name: 'Today' | 'Prospects' | 'Email' | 'Social'): Promise<void> {
   await page.getByRole('navigation', { name: 'Workspace sections' }).getByRole('button', { name, exact: true }).click();
   await expect(page.getByRole('heading', { name, exact: true, level: 1 })).toBeVisible();
   await expect(page.locator('#workspace-main')).toBeFocused();
+}
+/** Calling is part of Prospects: open the shared Working list, whose CallingQueue filters (Prepared queue, Retained list…) follow. */
+export async function openGlassWorkingList(page: Page): Promise<void> {
+  await navigateGlass(page, 'Prospects');
+  const view = page.getByRole('navigation', { name: 'Prospect supply views' }).getByRole('button', { name: 'Working list', exact: true });
+  await view.click();
+  await expect(view).toHaveAttribute('aria-pressed', 'true');
+  // With a selected company on a narrow viewport the supply is folded away behind the real toggle.
+  const supply = page.getByRole('complementary', { name: 'Calling supply' }), toggle = page.getByRole('button', { name: 'Choose company', exact: true });
+  if (!(await supply.isVisible()) && await toggle.isVisible()) await toggle.click();
+  await expect(supply).toBeVisible();
 }
 export async function openGlassSettings(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'Settings & account', exact: true }).click();
@@ -111,8 +131,7 @@ export async function assertGlassFits(page: Page): Promise<void> {
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
 }
 export async function glassScreenshot(page: Page, name: string): Promise<void> {
-  const directory = process.env['FSS_GLASS_PRIVATE_ARTIFACTS'];
-  assert(directory && directory.startsWith('/Users/davidcui824/.jcode/scratch/'), 'Private scratch artifacts required');
+  const directory = privateArtifactsDirectory();
   await mkdir(directory, { recursive: true, mode: 0o700 });
   await chmod(directory, 0o700);
   const path = join(directory, `${name}.png`);

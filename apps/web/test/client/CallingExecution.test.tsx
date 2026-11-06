@@ -4,6 +4,7 @@ import type {EventEmitter} from 'node:events';
 import {useState} from 'react';
 import {afterEach,beforeEach,expect,it,vi} from 'vitest';
 import {cleanup,fireEvent,render,screen,waitFor} from '@testing-library/react';
+import {chooseWorkspace,chooseWorkspaceOption,workspaceChoiceDisabled,workspaceChoiceValue,workspaceChoiceValues} from './support/workspaceChoice.ts';
 import {pluralFirmPageResponseSchema,type CallingWrapInput} from '@fss/contracts';
 import {BrowserClient} from '../../src/client/BrowserClient.ts';
 import {CallingExecutionCustody,CALLING_EXECUTION_KEY,installCallingExecutionCustody} from '../../src/client/CallingExecutionPending.ts';
@@ -24,8 +25,7 @@ const payload={firmId:id,routeId,routeVersion:1,callingIdentityId:id};
 const identity={id,ownerUserId:id,e164:'+12145550124',label:null,verificationStatus:'verified',enabled:true,verifiedAt:at,verifiedByUserId:id,verificationMethod:'owner_attestation',disabledAt:null,usedForCalls:true,createdAt:at};
 const clients:BrowserClient[]=[];
 const states:CallingExecutionState[]=[];
-function deferred<T>(){let resolve!:(value:T)=>void;const promise=new Promise<T>(done=>{resolve=done;});return {resolve,promise};}
-function locks(){const active=new Set<string>(),queues=new Map<string,Promise<unknown>>();return {request:async(name:string,options:{ifAvailable?:boolean},work:(lock:unknown)=>Promise<unknown>)=>{if(options.ifAvailable&&active.has(name))return work(null);const prior=queues.get(name)??Promise.resolve();const done=deferred<void>();queues.set(name,done.promise);await prior;active.add(name);try{return await work({name,mode:'exclusive'});}finally{active.delete(name);done.resolve();}}};}
+function locks(){const active=new Set<string>(),queues=new Map<string,Promise<unknown>>();return {request:async(name:string,options:{ifAvailable?:boolean},work:(lock:unknown)=>Promise<unknown>)=>{if(options.ifAvailable&&active.has(name))return work(null);const prior=queues.get(name)??Promise.resolve();const done=Promise.withResolvers<void>();queues.set(name,done.promise);await prior;active.add(name);try{return await work({name,mode:'exclusive'});}finally{active.delete(name);done.resolve();}}};}
 function setup(){
  let lose=false,providerOff=false,changedRoute=false,status='completed',sessionWait:Promise<Response>|null=null;
  const requests:{path:string;body:unknown}[]=[],writes:CallingWrapInput[]=[];
@@ -72,26 +72,26 @@ it.each(['microphone','provider','stale route','missing locks','broken storage']
  await f.controller.start(payload,()=>true);expect(f.requests.filter(r=>r.path.endsWith('/calls/session'))).toHaveLength(0);expect(f.factory).not.toHaveBeenCalled();vi.restoreAllMocks();
 });
 it('cross-tab lifecycle exclusion prevents a second Firm while the first microphone prompt is pending',async()=>{
- const f=setup();await f.client.refresh();const mic=deferred<void>();f.microphone.mockImplementationOnce(()=>mic.promise);const first=f.controller.start(payload,()=>true);
+ const f=setup();await f.client.refresh();const mic=Promise.withResolvers<void>();f.microphone.mockImplementationOnce(()=>mic.promise);const first=f.controller.start(payload,()=>true);
  await waitFor(()=>expect(f.microphone).toHaveBeenCalledTimes(1));const otherTab=new CallingExecutionController(new CallingExecutionCustody(f.client),()=>{},f.ports);await otherTab.start({...payload,firmId:other},()=>true);expect(f.microphone).toHaveBeenCalledTimes(1);
  f.controller.stop();mic.resolve();await first;expect(f.factory).not.toHaveBeenCalled();expect(f.requests.filter(r=>r.path.endsWith('/calls/session'))).toHaveLength(0);
 });
 it('late session response after cancellation never connects and remains recoverable',async()=>{
- const f=setup();await f.client.refresh();const response=deferred<Response>();f.wait(response.promise);const first=f.controller.start(payload,()=>true);
+ const f=setup();await f.client.refresh();const response=Promise.withResolvers<Response>();f.wait(response.promise);const first=f.controller.start(payload,()=>true);
  await waitFor(()=>expect(f.custody.read()).not.toBeNull());await waitFor(()=>expect(f.requests.some(r=>r.path.endsWith('/calls/session'))).toBe(true));f.controller.stop();response.resolve(Response.json({status:'accepted',replayed:false,result:{sessionId,expiresAt:new Date(Date.now()+60000).toISOString()}}));await first;
  expect(f.factory).not.toHaveBeenCalled();expect(f.custody.read()).not.toBeNull();await f.controller.recover(()=>true);expect(f.custody.read()?.sessionId).toBe(sessionId);
 });
 it('auth loss clears opaque custody and late SDK setup cannot resurrect audio',async()=>{
- const f=setup();await f.client.refresh();const device=deferred<typeof f.device>();f.factory.mockImplementationOnce(()=>device.promise);const live=f.controller.start(payload,()=>true);await waitFor(()=>expect(f.factory).toHaveBeenCalledTimes(1));f.client.invalidate();f.controller.dispose();device.resolve(f.device);await live;
+ const f=setup();await f.client.refresh();const device=Promise.withResolvers<typeof f.device>();f.factory.mockImplementationOnce(()=>device.promise);const live=f.controller.start(payload,()=>true);await waitFor(()=>expect(f.factory).toHaveBeenCalledTimes(1));f.client.invalidate();f.controller.dispose();device.resolve(f.device);await live;
  expect(f.device.connect).not.toHaveBeenCalled();expect(f.device.destroy).toHaveBeenCalled();await waitFor(()=>expect(JSON.parse(localStorage.getItem(CALLING_EXECUTION_KEY)??'[]')).toEqual([]));
 });
 it('source/navigation change disconnects a late SDK call and preserves opaque session custody',async()=>{
- const f=setup();await f.client.refresh();const connecting=deferred<typeof f.call>();f.device.connect.mockImplementationOnce(()=>connecting.promise);let current=true;const live=f.controller.start(payload,()=>current);await waitFor(()=>expect(f.device.connect).toHaveBeenCalledTimes(1));current=false;f.controller.dispose();connecting.resolve(f.call);await live;
+ const f=setup();await f.client.refresh();const connecting=Promise.withResolvers<typeof f.call>();f.device.connect.mockImplementationOnce(()=>connecting.promise);let current=true;const live=f.controller.start(payload,()=>current);await waitFor(()=>expect(f.device.connect).toHaveBeenCalledTimes(1));current=false;f.controller.dispose();connecting.resolve(f.call);await live;
  expect(f.call.disconnect).toHaveBeenCalledTimes(1);expect(f.device.destroy).toHaveBeenCalled();expect(f.custody.read()?.sessionId).toBe(sessionId);
  const reloaded=new CallingExecutionController(new CallingExecutionCustody(f.client),state=>states.push(state),f.ports);await reloaded.recover(()=>true);expect(f.custody.read()?.sessionId).toBe(sessionId);expect(f.factory).toHaveBeenCalledTimes(1);expect(f.requests.filter(r=>r.path.endsWith('/calls/session'))).toHaveLength(1);
 });
 it('review BE1 production adapter settles Device-only error before connect and fences a late Call',async()=>{
- const f=setup();await f.client.refresh();const connecting=deferred<CallingVoiceCall>();sdk.connect.mockReturnValue(connecting.promise);
+ const f=setup();await f.client.refresh();const connecting=Promise.withResolvers<CallingVoiceCall>();sdk.connect.mockReturnValue(connecting.promise);
  const controller=new CallingExecutionController(f.custody,state=>states.push(state),{device:browserCallingVoiceDevice,microphone:f.microphone});const live=controller.start(payload,()=>true);
  await waitFor(()=>expect(sdk.connect).toHaveBeenCalledTimes(1));const device=sdk.instances[0]!;expect(device.listenerCount('error')).toBe(1);expect(()=>device.emit('error',Error('fictional token expired'))).not.toThrow();await live;
  expect(states.at(-1)?.phase).toBe('unknown');expect(device.destroy).toHaveBeenCalledTimes(1);expect(device.listenerCount('error')).toBe(0);expect(f.custody.read()?.sessionId).toBe(sessionId);
@@ -107,7 +107,7 @@ it('review BE1 production adapter conserves Device errors emitted before control
  expect(states.at(-1)?.phase).toBe('unknown');expect(sdk.connect).not.toHaveBeenCalled();expect(sdk.instances[0]!.destroy).toHaveBeenCalledTimes(1);expect(sdk.instances[0]!.listenerCount('error')).toBe(0);expect(f.custody.read()?.sessionId).toBe(sessionId);
 });
 it.each(['cancel','auth loss'])('review BE1 production adapter fences saved Device callbacks after %s',async kind=>{
- const f=setup();await f.client.refresh();const connecting=deferred<CallingVoiceCall>();sdk.connect.mockReturnValue(connecting.promise);const controller=new CallingExecutionController(f.custody,state=>states.push(state),{device:browserCallingVoiceDevice,microphone:f.microphone});const live=controller.start(payload,()=>true);
+ const f=setup();await f.client.refresh();const connecting=Promise.withResolvers<CallingVoiceCall>();sdk.connect.mockReturnValue(connecting.promise);const controller=new CallingExecutionController(f.custody,state=>states.push(state),{device:browserCallingVoiceDevice,microphone:f.microphone});const live=controller.start(payload,()=>true);
  await waitFor(()=>expect(sdk.connect).toHaveBeenCalledTimes(1));const device=sdk.instances[0]!,saved=device.listeners('error')[0]!;if(kind==='auth loss'){f.client.invalidate();controller.dispose();}else controller.stop();await live;const count=states.length;saved();expect(states).toHaveLength(count);connecting.resolve(f.call);await waitFor(()=>expect(f.call.disconnect).toHaveBeenCalledTimes(1));expect(device.listenerCount('error')).toBe(0);
  if(kind==='auth loss')await waitFor(()=>expect(f.custody.binding()).toBeNull());else expect(f.custody.read()?.sessionId).toBe(sessionId);
 });
@@ -115,10 +115,10 @@ it('review SPEC1 terminal handoff survives other or empty selection, return, sam
  const f=setup();await f.client.refresh();f.lose();await f.controller.start(payload,()=>true);const held=f.custody.read();
  function View({current}:{current:CallingContextData|null}){const [blocked,setBlocked]=useState(false),[link,setLink]=useState<CallingExecutionLink|null>(null);return <><CallingExecution client={f.client} context={current} paused={false} isScopeCurrent={()=>true} onBlockedChange={setBlocked} onLinkChange={setLink} ports={f.ports}/>{current?<CallingWrap client={f.client} subject={current.entry.subject} context={current} paused={blocked} executionLink={link} onPendingChange={()=>{}}/>:null}</>;}
  const otherContext:CallingContextData={...context,entry:{subject:{kind:'firm',firmId:other},label:'Other Firm'},firm:pluralFirmPageResponseSchema.parse({...page,read:{...page.read,firm:{...firm,id:other}}})};
- const view=render(<View current={otherContext}/>);await waitFor(()=>expect(screen.getByRole('button',{name:'Check exact call receipt'}).matches(':disabled')).toBe(true));expect(screen.getByLabelText('Actual outcome').matches(':disabled')).toBe(true);expect(f.custody.read()).toEqual(held);
+ const view=render(<View current={otherContext}/>);await waitFor(()=>expect(screen.getByRole('button',{name:'Check exact call receipt'}).matches(':disabled')).toBe(true));expect(workspaceChoiceDisabled('Actual outcome')).toBe(true);expect(f.custody.read()).toEqual(held);
  view.rerender(<View current={null}/>);expect(screen.getByRole('button',{name:'Check exact call receipt'}).matches(':disabled')).toBe(true);expect(f.requests.filter(r=>r.path.endsWith('/execution/receipt'))).toHaveLength(0);
  view.rerender(<View current={context}/>);fireEvent.click(screen.getByRole('button',{name:'Check exact call receipt'}));await screen.findByText(/Linked to the exact server-terminated/u);expect(f.custody.read()?.sessionId).toBe(sessionId);expect(screen.getByRole('button',{name:'Call in browser'}).matches(':disabled')).toBe(true);
- fireEvent.change(screen.getByLabelText('Actual outcome'),{target:{value:'not_interested'}});fireEvent.change(screen.getByLabelText('Private call notes'),{target:{value:'Independent private report'}});fireEvent.click(screen.getByRole('checkbox',{name:/personally performed/u}));
+ chooseWorkspace('Actual outcome','not_interested');fireEvent.change(screen.getByLabelText('Private call notes'),{target:{value:'Independent private report'}});fireEvent.click(screen.getByRole('checkbox',{name:/personally performed/u}));
  // Same independently authorized Firm with a new projection object, as proof expiry publishes.
  view.rerender(<View current={{...context,firm:pluralFirmPageResponseSchema.parse(page)}}/>);await screen.findByText(/Linked to the exact server-terminated/u);expect((screen.getByLabelText('Private call notes') as HTMLTextAreaElement).value).toBe('Independent private report');
  fireEvent.click(screen.getByRole('button',{name:'Save outcome'}));await screen.findByRole('article',{name:'Recorded calling outcome'});expect(f.writes[0]).toMatchObject({kind:'firm',firmId:id,report:{callSessionId:sessionId,routeId,outcome:'not_interested'}});expect(f.custody.read()?.sessionId).toBe(sessionId);
@@ -132,11 +132,11 @@ it('unavailable receipt never permits a replacement UUID or reconnect',async()=>
 });
 it('mounted execution starts explicitly without a consent checkbox and passes only terminal exact session to promised wrap',async()=>{
  const f=setup();await f.client.refresh();function View(){const [blocked,setBlocked]=useState(false),[link,setLink]=useState<CallingExecutionLink|null>(null);return <><CallingExecution client={f.client} context={context} paused={false} isScopeCurrent={()=>true} onBlockedChange={setBlocked} onLinkChange={setLink} ports={f.ports}/><CallingWrap client={f.client} subject={{kind:'firm',firmId:id}} context={context} paused={blocked} executionLink={link} onPendingChange={()=>{}}/></>;}
- render(<View/>);await screen.findByRole('option',{name:identity.e164});expect(f.factory).not.toHaveBeenCalled();expect(screen.getByRole('button',{name:'Call in browser'}).hasAttribute('disabled')).toBe(true);
+ render(<View/>);await waitFor(()=>expect(workspaceChoiceValue('Browser calling identity')).toBe(id));expect(f.factory).not.toHaveBeenCalled();expect(screen.getByRole('button',{name:'Call in browser'}).hasAttribute('disabled')).toBe(true);
  expect(screen.queryByRole('checkbox',{name:/authorized to place and record/u})).toBeNull();
- fireEvent.change(screen.getByLabelText('Browser call route'),{target:{value:routeId}});fireEvent.click(screen.getByRole('button',{name:'Call in browser'}));await waitFor(()=>expect(f.device.connect).toHaveBeenCalledTimes(1));
+ chooseWorkspace('Browser call route',routeId);fireEvent.click(screen.getByRole('button',{name:'Call in browser'}));await waitFor(()=>expect(f.device.connect).toHaveBeenCalledTimes(1));
  fireEvent.click(screen.getByRole('button',{name:'Hang up / abandon setup'}));await screen.findByRole('button',{name:'Check exact call receipt'});fireEvent.click(screen.getByRole('button',{name:'Check exact call receipt'}));await screen.findByText(/Linked to the exact server-terminated/u);
- fireEvent.change(screen.getByLabelText('Actual outcome'),{target:{value:'interested'}});fireEvent.change(screen.getByLabelText('Private call notes'),{target:{value:'PRIVATE context not email'}});fireEvent.click(screen.getByRole('checkbox',{name:/personally performed/u}));fireEvent.change(screen.getByLabelText('Next action'),{target:{value:'promised_email'}});fireEvent.change(screen.getByLabelText('Promised email subject'),{target:{value:'Independent promise'}});fireEvent.change(screen.getByLabelText('Promised email body'),{target:{value:'Independent editable body'}});fireEvent.click(screen.getByRole('button',{name:'Save outcome and promised email'}));await screen.findByRole('article',{name:'Recorded calling outcome'});
+ chooseWorkspace('Actual outcome','interested');fireEvent.change(screen.getByLabelText('Private call notes'),{target:{value:'PRIVATE context not email'}});fireEvent.click(screen.getByRole('checkbox',{name:/personally performed/u}));chooseWorkspace('Next action','promised_email');fireEvent.change(screen.getByLabelText('Promised email subject'),{target:{value:'Independent promise'}});fireEvent.change(screen.getByLabelText('Promised email body'),{target:{value:'Independent editable body'}});fireEvent.click(screen.getByRole('button',{name:'Save outcome and promised email'}));await screen.findByRole('article',{name:'Recorded calling outcome'});
  expect(f.writes[0]).toMatchObject({kind:'firm',firmId:id,report:{callSessionId:sessionId,routeId,outcome:'interested'},promisedEmail:{subject:'Independent promise',body:'Independent editable body'}});expect(JSON.stringify(f.writes[0]?.promisedEmail)).not.toContain('PRIVATE');expect(f.factory).toHaveBeenCalledTimes(1);
 });
 
@@ -163,13 +163,20 @@ it('lost audio-test acceptance survives reload and blocks business replacement u
  await reloaded.resolveHandoff(()=>true);expect(f.custody.read()).toBeNull();
 });
 it('the same cross-tab lock excludes an audio test while a business microphone prompt is pending',async()=>{
- const f=setup();await f.client.refresh();const mic=deferred<void>();f.microphone.mockImplementationOnce(()=>mic.promise);const business=f.controller.start(payload,()=>true);
+ const f=setup();await f.client.refresh();const mic=Promise.withResolvers<void>();f.microphone.mockImplementationOnce(()=>mic.promise);const business=f.controller.start(payload,()=>true);
  await waitFor(()=>expect(f.microphone).toHaveBeenCalledTimes(1));const test=new CallingExecutionController(new CallingExecutionCustody(f.client),()=>{},f.ports);await test.start(audioPayload,()=>true);
  expect(f.microphone).toHaveBeenCalledTimes(1);expect(f.requests.filter(r=>r.path.endsWith('/audio-test/session'))).toHaveLength(0);f.controller.stop();mic.resolve();await business;
 });
+const AUDIO_IDENTITY='Audio test calling identity';
+/** The signed-in user's own identity must be a current option; it is chosen explicitly if not already selected. */
+async function ownAudioIdentity():Promise<void>{
+ await waitFor(()=>expect(workspaceChoiceValues(AUDIO_IDENTITY)).toContain(identity.id));
+ if(workspaceChoiceValue(AUDIO_IDENTITY)!==identity.id)chooseWorkspaceOption(AUDIO_IDENTITY,identity.id);
+ expect(workspaceChoiceValue(AUDIO_IDENTITY)).toBe(identity.id);
+}
 it('mounted audio test has an explicit start, automatic-recording notice and terminal finish without a sales outcome',async()=>{
  const f=setup();await f.client.refresh();const blocked=vi.fn();render(<CallingAudioTest client={f.client} paused={false} onBlockedChange={blocked} ports={f.ports}/>);
- await screen.findByRole('option',{name:identity.e164});expect(f.microphone).not.toHaveBeenCalled();expect(screen.queryByRole('checkbox')).toBeNull();expect(screen.getByText(/records both sides from answer/u)).toBeTruthy();
+ await ownAudioIdentity();expect(f.microphone).not.toHaveBeenCalled();expect(screen.queryByRole('checkbox')).toBeNull();expect(screen.getByText(/records both sides from answer/u)).toBeTruthy();
  fireEvent.change(screen.getByRole('textbox',{name:'Test phone number'}),{target:{value:'(401) 555-0199'}});fireEvent.click(screen.getByRole('button',{name:'Start audio test'}));await waitFor(()=>expect(f.device.connect).toHaveBeenCalledTimes(1));
  expect(screen.getByRole('textbox',{name:'Test phone number'})).toHaveProperty('value','');expect(screen.getByRole('textbox',{name:'Test phone number'}).matches(':disabled')).toBe(true);expect(blocked).toHaveBeenLastCalledWith(true);
  fireEvent.click(screen.getByRole('button',{name:'Hang up / abandon test'}));fireEvent.click(await screen.findByRole('button',{name:'Check test call status'}));await screen.findByRole('button',{name:'Finish audio test'});
@@ -181,8 +188,8 @@ it('audio-test view does not hold the business terminal wrap or steal its receip
  await f.controller.recover(()=>true);expect(states.at(-1)?.link).toMatchObject({firmId:id,sessionId});await f.controller.resolveHandoff(()=>true);await waitFor(()=>expect(f.custody.read()).toBeNull());
 });
 it('audio-test view clears entered destination and fences a late session after sign-out',async()=>{
- const f=setup();await f.client.refresh();render(<CallingAudioTest client={f.client} paused={false} onBlockedChange={()=>{}} ports={f.ports}/>);await screen.findByRole('option',{name:identity.e164});
- fireEvent.change(screen.getByRole('textbox',{name:'Test phone number'}),{target:{value:audioPayload.e164}});const waiting=deferred<Response>();f.wait(waiting.promise);fireEvent.click(screen.getByRole('button',{name:'Start audio test'}));
+ const f=setup();await f.client.refresh();render(<CallingAudioTest client={f.client} paused={false} onBlockedChange={()=>{}} ports={f.ports}/>);await ownAudioIdentity();
+ fireEvent.change(screen.getByRole('textbox',{name:'Test phone number'}),{target:{value:audioPayload.e164}});const waiting=Promise.withResolvers<Response>();f.wait(waiting.promise);fireEvent.click(screen.getByRole('button',{name:'Start audio test'}));
  await waitFor(()=>expect(f.requests.some(r=>r.path.endsWith('/audio-test/session'))).toBe(true));f.client.invalidate();waiting.resolve(Response.json({status:'accepted',replayed:false,result:{sessionId,expiresAt:new Date(Date.now()+60000).toISOString()}}));
  await waitFor(()=>expect(screen.queryByRole('textbox',{name:'Test phone number'})).toBeNull());expect(f.factory).not.toHaveBeenCalled();expect(f.writes).toEqual([]);
 });

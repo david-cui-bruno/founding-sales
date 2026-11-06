@@ -55,8 +55,7 @@ const secondConversation = (page: Page) => page.getByRole('button', { name: 'FIC
 
 test('Today -> exact prepared Prospects -> canonical Calling wrap -> saved Email edit/reload preserves sent and uncertain history', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Today', exact: true, level: 1 })).toBeVisible();
-  await page.getByRole('region', { name: 'Manual calling review', exact: true }).getByRole('button', { name: 'Prospect supply', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Prospects', exact: true, level: 1 })).toBeVisible();
+  await navigateGlass(page, 'Prospects');
   await expect(page.getByRole('heading', { name: 'Today', exact: true, level: 1 })).toHaveCount(0);
   await page.getByRole('button', {name:'Qualified publications',exact:true}).click();
   const row = page.locator('.prospects-supply-row').filter({ has: page.getByRole('heading', { name: seed.name, exact: true }) });

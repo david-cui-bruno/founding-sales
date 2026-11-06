@@ -2,6 +2,7 @@
 import {useState} from 'react';
 import {afterEach,expect,it,vi} from 'vitest';
 import {act,cleanup,fireEvent,render,screen,waitFor} from '@testing-library/react';
+import {chooseWorkspace,workspaceChoiceValue} from './support/workspaceChoice.ts';
 import {BrowserClient} from '../../src/client/BrowserClient.ts';
 import {CallingContext,type CallingContextData,type CallingContextEntry} from '../../src/client/CallingContext.tsx';
 import {CallingExecution} from '../../src/client/CallingExecution.tsx';
@@ -26,14 +27,14 @@ async function fixture(){
  const identity={id,ownerUserId:id,e164:'+14015550124',label:null,verificationStatus:'unverified',enabled:false,verifiedAt:null,verifiedByUserId:null,verificationMethod:null,disabledAt:null,usedForCalls:true,createdAt:at};
  const advice={firmId:id,routeId,e164:firm.phoneRoutes[0]!.value,telUri:null,callable:true,reasons:[],firmTimeZone:'America/New_York',firmLocalTime:'11:00',at};
  const apiPaths:string[]=[];
- let userId=id,held:Promise<Response>|null=null,finish:((value:Response)=>void)|undefined;
+ let userId=id,held:PromiseWithResolvers<Response>|null=null;
  const fetcher=vi.fn<typeof fetch>(async(url)=>{
   const path=String(url);
   if(path==='/browser/session')return Response.json({status:'signed_in',workspaceId:id,userId,deviceId:id,role:'admin',revision:'one',csrfToken:'c'.repeat(40),expiresAt:new Date(Date.now()+3_600_000).toISOString()});
   apiPaths.push(path);
   if(path==='/browser/api/crm/firm-page-v3')return Response.json(page);
   if(path==='/browser/api/calling-identities')return Response.json({identities:[identity]});
-  if(path==='/browser/api/dial/check')return held??Response.json({advice});
+  if(path==='/browser/api/dial/check')return held?held.promise:Response.json({advice});
   if(path===`/browser/api/calls/calling?firmId=${id}`)return Response.json({provider:'twilio',cadence:{unansweredAttempts:0,nextAttempt:1,limit:4,parked:false,refusal:null},voicemailTemplate:'Fictional',callerName:'Fictional',callbackNumber:identity.e164});
   throw Error('This read-only fixture has no call, token, outcome or acquisition endpoint');
  });
@@ -42,16 +43,16 @@ async function fixture(){
  await client.refresh();
  render(<CurrentCalling client={client} entry={{subject:{kind:'firm',firmId:id},label:'Selected company'}} ports={ports}/>);
  await screen.findByRole('heading',{name:firm.name});
- await waitFor(()=>expect(screen.getByRole('combobox',{name:'Browser calling identity'})).toHaveProperty('value',id));
+ await waitFor(()=>expect(workspaceChoiceValue('Browser calling identity')).toBe(id));
  return {client,ports,apiPaths,expiresAt,
-  hold:()=>{held=new Promise<Response>(resolve=>{finish=resolve;});},
-  release:()=>{finish?.(Response.json({advice}));},
+  hold:()=>{held=Promise.withResolvers<Response>();},
+  release:()=>{held?.resolve(Response.json({advice}));},
   changeActor:()=>{userId=otherUser;},
  };
 }
 
 function chooseRoute(){
- fireEvent.change(screen.getByRole('combobox',{name:'Browser call route'}),{target:{value:routeId}});
+ chooseWorkspace('Browser call route',routeId);
 }
 
 function expectNoCall(f:Awaited<ReturnType<typeof fixture>>){
@@ -66,11 +67,11 @@ it('keeps the selected route while real session refreshes read readiness without
  const f=await fixture();f.hold();chooseRoute();
  await act(async()=>{fireEvent.click(screen.getByRole('button',{name:'Check call readiness'}));});
  await waitFor(()=>expect(f.apiPaths).toContain('/browser/api/dial/check'));
- expect(screen.getByRole('combobox',{name:'Browser call route'})).toHaveProperty('value',routeId);
+ expect(workspaceChoiceValue('Browser call route')).toBe(routeId);
  expect(screen.queryByRole('checkbox',{name:/authorized to place and record/u})).toBeNull();
  await act(async()=>{f.release();});
  await waitFor(()=>{
-  expect(screen.getByRole('combobox',{name:'Browser call route'})).toHaveProperty('value',routeId);
+  expect(workspaceChoiceValue('Browser call route')).toBe(routeId);
   expect(screen.getByText(/Policy snapshot/u)).toBeTruthy();
  });
  expect(screen.queryByRole('checkbox',{name:/authorized to place and record/u})).toBeNull();
@@ -83,7 +84,7 @@ it('still clears a selected route at source expiry and fences the held readiness
  await waitFor(()=>expect(f.apiPaths).toContain('/browser/api/dial/check'));
  vi.spyOn(Date,'now').mockReturnValue(Date.parse(f.expiresAt)+1);
  await act(async()=>{await f.client.refresh();f.release();});
- expect(screen.getByRole('combobox',{name:'Browser call route'})).toHaveProperty('value','');
+ expect(workspaceChoiceValue('Browser call route')??'').toBe('');
  expect(screen.queryByRole('checkbox',{name:/authorized to place and record/u})).toBeNull();
  expect(screen.getByRole('heading',{name:'[source unavailable company]'})).toBeTruthy();
  expect(screen.queryByText(/Policy snapshot/u)).toBeNull();expectNoCall(f);

@@ -5,26 +5,25 @@ import { glassSaveAcceptance, glassWrapAcceptance } from './glassWorkspaceContra
 import { assertGlassStorage, navigateGlass, type GlassWorkspaceApp } from './glassWorkspaceApp.ts';
 import { assertGlassIntroductionsStopped, type GlassIntroductions } from './glassWorkspaceHistory.ts';
 import type { GlassWorkspaceSeed } from './glassWorkspaceSeed.ts';
+import { chooseWorkspaceRadio } from './workspaceChoice.ts';
 
 /** The checkbox attestation below is an explicit fictional acceptance simulation.
  * It does not claim a business call occurred and never invokes a phone/provider. */
 export async function saveGlassCanonicalWrap(page: Page, app: GlassWorkspaceApp, seed: GlassWorkspaceSeed, history: GlassIntroductions) {
   await page.getByRole('button', { name: 'Open calling brief', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Calling', exact: true, level: 1 })).toBeVisible();
-  await expect(page.getByRole('region', { name: 'Current research proof' })).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'Prospects', exact: true, level: 1 })).toBeVisible();
   const brief = page.getByRole('region', { name: 'Current calling brief' });
   await expect(brief).toContainText(seed.name);
-  const outcome = page.getByRole('combobox', { name: 'Actual outcome', exact: true });
-  await expect(outcome).toBeEnabled();
+  await expect(page.getByRole('radiogroup', { name: 'Actual outcome', exact: true }).locator('input[type="radio"][value="not_interested"]')).toBeEnabled();
   const link = brief.getByRole('link', { name: /Open (?:source-backed|observed) website/u });
   await expect(link).toHaveAttribute('href', seed.website);
   await expect(link).toHaveAttribute('target', '_blank');
   await expect(link).toHaveAttribute('rel', 'noopener noreferrer');
   // A reached disposition is explicit, not inferred interest or consent.
-  await outcome.selectOption('not_interested');
+  await chooseWorkspaceRadio(page, 'Actual outcome', 'not_interested');
   const note = 'FICTIONAL 783 private call note. Do not copy into promised email.';
   await page.getByRole('textbox', { name: 'Private call notes', exact: true }).fill(note);
-  await page.getByRole('combobox', { name: 'Next action', exact: true }).selectOption('promised_email');
+  await chooseWorkspaceRadio(page, 'Next action', 'promised_email');
   await expect(page.getByRole('textbox', { name: 'Promised email body', exact: true })).toHaveValue('');
   const subject = 'FICTIONAL 783 promised overview, independently authored';
   const body = 'FICTIONAL 783 overview. No booking, sending or real contact is requested.';

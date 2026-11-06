@@ -1,6 +1,6 @@
 # Single-workspace implementation roadmap
 
-November 5, 2026. Parent [#939](https://github.com/david-cui-bruno/founding-sales/issues/939), under [#783](https://github.com/david-cui-bruno/founding-sales/issues/783). Design direction is approved; real-product cutover is not implemented. [Design system](workspace-design-system.md) owns visual/interaction rules; [selling roadmap](../sourcing/roadmap-20261007.md) owns business priorities; [current state](../operations/current-state.md) owns dated runtime observations. This roadmap supersedes #939's earlier unordered checklist and prototype shortcuts, not domain safeguards.
+November 5, 2026. Parent [#939](https://github.com/david-cui-bruno/founding-sales/issues/939), under [#783](https://github.com/david-cui-bruno/founding-sales/issues/783). Design direction is approved; real-product cutover is not released. [Design system](workspace-design-system.md) owns visual/interaction rules; [selling roadmap](../sourcing/roadmap-20261007.md) owns business priorities; [current state](../operations/current-state.md) owns dated runtime observations. This roadmap supersedes #939's earlier unordered checklist and prototype shortcuts, not domain safeguards.
 
 ## Decisions settled
 
@@ -22,7 +22,10 @@ Each milestone is an end-to-end usable slice with real data, not a layer-only sc
 | **M7 — Social and remaining Settings** | Schedule-first post detail, existing Drafts/Library/voice/facts/media/Conversations, connections, calling setup, stage settings and diagnostics | M1 and existing Social contracts | Existing approved plan/account/content controls survive restyle; scheduled is not published; owner can edit/save/read back actual settings without credential leakage |
 | **M8 — Integrated cutover** | Complete retained-capability map, delete superseded views/CSS/obsolete-only tests, journeys/docs updated, normal release | All shipped scopes and risk reviews | Real browser completes daily queue → conversation → outcome → follow-through → deal, with signed local acceptance and protected hosted smoke; no orphaned feature or fake fallback |
 
-M0 is the immediate planning deliverable. M1/M2 form the first useful release; M3 the next commercial workflow. M4 is the next sending priority, not postponed behind Social styling. M5/M6 complete follow-through. M7 can progress after shared patterns settle without delaying reply work. M8 means final acceptance, not postponing reviews, removals or production verification until the end.
+M0 design and M1 source are merged; M2 is the active product milestone. M1/M2 form the first useful release; M3 the next commercial workflow. M4 is the next sending priority, not postponed behind Social styling. M5/M6 complete follow-through. M7 can progress after shared patterns settle without delaying reply work. M8 means final acceptance, not postponing reviews, removals or production verification until the end.
+
+M2 is locally composed, not accepted: initial types/web1199 passed; review corrections and signed workflow proof remain. A fresh free hosted browser lane preserves exclusive-runtime admission while leaving the unrelated local Cal sandbox untouched. Pattern-only Chrome proof is not full-loop acceptance.
+
 
 ## Existing implementation versus real gaps
 
@@ -33,6 +36,20 @@ Reuse React, the current BrowserClient/session gateway, PostgreSQL, API/domain h
 - Calling follow-ups currently save/read private drafts; no promised-email send route exists. Reuse the single outbound dispatch owner, with current recipient, consent, suppression, footer, mailbox and uncertainty checks. No parallel mail sender.
 - Stage timestamps exist in CRM history. Today needs a bounded authorized read/projection and defensible ordering. Do not download the whole CRM or infer progress from a call disposition.
 - Resolve every old view from the inventory to a retained in-context action or a proven obsolete path. Keep meetings, multiple opportunities, source inspection, retained manual reports and access controls. Fewer destinations must not mean lost capabilities.
+
+## M2 integration contract
+
+Implementation work, not a delivered capability. Reuse these owners under `apps/web/src/client/`; main owns the composition.
+
+| Responsibility | Existing owner and cutover invariant |
+| --- | --- |
+| Company selection and evidence | `PreparedProspects`/`CallingContext`: one visible list/detail, bounded exact reads, current epoch/revision/source expiry; research tools remain accessible. A candidate is not a Firm. |
+| Preparation and live controls | `CallingPreparation`/`CallingExecution`: explicit source-bound preparation and current route checks; stable mounted controls during list inspection. Prevent silent subject changes during live media. Receipt-only recovery never reconnects. |
+| Actual outcome and private promise | `CallingWrap`: preserve exact terminal link, separately authored notes/email, explicit disposition and independent Finish. Confirm before discarding unsaved prose; revocation clears without confirmation. |
+| Same draft and next company | `CallingFollowUpDispatch`/Email: pass the accepted draft ID only, fresh-read its current authorized revision. Next respects pending/UNKNOWN custody; opening Email neither sends nor completes an outcome. |
+| Secondary controls | Existing research/inventory and `CallingSetup`/`CallingAudioTest`: retain access, settings versions, microphone/budget checks and uncertainty; remove the separate Calling destination without duplicating owners. |
+
+Acceptance extends `test/e2e/callingExecution.spec.ts`: signed controlled-provider full loop, lost response with identical command, cross-tab exclusion, blocked live subject change, cancelled dirty-note navigation, exact draft reload and owned cleanup. Expired optional research must not erase same-Firm recorded context, terminal linkage or authored notes. Sources remain readable without native disclosure triangles; technical record metadata belongs in Diagnostics.
 
 ## Acceptance and rollout
 
