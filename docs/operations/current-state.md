@@ -4,7 +4,7 @@
 
 Root owns integration/interfaces/production. Broad coverage, soft ranking, buying-role evidence and learning from outcomes remain David's direction. Parent783/supply797/Email838/Social843 retain scope; paused chat follow-ups and older schedules stay paused.
 
-**Workspace source (November6):** M1/941, CI/942 and watch/943 merged. Parallel main7m02 passed; later main's expiry-test false positive repaired locally. Signed rebuild passed local checks/reviews. First product release waits for M2. No production, sending-control or paid-service changes.
+**Workspace source (November6):** M1/941 and feedback/CI942–944 merged; main079 passed gate9m41/images7m01. Ten-minute feedback is not consistent. M2 owns the next product cutover; first release combines M1/M2. No production, sending-control or paid-service changes.
 
 **Production runtime `3755dd5fd69c`/schema167 ACCEPTED:** protected41991853551 applied exact plan41984120721; API222×2/worker223×1 stable/readiness200. Normal operations685 verify167/pending[] exited0; native record/canary/smoke/readback and six independent public checks passed. Quiescence/PITR pinned08:19:40.048UTC,35-day retention; restore UNTESTED. Native temporary-reader custody cleared. Prior41672145143 remains INCOMPLETE/40522197864 effects UNKNOWN; `MISSING` never proves historical success.
 
